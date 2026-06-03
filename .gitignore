@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Deploy script (local use only — contains server IP)
+deploy.sh
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Data
+*.db
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store
