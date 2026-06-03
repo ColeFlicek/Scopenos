@@ -17,6 +17,7 @@ from .call_graph.storage import CallGraphDB
 from .decision_memory.memory import DecisionMemory
 from .embeddings.embedder import EmbeddingStore
 from .indexer import Indexer
+from .web.routes import register_routes
 
 # ── Service container ──────────────────────────────────────────────────────────
 
@@ -56,6 +57,7 @@ async def lifespan(server: FastMCP):
 # ── FastMCP server ────────────────────────────────────────────────────────────
 
 mcp = FastMCP("code-intel", lifespan=lifespan)
+register_routes(mcp, _get_services)
 
 
 # ── Indexing tools ────────────────────────────────────────────────────────────

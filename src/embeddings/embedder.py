@@ -33,12 +33,23 @@ _PROVIDER_DEFAULTS: dict[str, tuple[str, int]] = {
 
 
 def _resolve_config() -> tuple[str, str, int, str]:
-    """Return (provider, model, dim, ollama_base_url) from environment."""
-    provider = os.getenv("EMBEDDING_PROVIDER", "openai").lower()
+    """Return (provider, model, dim, ollama_base_url).
+    config.json (written by the web UI) takes precedence over env vars."""
+    try:
+        from ..web.config_store import read_file_config
+        file_cfg = read_file_config()
+    except Exception:
+        file_cfg = {}
+
+    def _get(key: str, default: str = "") -> str:
+        return file_cfg.get(key) or os.getenv(key, default)
+
+    provider = _get("EMBEDDING_PROVIDER", "openai").lower()
     default_model, default_dim = _PROVIDER_DEFAULTS.get(provider, ("text-embedding-3-small", 1536))
-    model = os.getenv("EMBEDDING_MODEL", default_model)
-    dim = int(os.getenv("EMBEDDING_DIM", str(_KNOWN_DIMS.get(model, default_dim))))
-    ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    model = _get("EMBEDDING_MODEL", default_model)
+    raw_dim = _get("EMBEDDING_DIM", "")
+    dim = int(raw_dim) if raw_dim else _KNOWN_DIMS.get(model, default_dim)
+    ollama_url = _get("OLLAMA_BASE_URL", "http://localhost:11434")
     return provider, model, dim, ollama_url
 
 
@@ -135,21 +146,25 @@ class EmbeddingStore:
     # ── Public API ─────────────────────────────────────────────────────────
 
     async def upsert_chunks(
-        self, chunks: list[FunctionChunk], existing_summaries: dict[str, str] | None = None
+        self,
+        chunks: list[FunctionChunk],
+        existing_summaries: dict[str, str] | None = None,
+        force_summaries: bool = False,
     ) -> None:
-        """Embed and store each chunk. Generates LLM summary on first embed."""
+        """Embed and store each chunk. Generates LLM summary on first embed.
+        Pass force_summaries=True to regenerate summaries even for known functions."""
         if not chunks:
             return
 
-        # Attach existing summaries to avoid re-generating
-        if existing_summaries:
+        # Attach existing summaries unless forcing a regeneration
+        if existing_summaries and not force_summaries:
             for chunk in chunks:
                 if not chunk.summary and chunk.id in existing_summaries:
                     chunk.summary = existing_summaries[chunk.id]
 
-        # Generate missing summaries
+        # Generate missing (or forced) summaries
         for chunk in chunks:
-            if not chunk.summary:
+            if not chunk.summary or force_summaries:
                 chunk.summary = await self._generate_summary(chunk)
 
         # Build embed texts and batch-embed

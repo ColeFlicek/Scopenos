@@ -111,6 +111,75 @@ class Indexer:
             "functions_updated": len(updated_nodes),
         }
 
+    async def reindex_call_graph_only(
+        self, file_paths: list[str], file_contents: dict[str, str]
+    ) -> dict:
+        """Re-parse call graph for the given files without touching embeddings."""
+        updated_nodes = []
+        updated_edges = []
+
+        for fp in file_paths:
+            content = file_contents.get(fp)
+            await self._db.delete_file_data(fp)
+            if not content:
+                continue
+            ext = Path(fp).suffix.lower()
+            if ext not in _SUPPORTED_EXTENSIONS:
+                continue
+            nodes, edges = _parser.parse_file(fp, content)
+            updated_nodes.extend(nodes)
+            updated_edges.extend(edges)
+
+        if updated_nodes:
+            await self._db.upsert_nodes(updated_nodes)
+        if updated_edges:
+            all_ids = await self._db.get_all_node_ids()
+            await self._db.upsert_edges(updated_edges, all_ids)
+
+        return {
+            "status": "ok",
+            "files_updated": len(file_paths),
+            "nodes_updated": len(updated_nodes),
+            "edges_updated": len(updated_edges),
+        }
+
+    async def reindex_embeddings_only(
+        self,
+        file_paths: list[str],
+        file_contents: dict[str, str],
+        force_summaries: bool = False,
+    ) -> dict:
+        """Re-embed functions for the given files without touching the call graph.
+        Pass force_summaries=True to regenerate LLM summaries even for known functions."""
+        updated_chunks = []
+
+        for fp in file_paths:
+            content = file_contents.get(fp)
+            await self._embeddings.delete_by_file(fp)
+            if not content:
+                continue
+            ext = Path(fp).suffix.lower()
+            if ext not in _SUPPORTED_EXTENSIONS:
+                continue
+            updated_chunks.extend(extract_chunks(fp, content))
+
+        if updated_chunks:
+            existing = {} if force_summaries else await self._embeddings.get_summaries(
+                [c.id for c in updated_chunks]
+            )
+            await self._embeddings.upsert_chunks(
+                updated_chunks,
+                existing_summaries=existing,
+                force_summaries=force_summaries,
+            )
+
+        return {
+            "status": "ok",
+            "files_updated": len(file_paths),
+            "functions_reembedded": len(updated_chunks),
+            "summaries_regenerated": force_summaries,
+        }
+
 
 def _collect_source_files(root: str) -> list[str]:
     result = []
