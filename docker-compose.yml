@@ -18,7 +18,7 @@ services:
       retries: 10
       start_period: 30s
 
-  code-intel:
+  acip:
     build: .
     ports:
       - "3004:3004"
@@ -32,10 +32,9 @@ services:
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-}
-      # Point to the Docker host so Ollama on TheHive is reachable from inside the container
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
-      - code_intel_data:/data
+      - acip_data:/data
     depends_on:
       neo4j:
         condition: service_healthy
@@ -43,4 +42,4 @@ services:
 
 volumes:
   neo4j_data:
-  code_intel_data:
+  acip_data:

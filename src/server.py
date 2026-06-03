@@ -1,5 +1,6 @@
 """
-AI Code Intel — FastMCP server exposing call graph, semantic embeddings,
+ACIP — AI Code Intelligence Platform
+FastMCP server exposing call graph, semantic embeddings,
 and decision memory tools to Claude Code.
 """
 from __future__ import annotations
@@ -56,7 +57,7 @@ async def lifespan(server: FastMCP):
 
 # ── FastMCP server ────────────────────────────────────────────────────────────
 
-mcp = FastMCP("code-intel", lifespan=lifespan)
+mcp = FastMCP("acip", lifespan=lifespan)
 register_routes(mcp, _get_services)
 
 

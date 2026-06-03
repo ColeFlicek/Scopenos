@@ -1,4 +1,4 @@
-# AI Code Intel
+# AI Code Intelligence Platform (ACIP)
 
 A self-hosted codebase intelligence server that gives Claude Code structured, queryable knowledge of any project — replacing blind file traversal with targeted retrieval.
 
@@ -57,7 +57,7 @@ Add to your Claude Code MCP settings:
 ```json
 {
   "mcpServers": {
-    "code-intel": {
+    "acip": {
       "url": "http://localhost:3004/mcp"
     }
   }
@@ -129,7 +129,7 @@ Any model served by Ollama's OpenAI-compatible endpoint works — set `EMBEDDING
 For authoritative re-indexing on every commit, install the post-commit hook in any project you want tracked:
 
 ```bash
-cp /path/to/code-intel/scripts/post-commit.sh /your/project/.git/hooks/post-commit
+cp /path/to/ACIP/scripts/post-commit.sh /your/project/.git/hooks/post-commit
 chmod +x /your/project/.git/hooks/post-commit
 ```
 

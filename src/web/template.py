@@ -3,7 +3,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>code-intel</title>
+  <title>ACIP</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -264,9 +264,9 @@ HTML = r"""<!DOCTYPE html>
           <path d="M12 2L2 7l10 5 10-5-10-5z"/>
           <path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
         </svg>
-        code-intel
+        ACIP
       </div>
-      <div class="logo-sub">mcp server</div>
+      <div class="logo-sub">ai code intelligence platform</div>
     </div>
 
     <nav>
@@ -379,7 +379,7 @@ HTML = r"""<!DOCTYPE html>
             <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
           pending config differs from running — restart to apply:
-          <code>docker compose restart code-intel</code>
+          <code>docker compose restart acip</code>
         </div>
 
         <!-- Embedding config form -->
@@ -443,7 +443,7 @@ HTML = r"""<!DOCTYPE html>
               <div class="instr-section">
                 <div class="instr-step">1 · ssh into your server</div>
                 <code class="cmd">ssh user@your-server</code>
-                <code class="cmd">nano ~/code-intel/.env</code>
+                <code class="cmd">nano ~/ACIP/.env</code>
               </div>
               <div class="instr-section">
                 <div class="instr-step">2 · add or change a key</div>
@@ -458,7 +458,7 @@ HTML = r"""<!DOCTYPE html>
               </div>
               <div class="instr-section">
                 <div class="instr-step">4 · apply changes</div>
-                <code class="cmd">docker compose restart code-intel</code>
+                <code class="cmd">docker compose restart acip</code>
               </div>
             </div>
           </div>

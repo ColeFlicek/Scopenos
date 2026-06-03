@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# AI Code Intel — first-run setup
+# ACIP — AI Code Intelligence Platform — first-run setup
 # Prompts for credentials, writes .env, and starts the server.
 
 set -euo pipefail
 
 echo ""
-echo "╔══════════════════════════════════════╗"
-echo "║       AI Code Intel — Setup          ║"
-echo "╚══════════════════════════════════════╝"
+echo "╔════════════════════════════════════════════════╗"
+echo "║   AI Code Intelligence Platform — Setup        ║"
+echo "╚════════════════════════════════════════════════╝"
 echo ""
 
 # ── Prerequisites ──────────────────────────────────────────────────────────────
@@ -110,13 +110,14 @@ if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
   echo ""
   docker compose up -d
   echo ""
-  echo "✓ AI Code Intel is running."
+  echo "✓ ACIP is running."
   echo ""
+  echo "  Dashboard:     http://localhost:3004/ui"
   echo "  MCP endpoint:  http://localhost:3004/mcp"
   echo "  Neo4j browser: http://localhost:7474"
   echo ""
-  echo "Add to Claude Code (claude_code_config.json):"
-  echo '  { "mcpServers": { "code-intel": { "url": "http://localhost:3004/mcp" } } }'
+  echo "Add to Claude Code MCP settings:"
+  echo '  { "mcpServers": { "acip": { "url": "http://localhost:3004/mcp" } } }'
   echo ""
   echo "Then run index_project(\"/path/to/your/project\") to build the first index."
 else

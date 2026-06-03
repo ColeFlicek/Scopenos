@@ -1,6 +1,6 @@
-# AI Code Intel — Session Workflow
+# ACIP — Session Workflow
 
-This MCP server provides structured, queryable knowledge of a codebase via call graph, semantic embeddings, and decision memory. Follow this workflow in every session.
+AI Code Intelligence Platform provides structured, queryable knowledge of a codebase via call graph, semantic embeddings, and decision memory. Follow this workflow in every session.
 
 ## Before touching any function
 
@@ -32,26 +32,26 @@ Fields:
 index_project("/absolute/path/to/project")
 ```
 
-## MCP server config (Claude Code on Agent of Empires)
+## MCP server config
 
 Add to your Claude Code MCP settings:
 
 ```json
 {
   "mcpServers": {
-    "code-intel": {
-      "url": "http://thehive:3004/mcp"
+    "acip": {
+      "url": "http://localhost:3004/mcp"
     }
   }
 }
 ```
 
-Replace `thehive` with TheHive's LAN IP if DNS is not configured.
+Replace `localhost` with your server's IP or hostname if running remotely.
 
-## Git hook installation (Agent of Empires, per project)
+## Git hook installation (per project)
 
 ```bash
-cp /path/to/code-intel/scripts/post-commit.sh .git/hooks/post-commit
+cp /path/to/ACIP/scripts/post-commit.sh .git/hooks/post-commit
 chmod +x .git/hooks/post-commit
-export CODE_INTEL_URL=http://thehive:3004
+export ACIP_URL=http://localhost:3004
 ```

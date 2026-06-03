@@ -1,4 +1,4 @@
-# Unraid override — stores persistent data in /mnt/user/appdata/code-intel/
+# Unraid override — stores persistent data in /mnt/user/appdata/acip/
 # so it survives array stops and shows up in the Unraid Docker UI.
 #
 # Applied automatically by deploy.sh.
@@ -8,11 +8,11 @@
 services:
   neo4j:
     volumes:
-      - /mnt/user/appdata/code-intel/neo4j:/data
+      - /mnt/user/appdata/acip/neo4j:/data
 
-  code-intel:
+  acip:
     volumes:
-      - /mnt/user/appdata/code-intel/sqlite:/data
+      - /mnt/user/appdata/acip/sqlite:/data
     # Allows the container to reach Ollama running on the Unraid host
     extra_hosts:
       - "host.docker.internal:host-gateway"
