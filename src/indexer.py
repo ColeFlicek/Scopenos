@@ -44,6 +44,12 @@ class Indexer:
             except Exception as exc:
                 print(f"[indexer] skipping {fp}: {exc}")
 
+        # Delete stale data for every file before upserting fresh data.
+        # Embeddings first (subquery needs nodes to resolve IDs).
+        for fp in source_files:
+            await self._embeddings.delete_by_file(fp)
+            await self._db.delete_file_data(fp)
+
         # Persist call graph
         await self._db.upsert_nodes(all_nodes)
         all_ids = await self._db.get_all_node_ids()
@@ -145,7 +151,7 @@ class Indexer:
 
         return {
             "status": "ok",
-            "files_updated": len(file_paths),
+            "files_updated": len([fp for fp in file_paths if file_contents.get(fp) is not None]),
             "nodes_updated": len(updated_nodes),
             "edges_updated": len(updated_edges),
         }

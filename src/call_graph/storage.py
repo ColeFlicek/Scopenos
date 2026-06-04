@@ -68,12 +68,13 @@ class CallGraphDB:
     async def init(self) -> None:
         self._db = await aiosqlite.connect(self._path, check_same_thread=False)
         self._db.row_factory = aiosqlite.Row
-        # Dedup edges before applying the unique index (handles pre-existing databases).
+        await self._db.executescript(DDL)
+        # Dedup any duplicate edges from before the UNIQUE index was added.
+        # Runs after DDL so the table is guaranteed to exist.
         await self._db.execute(
             "DELETE FROM edges WHERE rowid NOT IN "
             "(SELECT MIN(rowid) FROM edges GROUP BY caller_id, callee_id, edge_type, file)"
         )
-        await self._db.executescript(DDL)
         await self._db.commit()
 
     async def close(self) -> None:
@@ -84,11 +85,16 @@ class CallGraphDB:
 
     async def upsert_nodes(self, nodes: list[FunctionNode]) -> None:
         rows = [
-            (n.id, n.file, n.module, n.type, n.name, n.signature, n.docstring, "")
+            (n.id, n.file, n.module, n.type, n.name, n.signature, n.docstring)
             for n in nodes
         ]
         await self._db.executemany(
-            "INSERT OR REPLACE INTO nodes(id,file,module,type,name,signature,docstring,summary) VALUES(?,?,?,?,?,?,?,?)",
+            """INSERT INTO nodes(id,file,module,type,name,signature,docstring,summary)
+               VALUES(?,?,?,?,?,?,?,'')
+               ON CONFLICT(id) DO UPDATE SET
+                   file=excluded.file, module=excluded.module, type=excluded.type,
+                   name=excluded.name, signature=excluded.signature,
+                   docstring=excluded.docstring""",
             rows,
         )
         await self._db.commit()

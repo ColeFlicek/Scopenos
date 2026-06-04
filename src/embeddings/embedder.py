@@ -151,7 +151,9 @@ class EmbeddingStore:
         if existing_summaries and not force_summaries:
             for chunk in chunks:
                 if not chunk.summary and chunk.id in existing_summaries:
-                    chunk.summary = existing_summaries[chunk.id]
+                    cached = existing_summaries[chunk.id]
+                    if cached:  # don't assign empty strings — they don't count as a cache hit
+                        chunk.summary = cached
 
         for chunk in chunks:
             if not chunk.summary or force_summaries:
