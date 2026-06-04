@@ -87,12 +87,12 @@ def register_routes(mcp, get_services) -> None:
             )
 
             # ── Projects ───────────────────────────────────────────────────
-            async with db._db.execute("SELECT DISTINCT file FROM nodes") as cur:
-                files = [r[0] for r in await cur.fetchall()]
+            async with db._db.execute("SELECT file, COUNT(*) FROM nodes GROUP BY file") as cur:
+                files = [(r[0], r[1]) for r in await cur.fetchall()]
 
             groups: dict[str, dict] = defaultdict(lambda: {"nodes": 0, "edges": 0, "embedded": 0})
-            for f in files:
-                groups[_project_root(f)]["nodes"] += 1
+            for f, count in files:
+                groups[_project_root(f)]["nodes"] += count
 
             for root in list(groups.keys()):
                 async with db._db.execute(

@@ -35,7 +35,10 @@ def _resolve_config() -> tuple[str, str, int, str]:
         file_cfg = {}
 
     def _get(key: str, default: str = "") -> str:
-        return file_cfg.get(key) or os.getenv(key, default)
+        val = file_cfg.get(key)
+        if val is not None:
+            return val
+        return os.getenv(key, default)
 
     provider = _get("EMBEDDING_PROVIDER", "openai").lower()
     default_model, default_dim = _PROVIDER_DEFAULTS.get(provider, ("text-embedding-3-small", 1536))

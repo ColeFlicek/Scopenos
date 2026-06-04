@@ -24,7 +24,7 @@ class Indexer:
         1. Walk source files.
         2. Parse call graph.
         3. Store nodes + edges in SQLite.
-        4. Embed all functions via OpenAI, store in neo4j.
+        4. Embed all functions, store in sqlite-vec.
         """
         source_files = _collect_source_files(path)
         if not source_files:
@@ -91,6 +91,13 @@ class Indexer:
             updated_edges.extend(edges)
             updated_chunks.extend(extract_chunks(fp, content))
 
+        # Read existing summaries BEFORE upsert_nodes zeroes the summary column.
+        existing_summaries: dict[str, str] = {}
+        if updated_chunks:
+            existing_summaries = await self._embeddings.get_summaries(
+                [c.id for c in updated_chunks]
+            )
+
         if updated_nodes:
             await self._db.upsert_nodes(updated_nodes)
 
@@ -99,13 +106,11 @@ class Indexer:
             await self._db.upsert_edges(updated_edges, all_ids)
 
         if updated_chunks:
-            # Reuse existing summaries for unchanged functions
-            existing = await self._embeddings.get_summaries([c.id for c in updated_chunks])
-            await self._embeddings.upsert_chunks(updated_chunks, existing_summaries=existing)
+            await self._embeddings.upsert_chunks(updated_chunks, existing_summaries=existing_summaries)
 
         return {
             "status": "ok",
-            "files_updated": len([fp for fp in file_paths if fp in file_contents]),
+            "files_updated": len([fp for fp in file_paths if file_contents.get(fp) is not None]),
             "functions_updated": len(updated_nodes),
         }
 
@@ -118,6 +123,7 @@ class Indexer:
 
         for fp in file_paths:
             content = file_contents.get(fp)
+            await self._embeddings.delete_by_file(fp)
             await self._db.delete_file_data(fp)
             if not content:
                 continue

@@ -118,7 +118,7 @@ class CallGraphDB:
             callee_id = _resolve_callee(e.callee_name, all_node_ids)
             rows.append((e.caller_id, callee_id, e.edge_type, e.file))
         await self._db.executemany(
-            "INSERT INTO edges(caller_id,callee_id,edge_type,file) VALUES(?,?,?,?)", rows
+            "INSERT OR IGNORE INTO edges(caller_id,callee_id,edge_type,file) VALUES(?,?,?,?)", rows
         )
         await self._db.commit()
 
@@ -157,7 +157,7 @@ class CallGraphDB:
                 """
                 SELECT n.id, n.name, n.file, n.module, n.signature, e.edge_type
                 FROM edges e
-                LEFT JOIN nodes n ON n.id = e.callee_id
+                JOIN nodes n ON n.id = e.callee_id
                 WHERE e.caller_id = ?
                 """,
                 (t["id"],),
@@ -192,10 +192,17 @@ class CallGraphDB:
                         visited[nid] = level + 1
                         queue.append((nid, level + 1))
 
+        if not visited:
+            return []
+        ph = ",".join("?" * len(visited))
+        async with self._db.execute(
+            f"SELECT * FROM nodes WHERE id IN ({ph})", list(visited.keys())
+        ) as cur:
+            rows = {r["id"]: dict(r) for r in await cur.fetchall()}
         results = []
         for nid, lvl in visited.items():
-            node = await self.get_node(nid)
-            if node:
+            if nid in rows:
+                node = rows[nid]
                 node["impact_depth"] = lvl
                 results.append(node)
         results.sort(key=lambda x: x["impact_depth"])

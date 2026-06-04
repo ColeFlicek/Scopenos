@@ -77,16 +77,21 @@ class DecisionMemory:
         Finds prior thinking similar to the query — not code structure.
         """
         hits = await self._embeddings.query_decision_embeddings(query_text, top_k)
+        if not hits:
+            return []
+        id_to_distance = {h["id"]: h["distance"] for h in hits}
+        ph = ",".join("?" * len(hits))
+        async with self._db._db.execute(
+            f"SELECT * FROM decisions WHERE id IN ({ph})", list(id_to_distance.keys())
+        ) as cur:
+            rows = {r["id"]: dict(r) for r in await cur.fetchall()}
         results = []
         for hit in hits:
-            async with self._db._db.execute(
-                "SELECT * FROM decisions WHERE id = ?", (hit["id"],)
-            ) as cur:
-                row = await cur.fetchone()
-            if row:
-                rec = dict(row)
-                # Convert cosine distance → similarity score (higher = more similar)
-                rec["score"] = round(1.0 - hit["distance"], 4)
+            rec = rows.get(hit["id"])
+            if rec:
+                # sqlite-vec returns L2 distance; convert to a 0–1 similarity score
+                # using the known range [0, 2] for unit-normalized embeddings.
+                rec["score"] = round(1.0 - hit["distance"] / 2.0, 4)
                 results.append(rec)
         return results
 
