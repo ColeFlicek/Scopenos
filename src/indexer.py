@@ -142,7 +142,7 @@ class Indexer:
         for fp in file_paths:
             content = file_contents.get(fp)
             await self._db.delete_file_data(fp)
-            if not content:
+            if content is None:
                 continue
             ext = Path(fp).suffix.lower()
             if ext not in _SUPPORTED_EXTENSIONS:
@@ -181,7 +181,7 @@ class Indexer:
         for fp in file_paths:
             content = file_contents.get(fp)
             await self._embeddings.delete_by_file(fp)
-            if not content:
+            if content is None:
                 continue
             ext = Path(fp).suffix.lower()
             if ext not in _SUPPORTED_EXTENSIONS:

@@ -46,25 +46,28 @@ class DecisionMemory:
         decision_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
-        # Compute embedding BEFORE any DB writes — if the API call fails, no partial state
-        # is left in the database.
+        # Compute embedding first — if the API call fails, no DB writes happen.
         reasoning = _reasoning_text(
             type, description, rejected_alternatives, trigger, linked_function_ids or []
         )
         await self._embeddings.upsert_decision_embedding(decision_id, reasoning)
 
-        # Structured record → SQLite (only reached if embedding succeeded)
-        await self._db.insert_decision({
-            "id": decision_id,
-            "type": type,
-            "description": description,
-            "rejected_alternatives": rejected_alternatives,
-            "trigger": trigger,
-            "parent_decision_id": parent_decision_id,
-            "created_at": now,
-        })
-        if linked_function_ids:
-            await self._db.insert_decision_functions(decision_id, linked_function_ids)
+        # Structured record → SQLite. If this fails, clean up the orphaned embedding.
+        try:
+            await self._db.insert_decision({
+                "id": decision_id,
+                "type": type,
+                "description": description,
+                "rejected_alternatives": rejected_alternatives,
+                "trigger": trigger,
+                "parent_decision_id": parent_decision_id,
+                "created_at": now,
+            })
+            if linked_function_ids:
+                await self._db.insert_decision_functions(decision_id, linked_function_ids)
+        except Exception:
+            await self._embeddings.delete_decision_embedding(decision_id)
+            raise
 
         return {"decision_id": decision_id, "created_at": now}
 
