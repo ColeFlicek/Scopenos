@@ -65,7 +65,7 @@ class Indexer:
 
         return {
             "status": "ok",
-            "files_indexed": len(source_files),
+            "files_indexed": len(contents),
             "functions_indexed": len(all_nodes),
             "edges_indexed": len(all_edges),
         }
@@ -142,8 +142,10 @@ class Indexer:
 
         for fp in file_paths:
             content = file_contents.get(fp)
-            # delete_by_file uses a subquery on nodes — must run before delete_file_data.
-            await self._embeddings.delete_by_file(fp)
+            if content is None:
+                # Deleted file: clean up its embeddings before removing nodes
+                # (subquery in delete_by_file needs the nodes row to resolve IDs).
+                await self._embeddings.delete_by_file(fp)
             await self._db.delete_file_data(fp)
             if content is None:
                 continue
@@ -203,7 +205,7 @@ class Indexer:
 
         return {
             "status": "ok",
-            "files_updated": len(file_paths),
+            "files_updated": len([fp for fp in file_paths if file_contents.get(fp) is not None]),
             "functions_reembedded": len(updated_chunks),
             "summaries_regenerated": force_summaries,
         }
