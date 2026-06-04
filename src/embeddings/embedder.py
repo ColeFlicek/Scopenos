@@ -53,7 +53,7 @@ def _make_embed_client(provider: str, ollama_base_url: str) -> AsyncOpenAI:
 
 
 def _load_vec_ext(conn) -> None:
-    """Load sqlite-vec extension into a raw sqlite3 connection (called via run_sync)."""
+    """Load sqlite-vec extension into a raw sqlite3 connection."""
     import sqlite_vec
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
@@ -91,7 +91,7 @@ class EmbeddingStore:
 
     async def init(self) -> None:
         conn = self._db._db
-        await conn.run_sync(_load_vec_ext)
+        _load_vec_ext(conn._connection)
 
         # Detect dimension mismatch before creating tables
         await conn.execute(
