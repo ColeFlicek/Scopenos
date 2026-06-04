@@ -192,13 +192,14 @@ async def query_decisions(query_text: str) -> str:
 @mcp.custom_route("/index", methods=["POST"])
 async def git_hook_index(request: Request) -> JSONResponse:
     """
-    POST /index {"changed_files": ["path/to/file.py", ...]}
-    Called by the post-commit git hook on Agent of Empires.
-    Reads file contents from the filesystem (server must have access).
+    POST /index {"changed_files": [...], "project_root": "/abs/path/to/repo"}
+    Called by the post-commit git hook. project_root must match the value used
+    in index_project so module IDs are consistent.
     """
     try:
         data = await request.json()
         changed_files: list[str] = data.get("changed_files", [])
+        project_root: str = data.get("project_root", "")
         if not changed_files:
             return JSONResponse({"status": "no files"})
 
@@ -212,7 +213,7 @@ async def git_hook_index(request: Request) -> JSONResponse:
                 pass  # deleted file — will be purged by index_changes
 
         svcs = await _get_services()
-        result = await svcs["indexer"].index_changes(changed_files, file_contents)
+        result = await svcs["indexer"].index_changes(changed_files, file_contents, project_root=project_root)
         return JSONResponse(result)
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)

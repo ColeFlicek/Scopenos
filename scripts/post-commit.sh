@@ -21,7 +21,7 @@ done | paste -sd ',' - | sed 's/^/[/' | sed 's/$/]/')
 curl --silent --show-error --max-time 30 \
   -X POST "${ACIP_URL}/index" \
   -H "Content-Type: application/json" \
-  -d "{\"changed_files\": ${FILES_JSON}}" \
+  -d "{\"changed_files\": ${FILES_JSON}, \"project_root\": \"${REPO_ROOT}\"}" \
   > /dev/null
 
 echo "[acip] index_changes triggered for $(echo "$CHANGED" | wc -l | tr -d ' ') files"

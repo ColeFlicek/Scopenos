@@ -118,7 +118,11 @@ class CallGraphDB:
             rows = [dict(r) for r in await cur.fetchall()]
         if rows:
             return rows
-        async with self._db.execute("SELECT * FROM nodes WHERE id LIKE ?", (f"%.{name}",)) as cur:
+        # Escape LIKE special chars so underscores/percents in function names are literal.
+        escaped = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        async with self._db.execute(
+            "SELECT * FROM nodes WHERE id LIKE ? ESCAPE '\\'", (f"%.{escaped}",)
+        ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
     # ── Edges ──────────────────────────────────────────────────────────────
@@ -242,6 +246,7 @@ class CallGraphDB:
         targets = await self.find_node_by_name(function_name)
         if not targets:
             return []
+        seen: set[str] = set()
         results = []
         for t in targets:
             async with self._db.execute(
@@ -253,7 +258,10 @@ class CallGraphDB:
                 """,
                 (t["id"],),
             ) as cur:
-                results.extend(dict(r) for r in await cur.fetchall())
+                for r in await cur.fetchall():
+                    if r["id"] not in seen:
+                        seen.add(r["id"])
+                        results.append(dict(r))
         return results
 
     async def get_all_node_ids(self) -> set[str]:
