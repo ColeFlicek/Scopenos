@@ -96,14 +96,15 @@ def register_routes(mcp, get_services) -> None:
 
             for root in list(groups.keys()):
                 escaped = root.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                prefix = escaped + "/%"
                 async with db._db.execute(
-                    "SELECT COUNT(*) FROM edges WHERE file LIKE ? ESCAPE '\\'", (escaped + "%",)
+                    "SELECT COUNT(*) FROM edges WHERE file LIKE ? ESCAPE '\\'", (prefix,)
                 ) as cur:
                     groups[root]["edges"] = (await cur.fetchone())[0]
                 async with db._db.execute(
                     """SELECT COUNT(*) FROM function_embeddings
                        WHERE id IN (SELECT id FROM nodes WHERE file LIKE ? ESCAPE '\\')""",
-                    (escaped + "%",)
+                    (prefix,)
                 ) as cur:
                     groups[root]["embedded"] = (await cur.fetchone())[0]
 

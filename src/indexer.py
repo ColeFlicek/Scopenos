@@ -44,6 +44,14 @@ class Indexer:
             except Exception as exc:
                 print(f"[indexer] skipping {fp}: {exc}")
 
+        # Snapshot existing summaries before deletion so unchanged functions keep
+        # their summaries and don't trigger unnecessary LLM re-generation.
+        existing_summaries: dict[str, str] = {}
+        for fp in contents:
+            for node in await self._db.get_nodes_by_file(fp):
+                if node["summary"]:
+                    existing_summaries[node["id"]] = node["summary"]
+
         # Delete stale data only for files that were successfully parsed.
         # Skipping failed files preserves their existing index data rather than
         # wiping it to nothing (e.g. if tree-sitter crashes on a particular file).
@@ -61,7 +69,10 @@ class Indexer:
         for fp, content in contents.items():
             chunks.extend(extract_chunks(fp, content, project_root=path))
 
-        await self._embeddings.upsert_chunks(chunks)
+        await self._embeddings.upsert_chunks(
+            chunks,
+            existing_summaries=existing_summaries if existing_summaries else None,
+        )
 
         return {
             "status": "ok",
