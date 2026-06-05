@@ -96,7 +96,11 @@ def _visit_python(
         class_name = _child_text(node, "identifier", source)
         # Emit a class node
         if class_name:
-            class_id = f"{module}.{class_name}"
+            # Scope the class_id when nested inside a function (same <locals> convention).
+            if enclosing_func:
+                class_id = f"{enclosing_func}.<locals>.{class_name}"
+            else:
+                class_id = f"{module}.{class_name}"
             sig = _node_text(node, source).split("\n")[0].strip()
             # Inheritance edges
             bases_node = next((c for c in node.children if c.type == "argument_list"), None)
@@ -105,9 +109,10 @@ def _visit_python(
                     if base.type == "identifier":
                         edges.append(CallEdge(caller_id=class_id, callee_name=_text(base, source), edge_type="inherits", file=file_path))
             nodes.append(FunctionNode(id=class_id, name=class_name, file=file_path, module=module, type="class", signature=sig, body="", docstring=""))
-            # Recurse into class body with class context (reset enclosing_func — class scope is not a function scope)
+            # Recurse into class body: pass class_id as enclosing so methods get scoped IDs.
             for child in node.children:
-                _visit_python(child, file_path, module, source, nodes, edges, parent_class=class_name, enclosing_func=None)
+                _visit_python(child, file_path, module, source, nodes, edges,
+                              parent_class=class_name, enclosing_func=class_id if enclosing_func else None)
         return
 
     if node.type == "function_definition":
@@ -115,11 +120,15 @@ def _visit_python(
         if not func_name_raw:
             return
         qual_name = f"{parent_class}.{func_name_raw}" if parent_class else func_name_raw
-        # Use <locals> convention to disambiguate nested functions with the same name
-        # that appear inside different parent functions (e.g. two functions both containing def _helper).
+        # Use <locals> convention to disambiguate nested functions/methods.
         # enclosing_func is the full func_id of the parent, so don't prepend module again.
         if enclosing_func:
-            func_id = f"{enclosing_func}.<locals>.{qual_name}"
+            if parent_class:
+                # Method inside a class that's inside a function: enclosing_func IS the class scope.
+                func_id = f"{enclosing_func}.{func_name_raw}"
+            else:
+                # Nested function inside a function.
+                func_id = f"{enclosing_func}.<locals>.{func_name_raw}"
         else:
             func_id = f"{module}.{qual_name}"
         func_text = _node_text(node, source)
