@@ -76,7 +76,7 @@ def _parse_python(
 ) -> tuple[list[FunctionNode], list[CallEdge]]:
     nodes: list[FunctionNode] = []
     edges: list[CallEdge] = []
-    _visit_python(root, file_path, module, source, nodes, edges, parent_class=None)
+    _visit_python(root, file_path, module, source, nodes, edges, parent_class=None, enclosing_func=None)
     # Add import edges from top-level import statements
     _extract_python_imports(root, file_path, module, source, edges)
     return nodes, edges
@@ -90,6 +90,7 @@ def _visit_python(
     nodes: list[FunctionNode],
     edges: list[CallEdge],
     parent_class: str | None,
+    enclosing_func: str | None = None,
 ) -> None:
     if node.type == "class_definition":
         class_name = _child_text(node, "identifier", source)
@@ -104,9 +105,9 @@ def _visit_python(
                     if base.type == "identifier":
                         edges.append(CallEdge(caller_id=class_id, callee_name=_text(base, source), edge_type="inherits", file=file_path))
             nodes.append(FunctionNode(id=class_id, name=class_name, file=file_path, module=module, type="class", signature=sig, body="", docstring=""))
-            # Recurse into class body with class context
+            # Recurse into class body with class context (reset enclosing_func — class scope is not a function scope)
             for child in node.children:
-                _visit_python(child, file_path, module, source, nodes, edges, parent_class=class_name)
+                _visit_python(child, file_path, module, source, nodes, edges, parent_class=class_name, enclosing_func=None)
         return
 
     if node.type == "function_definition":
@@ -114,7 +115,12 @@ def _visit_python(
         if not func_name_raw:
             return
         qual_name = f"{parent_class}.{func_name_raw}" if parent_class else func_name_raw
-        func_id = f"{module}.{qual_name}"
+        # Use <locals> convention to disambiguate nested functions with the same name
+        # that appear inside different parent functions (e.g. two functions both containing def _helper).
+        if enclosing_func:
+            func_id = f"{module}.{enclosing_func}.<locals>.{qual_name}"
+        else:
+            func_id = f"{module}.{qual_name}"
         func_text = _node_text(node, source)
         signature = func_text.split("\n")[0].strip()
         docstring = _extract_python_docstring(node, source)
@@ -128,16 +134,18 @@ def _visit_python(
 
         # Collect calls inside this function (not descending into nested defs)
         _collect_python_calls(node, func_id, file_path, source, edges)
-        # Still recurse for nested defs with func as parent class context (edge case, rare)
+        # Recurse for nested defs, passing this function as the enclosing scope
         for child in node.children:
             if child.type == "block":
                 for stmt in child.children:
                     if stmt.type in ("function_definition", "class_definition"):
-                        _visit_python(stmt, file_path, module, source, nodes, edges, parent_class=parent_class)
+                        _visit_python(stmt, file_path, module, source, nodes, edges,
+                                      parent_class=parent_class, enclosing_func=func_id)
         return
 
     for child in node.children:
-        _visit_python(child, file_path, module, source, nodes, edges, parent_class=parent_class)
+        _visit_python(child, file_path, module, source, nodes, edges,
+                      parent_class=parent_class, enclosing_func=enclosing_func)
 
 
 def _collect_python_calls(

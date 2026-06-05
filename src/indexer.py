@@ -167,18 +167,20 @@ class Indexer:
             updated_nodes.extend(nodes)
             updated_edges.extend(edges)
 
-        if updated_nodes:
-            await self._db.upsert_nodes(updated_nodes)
-            # Restore summaries wiped by the delete+insert cycle (batch to avoid N fsyncs).
-            if existing_summaries:
-                await self._db.batch_update_summaries(existing_summaries)
-            # Clean up embeddings for functions that were renamed or deleted within
-            # the re-indexed files (their old IDs are in existing_summaries but not
-            # in the new node set, leaving orphan vectors that consume k-slots).
+        # Clean up embeddings for functions that no longer exist after the re-parse.
+        # Must run even when updated_nodes is empty (all functions removed from a file).
+        if existing_summaries:
             new_node_ids = {n.id for n in updated_nodes}
             orphaned = [nid for nid in existing_summaries if nid not in new_node_ids]
             if orphaned:
                 await self._embeddings.delete_by_ids(orphaned)
+
+        if updated_nodes:
+            await self._db.upsert_nodes(updated_nodes)
+            # Restore summaries for nodes that survived the re-parse (batch, one fsync).
+            surviving = {nid: s for nid, s in existing_summaries.items() if nid in new_node_ids}
+            if surviving:
+                await self._db.batch_update_summaries(surviving)
         if updated_edges:
             all_ids = await self._db.get_all_node_ids()
             await self._db.upsert_edges(updated_edges, all_ids)
