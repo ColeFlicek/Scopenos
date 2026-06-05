@@ -186,8 +186,8 @@ class EmbeddingStore:
         if not function_ids:
             return
         conn = self._db._db
-        for fid in function_ids:
-            await conn.execute("DELETE FROM function_embeddings WHERE id = ?", (fid,))
+        ph = ",".join("?" * len(function_ids))
+        await conn.execute(f"DELETE FROM function_embeddings WHERE id IN ({ph})", function_ids)
         await conn.commit()
 
     async def query_similar(self, snippet: str, top_k: int = 10) -> list[dict[str, Any]]:

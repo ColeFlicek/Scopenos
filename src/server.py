@@ -60,8 +60,8 @@ register_routes(mcp, _get_services)
 async def index_project(path: str) -> str:
     """
     Full index of a project directory. Builds the call graph, embeds all
-    functions, and stores everything in SQLite + neo4j. Run once on initial
-    setup; use index_changes for in-session updates.
+    functions, and stores everything in SQLite + sqlite-vec. Run once on
+    initial setup; use index_changes for in-session updates.
     """
     svcs = await _get_services()
     result = await svcs["indexer"].index_project(path)

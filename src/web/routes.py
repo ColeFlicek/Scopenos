@@ -87,28 +87,33 @@ def register_routes(mcp, get_services) -> None:
             )
 
             # ── Projects ───────────────────────────────────────────────────
-            async with db._db.execute("SELECT file, COUNT(*) FROM nodes GROUP BY file") as cur:
-                files = [(r[0], r[1]) for r in await cur.fetchall()]
+            # Isolated in its own try/except so a projects-query failure doesn't
+            # clobber the already-collected layer health data above.
+            try:
+                async with db._db.execute("SELECT file, COUNT(*) FROM nodes GROUP BY file") as cur:
+                    files = [(r[0], r[1]) for r in await cur.fetchall()]
 
-            groups: dict[str, dict] = defaultdict(lambda: {"nodes": 0, "edges": 0, "embedded": 0})
-            for f, count in files:
-                groups[_project_root(f)]["nodes"] += count
+                groups: dict[str, dict] = defaultdict(lambda: {"nodes": 0, "edges": 0, "embedded": 0})
+                for f, count in files:
+                    groups[_project_root(f)]["nodes"] += count
 
-            for root in list(groups.keys()):
-                escaped = root.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                prefix = escaped + "/%"
-                async with db._db.execute(
-                    "SELECT COUNT(*) FROM edges WHERE file LIKE ? ESCAPE '\\'", (prefix,)
-                ) as cur:
-                    groups[root]["edges"] = (await cur.fetchone())[0]
-                async with db._db.execute(
-                    """SELECT COUNT(*) FROM function_embeddings
-                       WHERE id IN (SELECT id FROM nodes WHERE file LIKE ? ESCAPE '\\')""",
-                    (prefix,)
-                ) as cur:
-                    groups[root]["embedded"] = (await cur.fetchone())[0]
+                for root in list(groups.keys()):
+                    escaped = root.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    prefix = escaped + "/%"
+                    async with db._db.execute(
+                        "SELECT COUNT(*) FROM edges WHERE file LIKE ? ESCAPE '\\'", (prefix,)
+                    ) as cur:
+                        groups[root]["edges"] = (await cur.fetchone())[0]
+                    async with db._db.execute(
+                        """SELECT COUNT(*) FROM function_embeddings
+                           WHERE id IN (SELECT id FROM nodes WHERE file LIKE ? ESCAPE '\\')""",
+                        (prefix,)
+                    ) as cur:
+                        groups[root]["embedded"] = (await cur.fetchone())[0]
 
-            result["projects"] = [{"path": k, **v} for k, v in sorted(groups.items())]
+                result["projects"] = [{"path": k, **v} for k, v in sorted(groups.items())]
+            except Exception as proj_exc:
+                result["projects"] = [{"error": str(proj_exc)}]
 
         except Exception as exc:
             for layer in ("call_graph", "embeddings", "decisions"):

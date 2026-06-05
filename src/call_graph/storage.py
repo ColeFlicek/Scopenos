@@ -103,6 +103,15 @@ class CallGraphDB:
         await self._db.execute("UPDATE nodes SET summary=? WHERE id=?", (summary, node_id))
         await self._db.commit()
 
+    async def batch_update_summaries(self, summaries: dict[str, str]) -> None:
+        if not summaries:
+            return
+        await self._db.executemany(
+            "UPDATE nodes SET summary=? WHERE id=?",
+            [(s, nid) for nid, s in summaries.items()],
+        )
+        await self._db.commit()
+
     async def get_node(self, node_id: str) -> dict | None:
         async with self._db.execute("SELECT * FROM nodes WHERE id=?", (node_id,)) as cur:
             row = await cur.fetchone()

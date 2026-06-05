@@ -143,10 +143,10 @@ def _visit_python(
 def _collect_python_calls(
     node: "Node", caller_id: str, file_path: str, source: bytes, edges: list[CallEdge]
 ) -> None:
-    """Recursively collect call nodes, stopping at nested function definitions."""
+    """Recursively collect call nodes, stopping at nested function/class definitions."""
     for child in node.children:
-        if child.type == "function_definition":
-            continue  # don't recurse into nested defs
+        if child.type in ("function_definition", "class_definition"):
+            continue  # don't recurse into nested defs or classes
         if child.type == "call":
             func_part = next((c for c in child.children if c.type in ("identifier", "attribute")), None)
             if func_part:
@@ -180,7 +180,16 @@ def _extract_python_docstring(func_node: "Node", source: bytes) -> str:
     string_node = next((c for c in first_stmt.children if c.type == "string"), None)
     if not string_node:
         return ""
-    raw = _text(string_node, source).strip("\"'")
+    raw = _text(string_node, source)
+    # Skip string prefix chars (r, b, u, f and combinations) before stripping delimiters.
+    i = 0
+    while i < len(raw) and raw[i] in "rRbBuUfF":
+        i += 1
+    raw = raw[i:]
+    # Strip the matching delimiter pair (triple before single to avoid partial strips).
+    for delim in ('"""', "'''", '"', "'"):
+        if raw.startswith(delim) and raw.endswith(delim) and len(raw) >= 2 * len(delim):
+            return raw[len(delim):-len(delim)][:500]
     return raw[:500]
 
 
