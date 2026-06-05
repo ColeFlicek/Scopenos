@@ -140,11 +140,14 @@ class Indexer:
         self, file_paths: list[str], file_contents: dict[str, str], project_root: str = ""
     ) -> dict:
         """Re-parse call graph for the given files without touching embeddings."""
-        # Snapshot existing summaries before deletion so they survive the upsert.
+        # Snapshot all existing node IDs and non-empty summaries before deletion.
+        # IDs are used for orphan embedding cleanup; summaries are restored after upsert.
         existing_summaries: dict[str, str] = {}
+        existing_node_ids: set[str] = set()
         for fp in file_paths:
             if file_contents.get(fp) is not None:
                 for node in await self._db.get_nodes_by_file(fp):
+                    existing_node_ids.add(node["id"])
                     if node["summary"]:
                         existing_summaries[node["id"]] = node["summary"]
 
@@ -171,9 +174,10 @@ class Indexer:
         new_node_ids = {n.id for n in updated_nodes}
 
         # Clean up embeddings for functions that no longer exist after the re-parse.
-        # Must run even when updated_nodes is empty (all functions removed from a file).
-        if existing_summaries:
-            orphaned = [nid for nid in existing_summaries if nid not in new_node_ids]
+        # Use existing_node_ids (all nodes) not existing_summaries (only summarised nodes)
+        # so functions with empty summaries are also cleaned up correctly.
+        if existing_node_ids:
+            orphaned = [nid for nid in existing_node_ids if nid not in new_node_ids]
             if orphaned:
                 await self._embeddings.delete_by_ids(orphaned)
 
