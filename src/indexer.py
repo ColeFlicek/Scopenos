@@ -34,6 +34,7 @@ class Indexer:
         all_edges = []
         contents: dict[str, str] = {}
 
+        print(f"[indexer] index_project: {len(source_files)} files found under {path!r}")
         for fp in source_files:
             try:
                 content = Path(fp).read_text(encoding="utf-8", errors="replace")
@@ -41,8 +42,9 @@ class Indexer:
                 all_nodes.extend(nodes)
                 all_edges.extend(edges)
                 contents[fp] = content
+                print(f"[indexer]   parsed {fp}: {len(nodes)} nodes, {len(edges)} edges")
             except Exception as exc:
-                print(f"[indexer] skipping {fp}: {exc}")
+                print(f"[indexer]   skipping {fp}: {exc}")
 
         # Snapshot existing summaries before deletion so unchanged functions keep
         # their summaries and don't trigger unnecessary LLM re-generation.
@@ -59,27 +61,29 @@ class Indexer:
             await self._embeddings.delete_by_file(fp)
             await self._db.delete_file_data(fp)
 
-        # Persist call graph
+        print(f"[indexer] call graph: {len(all_nodes)} nodes, {len(all_edges)} edges total — writing to db")
         await self._db.upsert_nodes(all_nodes)
         all_ids = await self._db.get_all_node_ids()
         await self._db.upsert_edges(all_edges, all_ids)
+        print(f"[indexer] call graph written ok")
 
-        # Build embeddings
         chunks = []
         for fp, content in contents.items():
             chunks.extend(extract_chunks(fp, content, project_root=path))
-
+        print(f"[indexer] starting embedding for {len(chunks)} chunks across {len(contents)} files")
         await self._embeddings.upsert_chunks(
             chunks,
             existing_summaries=existing_summaries if existing_summaries else None,
         )
 
-        return {
+        result = {
             "status": "ok",
             "files_indexed": len(contents),
             "functions_indexed": len(all_nodes),
             "edges_indexed": len(all_edges),
         }
+        print(f"[indexer] index_project complete: {result}")
+        return result
 
     async def index_changes(self, file_paths: list[str], file_contents: dict[str, str], project_root: str = "") -> dict:
         """
@@ -99,42 +103,49 @@ class Indexer:
         updated_edges = []
         updated_chunks = []
 
+        print(f"[indexer] index_changes: {len(file_paths)} files, project_root={project_root!r}")
         for fp in file_paths:
             content = file_contents.get(fp)
-            # Embeddings must be deleted BEFORE call graph data — delete_by_file
-            # uses a subquery into the nodes table to resolve IDs.
             await self._embeddings.delete_by_file(fp)
             await self._db.delete_file_data(fp)
             if content is None:
-                continue  # deleted file — purge only, nothing to re-index
+                print(f"[indexer]   {fp}: deleted (purged from index)")
+                continue
 
             ext = Path(fp).suffix.lower()
             if ext not in _SUPPORTED_EXTENSIONS:
+                print(f"[indexer]   {fp}: skipped (unsupported extension {ext!r})")
                 continue
 
             nodes, edges = _parser.parse_file(fp, content, project_root=project_root)
             updated_nodes.extend(nodes)
             updated_edges.extend(edges)
             updated_chunks.extend(extract_chunks(fp, content, project_root=project_root))
+            print(f"[indexer]   parsed {fp}: {len(nodes)} nodes, {len(edges)} edges")
 
         if updated_nodes:
+            print(f"[indexer] call graph: {len(updated_nodes)} nodes, {len(updated_edges)} edges — writing to db")
             await self._db.upsert_nodes(updated_nodes)
-
         if updated_edges:
             all_ids = await self._db.get_all_node_ids()
             await self._db.upsert_edges(updated_edges, all_ids)
+        if updated_nodes or updated_edges:
+            print(f"[indexer] call graph written ok")
 
         if updated_chunks:
+            print(f"[indexer] starting embedding for {len(updated_chunks)} chunks")
             await self._embeddings.upsert_chunks(
                 updated_chunks,
                 existing_summaries=existing_summaries if existing_summaries else None,
             )
 
-        return {
+        result = {
             "status": "ok",
             "files_updated": len([fp for fp in file_paths if file_contents.get(fp) is not None]),
             "functions_updated": len(updated_nodes),
         }
+        print(f"[indexer] index_changes complete: {result}")
+        return result
 
     async def reindex_call_graph_only(
         self, file_paths: list[str], file_contents: dict[str, str], project_root: str = ""

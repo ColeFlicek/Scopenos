@@ -36,9 +36,10 @@ def _resolve_config() -> tuple[str, str, int, str]:
 
     def _get(key: str, default: str = "") -> str:
         val = file_cfg.get(key)
-        if val is not None:
+        if val:
             return val
-        return os.getenv(key, default)
+        env_val = os.getenv(key, "")
+        return env_val if env_val else default
 
     provider = _get("EMBEDDING_PROVIDER", "openai").lower()
     default_model, default_dim = _PROVIDER_DEFAULTS.get(provider, ("text-embedding-3-small", 1536))
@@ -148,17 +149,23 @@ class EmbeddingStore:
         if not chunks:
             return
 
+        cached_count = 0
         if existing_summaries and not force_summaries:
             for chunk in chunks:
                 if not chunk.summary and chunk.id in existing_summaries:
                     cached = existing_summaries[chunk.id]
-                    if cached:  # don't assign empty strings — they don't count as a cache hit
+                    if cached:
                         chunk.summary = cached
+                        cached_count += 1
 
-        for chunk in chunks:
-            if not chunk.summary or force_summaries:
-                chunk.summary = await self._generate_summary(chunk)
+        needs_summary = [c for c in chunks if not c.summary or force_summaries]
+        print(f"[embeddings] summarising {len(needs_summary)}/{len(chunks)} functions "
+              f"({cached_count} summaries reused from cache)")
+        for i, chunk in enumerate(needs_summary, 1):
+            print(f"[embeddings]   summary {i}/{len(needs_summary)}: {chunk.id}")
+            chunk.summary = await self._generate_summary(chunk)
 
+        print(f"[embeddings] embedding {len(chunks)} functions via {self._provider}/{self._model}")
         texts = [prepare_embed_text(chunk) for chunk in chunks]
         embeddings = await self._embed_batch(texts)
 
@@ -172,6 +179,7 @@ class EmbeddingStore:
                 (chunk.id, _f32(embedding))
             )
         await conn.commit()
+        print(f"[embeddings] stored {len(chunks)} embeddings ok")
 
     async def delete_by_file(self, file_path: str) -> None:
         # Must be called BEFORE CallGraphDB.delete_file_data — we need nodes to resolve IDs.
@@ -262,10 +270,15 @@ class EmbeddingStore:
         if not texts:
             return []
         results: list[list[float]] = []
+        total_batches = (len(texts) + 99) // 100
         for i in range(0, len(texts), 100):
             batch = texts[i:i + 100]
+            batch_num = i // 100 + 1
+            print(f"[embeddings]   embed batch {batch_num}/{total_batches} "
+                  f"({len(batch)} texts) → {self._provider}/{self._model}")
             resp = await self._embed_client.embeddings.create(model=self._model, input=batch)
             results.extend(item.embedding for item in sorted(resp.data, key=lambda x: x.index))
+            print(f"[embeddings]   batch {batch_num}/{total_batches} ok")
         return results
 
     async def _generate_summary(self, chunk: FunctionChunk) -> str:
@@ -281,6 +294,10 @@ class EmbeddingStore:
                 model=SUMMARY_MODEL, max_tokens=80,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return resp.content[0].text.strip()
-        except Exception:
-            return chunk.docstring[:200] if chunk.docstring else chunk.signature
+            summary = resp.content[0].text.strip()
+            print(f"[embeddings]     → {summary[:80]}")
+            return summary
+        except Exception as exc:
+            fallback = chunk.docstring[:200] if chunk.docstring else chunk.signature
+            print(f"[embeddings]     summary failed ({exc}), using fallback")
+            return fallback
