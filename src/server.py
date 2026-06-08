@@ -268,6 +268,29 @@ async def http_get_functions_for_files(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
+# ── Browser search endpoint (used by the web UI search panel) ─────────────────
+
+@mcp.custom_route("/api/search", methods=["POST"])
+async def http_search(request: Request) -> JSONResponse:
+    """
+    POST /api/search {"snippet": "...", "project_id": "myapp", "top_k": 10}
+    Runs query_similar_functions and returns results with similarity scores.
+    Used by the web dashboard search panel.
+    """
+    try:
+        data = await request.json()
+        snippet    = data.get("snippet", "")
+        project_id = data.get("project_id") or None
+        top_k      = int(data.get("top_k", 10))
+        if not snippet:
+            return JSONResponse({"results": []})
+        svcs = await _get_services()
+        results = await svcs["embeddings"].query_similar(snippet, top_k, project_id)
+        return JSONResponse({"results": results})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
 # ── Projects HTTP endpoint ─────────────────────────────────────────────────────
 
 @mcp.custom_route("/api/projects", methods=["GET"])

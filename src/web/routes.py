@@ -42,9 +42,8 @@ def register_routes(mcp, get_services) -> None:
                 edges = (await cur.fetchone())[0]
             result["layers"]["call_graph"] = {"status": "ok", "nodes": nodes, "edges": edges}
 
-            # ── Embeddings (sqlite-vec) ─────────────────────────────────────
-            async with db._db.execute("SELECT COUNT(*) FROM function_embeddings") as cur:
-                emb_count = (await cur.fetchone())[0]
+            # ── Embeddings (sqlite-vec, one table per project) ──────────────
+            emb_count = await embeddings.count_embeddings()
             result["layers"]["embeddings"] = {
                 "status": "ok",
                 "functions": emb_count,
@@ -84,9 +83,12 @@ def register_routes(mcp, get_services) -> None:
                 for k in ("EMBEDDING_PROVIDER", "EMBEDDING_MODEL", "EMBEDDING_DIM")
             )
 
-            # ── Projects (from projects table) ─────────────────────────────
+            # ── Projects (from projects table + per-project embedding counts) ─
             try:
-                result["projects"] = await db.list_projects()
+                projects = await db.list_projects()
+                for p in projects:
+                    p["embedded"] = await embeddings.count_embeddings(p["id"])
+                result["projects"] = projects
             except Exception as proj_exc:
                 result["projects"] = [{"error": str(proj_exc)}]
 
@@ -123,8 +125,7 @@ def register_routes(mcp, get_services) -> None:
                 result["call_graph"] = {"status": "error", "error": str(e)}
 
             try:
-                async with db._db.execute("SELECT COUNT(*) FROM function_embeddings") as cur:
-                    n = (await cur.fetchone())[0]
+                n = await embeddings.count_embeddings()
                 async with db._db.execute("SELECT COUNT(*) FROM decision_embeddings") as cur:
                     d = (await cur.fetchone())[0]
                 result["embeddings"] = {

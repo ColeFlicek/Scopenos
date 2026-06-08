@@ -35,7 +35,6 @@ HTML = r"""<!DOCTYPE html>
       font-size: 13px; line-height: 1.6;
     }
 
-    /* Subtle scanline */
     body::before {
       content: '';
       position: fixed; inset: 0;
@@ -141,20 +140,23 @@ HTML = r"""<!DOCTYPE html>
     .data-table td:not(:first-child) { text-align:right; color:var(--text2); }
     .data-table tr:last-child td { border-bottom:none; }
     .data-table tr:hover td { background:rgba(255,255,255,0.012); }
-    .path-cell { color:var(--text); font-size:11px; max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .path-cell { color:var(--text); font-size:11px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .proj-id-cell { font-size:11px; color:var(--accent2); cursor:pointer; }
+    .proj-id-cell:hover { text-decoration:underline; }
 
     /* ── Form ── */
     .field-label { font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text3); margin-bottom:6px; display:block; }
     .field-hint  { font-size:10px; color:var(--accent2); margin-top:4px; min-height:14px; }
 
-    input[type=text], select {
+    input[type=text], select, textarea {
       width:100%; background:var(--bg4); border:1px solid var(--border2);
       border-radius:6px; padding:9px 12px;
       font-family:'Space Mono',monospace; font-size:12px; color:var(--text);
       outline:none; transition:border-color .15s, box-shadow .15s; appearance:none;
     }
-    input:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--glow); }
-    input::placeholder { color:var(--text3); }
+    textarea { resize:vertical; min-height:80px; }
+    input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--glow); }
+    input::placeholder, textarea::placeholder { color:var(--text3); }
     select option { background:var(--bg4); }
 
     /* ── Buttons ── */
@@ -205,6 +207,21 @@ HTML = r"""<!DOCTYPE html>
       border-radius:4px; padding:6px 10px; font-size:11px; color:var(--accent2); margin-bottom:4px;
     }
 
+    /* ── Search results ── */
+    .result-item {
+      padding:14px 16px; border-bottom:1px solid var(--border);
+      transition:background .1s;
+    }
+    .result-item:last-child { border-bottom:none; }
+    .result-item:hover { background:rgba(255,255,255,0.012); }
+    .result-header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:4px; }
+    .result-fn { font-size:12px; font-weight:700; color:var(--accent2); }
+    .result-score { font-size:11px; color:var(--green); flex-shrink:0; }
+    .result-sig { font-size:10px; color:var(--text3); margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .result-summary { font-size:11px; color:var(--text2); line-height:1.5; }
+    .result-meta { font-size:10px; color:var(--text3); margin-top:6px; }
+    .result-badge { display:inline-block; padding:1px 6px; border-radius:3px; font-size:9px; font-weight:700; background:var(--glow); color:var(--accent2); border:1px solid rgba(124,58,237,.2); margin-right:6px; }
+
     /* ── Code block ── */
     .code-result {
       background:var(--bg2); border:1px solid var(--border); border-radius:8px;
@@ -234,6 +251,15 @@ HTML = r"""<!DOCTYPE html>
       background:rgba(251,146,60,.1); padding:2px 6px; border-radius:4px;
       font-family:'Space Mono',monospace;
     }
+
+    /* ── Scope bar ── */
+    .scope-bar {
+      display:flex; align-items:center; gap:10px;
+      padding:10px 22px; border-bottom:1px solid var(--border);
+      background:var(--bg2);
+    }
+    .scope-label { font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text3); flex-shrink:0; }
+    .scope-bar select { max-width:240px; padding:6px 10px; font-size:11px; }
 
     /* ── Empty ── */
     .empty { text-align:center; padding:40px 20px; color:var(--text3); font-size:12px; }
@@ -277,6 +303,12 @@ HTML = r"""<!DOCTYPE html>
         </svg>
         overview
       </div>
+      <div class="nav-item" id="nav-search" onclick="showPanel('search')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        search
+      </div>
       <div class="nav-item" id="nav-settings" onclick="showPanel('settings')">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"/>
@@ -319,6 +351,19 @@ HTML = r"""<!DOCTYPE html>
 
       <!-- ─── OVERVIEW ─── -->
       <div class="panel active" id="panel-overview">
+
+        <!-- Project scope selector -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="scope-bar">
+            <span class="scope-label">project scope</span>
+            <select id="proj-scope" onchange="onScopeChange()">
+              <option value="">all projects</option>
+            </select>
+            <span style="font-size:10px;color:var(--text3);margin-left:4px;" id="scope-hint">showing global totals</span>
+          </div>
+        </div>
+
+        <!-- Layer stat cards -->
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px;">
 
           <div class="card layer-card" id="card-cg">
@@ -361,12 +406,64 @@ HTML = r"""<!DOCTYPE html>
           </div>
         </div>
 
+        <!-- Projects table -->
         <div class="card">
           <div class="section-header">
             <div class="section-title">indexed projects</div>
-            <div class="section-sub">projects with functions in the call graph</div>
+            <div class="section-sub" id="proj-table-sub">all projects · click a project ID to scope the view</div>
           </div>
           <div id="projects-wrap"><div class="empty">loading...</div></div>
+        </div>
+      </div>
+
+      <!-- ─── SEARCH ─── -->
+      <div class="panel" id="panel-search">
+        <div class="card" style="margin-bottom:16px;">
+          <div class="section-header">
+            <div class="section-title">semantic similarity search</div>
+            <div class="section-sub">find functions semantically similar to a code snippet or description</div>
+          </div>
+          <div style="padding:20px;display:flex;flex-direction:column;gap:14px;">
+            <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end;">
+              <div>
+                <label class="field-label">project scope</label>
+                <select id="search-project">
+                  <option value="">all projects</option>
+                </select>
+              </div>
+              <div>
+                <label class="field-label">results</label>
+                <select id="search-k" style="width:80px;">
+                  <option value="5">5</option>
+                  <option value="10" selected>10</option>
+                  <option value="20">20</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label class="field-label">snippet or description</label>
+              <textarea id="search-snippet" placeholder="paste a code snippet, function signature, or plain-language description..."></textarea>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <button class="btn btn-accent" id="search-btn" onclick="runSearch()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                search
+              </button>
+              <span id="search-msg" style="font-size:11px;color:var(--text3);"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="search-results-card" style="display:none;">
+          <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <div class="section-title" id="search-results-title">results</div>
+              <div class="section-sub" id="search-results-sub"></div>
+            </div>
+          </div>
+          <div id="search-results-body"></div>
         </div>
       </div>
 
@@ -382,7 +479,6 @@ HTML = r"""<!DOCTYPE html>
           <code>docker compose restart acip</code>
         </div>
 
-        <!-- Embedding config form -->
         <div class="card" style="margin-bottom:16px;">
           <div class="section-header">
             <div class="section-title">embedding configuration</div>
@@ -417,7 +513,6 @@ HTML = r"""<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- Running config -->
         <div class="card" style="margin-bottom:16px;">
           <div class="section-header">
             <div class="section-title">currently running</div>
@@ -428,7 +523,6 @@ HTML = r"""<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- API Keys -->
         <div class="card">
           <div class="section-header">
             <div class="section-title">api keys</div>
@@ -452,12 +546,7 @@ HTML = r"""<!DOCTYPE html>
                 <code class="cmd">OPENAI_API_KEY=sk-...</code>
               </div>
               <div class="instr-section">
-                <div class="instr-step">3 · delete an unused key</div>
-                <div class="instr-text">remove the line or comment it out:</div>
-                <code class="cmd"># OPENAI_API_KEY=sk-...   ← commented out = deleted</code>
-              </div>
-              <div class="instr-section">
-                <div class="instr-step">4 · apply changes</div>
+                <div class="instr-step">3 · apply changes</div>
                 <code class="cmd">docker compose restart acip</code>
               </div>
             </div>
@@ -498,6 +587,7 @@ HTML = r"""<!DOCTYPE html>
   };
   const PAGE_META = {
     overview: ['overview', 'system status · layer health · indexed projects'],
+    search:   ['search',   'semantic similarity search across indexed projects'],
     settings: ['settings', 'embedding config · api key management'],
     admin:    ['admin',    'diagnostics · maintenance tools'],
   };
@@ -505,6 +595,11 @@ HTML = r"""<!DOCTYPE html>
     ANTHROPIC_API_KEY: 'required · generates one-line function summaries via claude haiku',
     OPENAI_API_KEY:    'required for openai embeddings · not needed when using ollama',
   };
+
+  // All projects loaded from the last status call.
+  let _allProjects = [];
+  // Currently scoped project_id (empty = all).
+  let _scopeId = '';
 
   function showPanel(name) {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -516,13 +611,60 @@ HTML = r"""<!DOCTYPE html>
     document.getElementById('page-sub').textContent   = sub;
   }
 
-  function setDot(id, state) {
-    document.getElementById(id).className = 'dot ' + state;
-  }
+  function setDot(id, state) { document.getElementById(id).className = 'dot ' + state; }
   function fmt(n) {
     if (n === undefined || n === null) return '—';
     return typeof n === 'number' ? n.toLocaleString() : n;
   }
+
+  // ── Project scope selector ──────────────────────────────────────────────
+
+  function populateProjectSelectors(projects) {
+    ['proj-scope', 'search-project'].forEach(selId => {
+      const sel = document.getElementById(selId);
+      const cur = sel.value;
+      // Keep the "all projects" option, rebuild the rest.
+      while (sel.options.length > 1) sel.remove(1);
+      projects.forEach(p => {
+        const opt = new Option(`${p.id}  (${fmt(p.node_count)} fns)`, p.id);
+        sel.add(opt);
+      });
+      if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+    });
+  }
+
+  function onScopeChange() {
+    _scopeId = document.getElementById('proj-scope').value;
+    const hint = document.getElementById('scope-hint');
+    if (_scopeId) {
+      hint.textContent = `scoped to project "${_scopeId}"`;
+    } else {
+      hint.textContent = 'showing global totals';
+    }
+    renderScopedStats();
+  }
+
+  function renderScopedStats() {
+    if (!_allProjects.length) return;
+    if (!_scopeId) {
+      // Global: restore the last full-status totals.
+      loadStatus();
+      return;
+    }
+    const p = _allProjects.find(x => x.id === _scopeId);
+    if (!p) return;
+
+    document.getElementById('cnt-cg').textContent    = fmt(p.node_count);
+    document.getElementById('cnt-edges').textContent = fmt(p.edge_count);
+    document.getElementById('cnt-emb').textContent   = fmt(p.embedded);
+    // Decisions are global (cross-project linking is intentional).
+    document.getElementById('card-cg').className  = 'card layer-card ok';
+    document.getElementById('card-emb').className = 'card layer-card ok';
+    setDot('dot-cg', 'ok');
+    setDot('dot-emb', 'ok');
+  }
+
+  // ── Status load ─────────────────────────────────────────────────────────
 
   async function loadStatus() {
     try {
@@ -531,34 +673,49 @@ HTML = r"""<!DOCTYPE html>
       setDot('conn-dot', 'ok');
       document.getElementById('conn-label').textContent = 'connected';
 
-      // Call graph
-      const cg = d.layers?.call_graph || {};
-      setDot('dot-cg', cg.status === 'ok' ? 'ok' : 'error');
-      document.getElementById('cnt-cg').textContent    = fmt(cg.nodes);
-      document.getElementById('cnt-edges').textContent = fmt(cg.edges);
-      document.getElementById('card-cg').className = 'card layer-card ' + (cg.status === 'ok' ? 'ok' : 'error');
+      const cg  = d.layers?.call_graph  || {};
+      const emb = d.layers?.embeddings  || {};
+      const dec = d.layers?.decisions   || {};
 
-      // Embeddings
-      const emb = d.layers?.embeddings || {};
-      setDot('dot-emb', emb.status === 'ok' ? 'ok' : 'error');
-      document.getElementById('cnt-emb').textContent      = fmt(emb.functions);
+      if (!_scopeId) {
+        setDot('dot-cg',  cg.status  === 'ok' ? 'ok' : 'error');
+        setDot('dot-emb', emb.status === 'ok' ? 'ok' : 'error');
+        document.getElementById('cnt-cg').textContent    = fmt(cg.nodes);
+        document.getElementById('cnt-edges').textContent = fmt(cg.edges);
+        document.getElementById('cnt-emb').textContent   = fmt(emb.functions);
+        document.getElementById('card-cg').className  = 'card layer-card ' + (cg.status  === 'ok' ? 'ok' : 'error');
+        document.getElementById('card-emb').className = 'card layer-card ' + (emb.status === 'ok' ? 'ok' : 'error');
+      }
+
       document.getElementById('emb-model-val').textContent = emb.model || '—';
       document.getElementById('emb-tech').textContent      = `sqlite-vec · ${emb.dim || '—'}d · ${emb.provider || '—'}`;
-      document.getElementById('card-emb').className = 'card layer-card ' + (emb.status === 'ok' ? 'ok' : 'error');
 
-      // Decisions
-      const dec = d.layers?.decisions || {};
       setDot('dot-dec', dec.status === 'ok' ? 'ok' : 'error');
       document.getElementById('cnt-dec').textContent    = fmt(dec.count);
       document.getElementById('cnt-linked').textContent = fmt(dec.linked_functions);
       document.getElementById('card-dec').className = 'card layer-card ' + (dec.status === 'ok' ? 'ok' : 'error');
 
-      renderProjects(d.projects || []);
+      _allProjects = d.projects || [];
+      renderProjects(_allProjects);
+      populateProjectSelectors(_allProjects);
       populateSettings(d);
+
+      // If a scope is active, re-apply it over the fresh data.
+      if (_scopeId) renderScopedStats();
+
     } catch(e) {
       setDot('conn-dot', 'error');
       document.getElementById('conn-label').textContent = 'error';
     }
+  }
+
+  // ── Projects table ──────────────────────────────────────────────────────
+
+  function scopeTo(pid) {
+    document.getElementById('proj-scope').value = pid;
+    _scopeId = pid;
+    document.getElementById('scope-hint').textContent = `scoped to project "${pid}"`;
+    renderScopedStats();
   }
 
   function renderProjects(projects) {
@@ -570,25 +727,89 @@ HTML = r"""<!DOCTYPE html>
     el.innerHTML = `
       <table class="data-table">
         <thead><tr>
-          <th>path</th><th>functions</th><th>edges</th><th>embedded</th>
+          <th>project id</th><th>root path</th><th>functions</th><th>edges</th><th>embedded</th><th>last indexed</th>
         </tr></thead>
         <tbody>${projects.map(p => `
           <tr>
-            <td class="path-cell" title="${p.path}">${p.path}</td>
-            <td>${fmt(p.nodes)}</td>
-            <td>${fmt(p.edges)}</td>
+            <td><span class="proj-id-cell" onclick="scopeTo('${p.id}')" title="click to scope">${p.id}</span></td>
+            <td class="path-cell" title="${p.root || ''}">${p.root || '—'}</td>
+            <td>${fmt(p.node_count)}</td>
+            <td>${fmt(p.edge_count)}</td>
             <td>${fmt(p.embedded)}</td>
+            <td style="font-size:10px;color:var(--text3);">${p.last_indexed ? p.last_indexed.slice(0,16).replace('T',' ') : '—'}</td>
           </tr>`).join('')}
         </tbody>
       </table>`;
   }
+
+  // ── Semantic search ─────────────────────────────────────────────────────
+
+  async function runSearch() {
+    const snippet = document.getElementById('search-snippet').value.trim();
+    if (!snippet) return;
+    const projectId = document.getElementById('search-project').value;
+    const k         = parseInt(document.getElementById('search-k').value, 10);
+    const btn       = document.getElementById('search-btn');
+    const msg       = document.getElementById('search-msg');
+    const card      = document.getElementById('search-results-card');
+
+    btn.disabled = true; btn.textContent = 'searching...';
+    msg.textContent = ''; card.style.display = 'none';
+
+    try {
+      // Call query_similar_functions via the MCP HTTP transport isn't directly
+      // accessible from the browser, so we expose it through /api/search.
+      // For now we POST to /api/search which the server routes to query_similar.
+      const body = { snippet, top_k: k };
+      if (projectId) body.project_id = projectId;
+
+      const res = await fetch('/api/search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      }).then(r => r.json());
+
+      const results = res.results || [];
+      const scope   = projectId ? `project "${projectId}"` : 'all projects';
+      document.getElementById('search-results-title').textContent = `${results.length} result${results.length !== 1 ? 's' : ''}`;
+      document.getElementById('search-results-sub').textContent   = `${scope} · top ${k} by similarity`;
+
+      if (!results.length) {
+        document.getElementById('search-results-body').innerHTML =
+          `<div class="empty">no results — try a different snippet or index more functions</div>`;
+      } else {
+        document.getElementById('search-results-body').innerHTML = results.map(r => `
+          <div class="result-item">
+            <div class="result-header">
+              <span class="result-fn">${r.name || r.id}</span>
+              <span class="result-score">${(r.similarity * 100).toFixed(1)}% match</span>
+            </div>
+            <div class="result-sig">${r.signature || ''}</div>
+            ${r.summary ? `<div class="result-summary">${r.summary}</div>` : ''}
+            <div class="result-meta">
+              <span class="result-badge">${r.project_id || '—'}</span>
+              ${r.file || ''}
+            </div>
+          </div>`).join('');
+      }
+
+      card.style.display = 'block';
+    } catch(e) {
+      msg.textContent = 'error: ' + e.message;
+      msg.style.color = 'var(--red)';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> search`;
+    }
+  }
+
+  // ── Settings ────────────────────────────────────────────────────────────
 
   function populateSettings(d) {
     const cfg     = d.config || {};
     const pending = d.pending_config || {};
     const keys    = d.keys || {};
 
-    // Form: prefer pending (config.json) over running
     const src = Object.keys(pending).length ? pending : cfg;
     if (src.EMBEDDING_PROVIDER) { document.getElementById('cfg-provider').value = src.EMBEDDING_PROVIDER; onProviderChange(); }
     if (src.EMBEDDING_MODEL)    document.getElementById('cfg-model').value  = src.EMBEDDING_MODEL;
@@ -596,16 +817,13 @@ HTML = r"""<!DOCTYPE html>
     if (src.OLLAMA_BASE_URL)    document.getElementById('cfg-ollama').value = src.OLLAMA_BASE_URL;
     updateDimHint();
 
-    // Running config grid
     const rows = Object.entries(cfg).filter(([,v]) => v);
     document.getElementById('running-cfg').innerHTML = rows.length
       ? rows.map(([k,v]) => `<div><div class="cfg-key">${k}</div><div class="cfg-val">${v}</div></div>`).join('')
       : `<div style="color:var(--text3);font-size:12px;">no running config loaded</div>`;
 
-    // Restart banner
     document.getElementById('restart-banner').style.display = d.config_differs ? 'flex' : 'none';
 
-    // Keys
     document.getElementById('keys-wrap').innerHTML = Object.entries(keys).map(([name, info]) => `
       <div class="key-row">
         <div>
@@ -655,6 +873,8 @@ HTML = r"""<!DOCTYPE html>
       msg.textContent = 'request failed'; msg.style.color = 'var(--red)';
     }
   }
+
+  // ── Admin / Health ──────────────────────────────────────────────────────
 
   async function runHealth() {
     const btn  = document.getElementById('health-btn');

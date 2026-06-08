@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 import struct
 from typing import Any
 
@@ -10,6 +12,7 @@ from openai import AsyncOpenAI
 from .chunker import FunctionChunk, prepare_embed_text
 
 SUMMARY_MODEL = "claude-haiku-4-5-20251001"
+SUMMARY_CONCURRENCY = 10  # max parallel LLM summary calls
 
 _KNOWN_DIMS: dict[str, int] = {
     "text-embedding-3-small": 1536,
@@ -69,22 +72,25 @@ def _f32(v: list[float]) -> bytes:
     return struct.pack(f"{len(v)}f", *v)
 
 
-def _emb_id(project_id: str, node_id: str) -> str:
-    """Embedding row ID format: '{project_id}::{node_id}'."""
-    return f"{project_id}::{node_id}"
+def _safe_name(project_id: str) -> str:
+    """Sanitize project_id for use as an SQLite identifier suffix."""
+    return re.sub(r"[^a-zA-Z0-9]", "_", project_id)
+
+
+def _emb_table(project_id: str) -> str:
+    """Return the vec0 table name for a project's function embeddings."""
+    return f"function_embeddings_{_safe_name(project_id)}"
 
 
 class EmbeddingStore:
     """
     Manages all vector embeddings using sqlite-vec — no external server required.
 
-    Two vec0 virtual tables live in the same SQLite file as the call graph:
-      - function_embeddings  (Layer 2): code similarity — function bodies + summaries
-      - decision_embeddings  (Layer 3): reasoning similarity — intent + context
+    Per-project vec0 virtual tables for function embeddings:
+      - function_embeddings_{project_id}  (one per project, created on first index)
 
-    Embedding IDs for functions are prefixed: "{project_id}::{node_id}".
-    This keeps per-project vectors isolated inside a shared vec0 table.
-    Decision embedding IDs are plain UUIDs (globally unique, no prefix needed).
+    Single shared table for decision embeddings:
+      - decision_embeddings  (decisions use UUIDs — globally unique, no prefix needed)
 
     The connection is owned by CallGraphDB; this class borrows it.
     """
@@ -106,7 +112,6 @@ class EmbeddingStore:
         conn = self._db._db
         _load_vec_ext(conn._connection)
 
-        # Detect dimension mismatch before creating tables
         await conn.execute(
             "CREATE TABLE IF NOT EXISTS _embedding_meta (key TEXT PRIMARY KEY, value TEXT)"
         )
@@ -120,27 +125,16 @@ class EmbeddingStore:
                 f"model needs {self._dim}d. Delete SQLITE_PATH and restart to re-index."
             )
 
-        # Detect old single-project embedding IDs (no '::' prefix) after schema migration.
-        # These vectors are now unreachable — wipe and let re-index regenerate them.
-        try:
-            async with conn.execute(
-                "SELECT id FROM function_embeddings LIMIT 1"
-            ) as cur:
-                sample = await cur.fetchone()
-            if sample and "::" not in str(sample[0]):
-                print("[embeddings] Detected old single-project embedding IDs — wiping for re-index")
-                await conn.execute("DROP TABLE IF EXISTS function_embeddings")
-                await conn.execute("DROP TABLE IF EXISTS decision_embeddings")
-                await conn.commit()
-        except Exception:
-            pass  # table doesn't exist yet (fresh install), or already new format
+        # Migrate old shared function_embeddings table to per-project tables.
+        # The shared table was introduced in the multi-project migration but is now
+        # superseded by per-project tables for true query isolation.
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='function_embeddings'"
+        ) as cur:
+            if await cur.fetchone():
+                await self._migrate_shared_to_per_project(conn)
 
-        await conn.execute(f"""
-            CREATE VIRTUAL TABLE IF NOT EXISTS function_embeddings USING vec0(
-                id TEXT PRIMARY KEY,
-                embedding FLOAT[{self._dim}]
-            )
-        """)
+        # decision_embeddings stays as a single shared table (UUID IDs, no collision risk).
         await conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS decision_embeddings USING vec0(
                 id TEXT PRIMARY KEY,
@@ -152,6 +146,56 @@ class EmbeddingStore:
             (str(self._dim),)
         )
         await conn.commit()
+
+    async def _migrate_shared_to_per_project(self, conn) -> None:
+        """
+        Migrate from shared function_embeddings (with {project_id}::{node_id} IDs)
+        to per-project function_embeddings_{project_id} tables.
+        Reads all embedding blobs directly — no re-embedding required.
+        """
+        print("[embeddings] Migrating shared function_embeddings → per-project tables...")
+        async with conn.execute("SELECT id, embedding FROM function_embeddings") as cur:
+            rows = await cur.fetchall()
+
+        by_project: dict[str, list[tuple[str, bytes]]] = {}
+        skipped = 0
+        for row_id, emb_blob in rows:
+            row_id = str(row_id)
+            if "::" in row_id:
+                pid, node_id = row_id.split("::", 1)
+                by_project.setdefault(pid, []).append((node_id, emb_blob))
+            else:
+                skipped += 1  # old single-project format without prefix — unusable
+
+        for pid, vectors in by_project.items():
+            table = _emb_table(pid)
+            await conn.execute(f"""
+                CREATE VIRTUAL TABLE IF NOT EXISTS {table} USING vec0(
+                    id TEXT PRIMARY KEY,
+                    embedding FLOAT[{self._dim}]
+                )
+            """)
+            for node_id, emb_blob in vectors:
+                await conn.execute(
+                    f"INSERT OR REPLACE INTO {table}(id, embedding) VALUES (?, ?)",
+                    (node_id, emb_blob),
+                )
+
+        await conn.execute("DROP TABLE function_embeddings")
+        await conn.commit()
+        print(f"[embeddings] Migrated {len(rows) - skipped} vectors across "
+              f"{len(by_project)} projects ({skipped} stale entries dropped)")
+
+    async def _ensure_emb_table(self, conn, project_id: str) -> str:
+        """Create project-specific embedding table if not exists. Returns table name."""
+        table = _emb_table(project_id)
+        await conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS {table} USING vec0(
+                id TEXT PRIMARY KEY,
+                embedding FLOAT[{self._dim}]
+            )
+        """)
+        return table
 
     async def close(self) -> None:
         pass  # connection owned by CallGraphDB
@@ -186,30 +230,38 @@ class EmbeddingStore:
         needs_summary = [c for c in chunks if not c.summary or force_summaries]
         print(f"[embeddings] summarising {len(needs_summary)}/{len(chunks)} functions "
               f"({cached_count} summaries reused from cache)")
-        for i, chunk in enumerate(needs_summary, 1):
-            print(f"[embeddings]   summary {i}/{len(needs_summary)}: {chunk.id}")
-            chunk.summary = await self._generate_summary(chunk)
+
+        if needs_summary:
+            # Parallel summarization bounded by SUMMARY_CONCURRENCY.
+            sem = asyncio.Semaphore(SUMMARY_CONCURRENCY)
+
+            async def _summarize(chunk: FunctionChunk) -> str:
+                async with sem:
+                    return await self._generate_summary(chunk)
+
+            summaries = await asyncio.gather(*[_summarize(c) for c in needs_summary])
+            for chunk, summary in zip(needs_summary, summaries):
+                chunk.summary = summary
 
         print(f"[embeddings] embedding {len(chunks)} functions via {self._provider}/{self._model}")
         texts = [prepare_embed_text(chunk) for chunk in chunks]
         embeddings = await self._embed_batch(texts)
 
         conn = self._db._db
+        table = await self._ensure_emb_table(conn, project_id)
         for chunk, embedding in zip(chunks, embeddings):
             await conn.execute(
                 "UPDATE nodes SET summary = ? WHERE id = ? AND project_id = ?",
                 (chunk.summary, chunk.id, project_id),
             )
             await conn.execute(
-                "INSERT OR REPLACE INTO function_embeddings(id, embedding) VALUES (?, ?)",
-                (_emb_id(project_id, chunk.id), _f32(embedding)),
+                f"INSERT OR REPLACE INTO {table}(id, embedding) VALUES (?, ?)",
+                (chunk.id, _f32(embedding)),
             )
         await conn.commit()
         print(f"[embeddings] stored {len(chunks)} embeddings ok")
 
     async def delete_by_file(self, file_path: str, project_id: str) -> None:
-        # Look up node IDs for this file+project, then delete their prefixed embeddings.
-        # Must be called BEFORE CallGraphDB.delete_file_data (needs the nodes rows).
         conn = self._db._db
         async with conn.execute(
             "SELECT id FROM nodes WHERE file = ? AND project_id = ?",
@@ -222,12 +274,16 @@ class EmbeddingStore:
     async def delete_by_ids(self, function_ids: list[str], project_id: str) -> None:
         if not function_ids:
             return
-        prefixed = [_emb_id(project_id, fid) for fid in function_ids]
+        table = _emb_table(project_id)
         conn = self._db._db
-        ph = ",".join("?" * len(prefixed))
-        await conn.execute(
-            f"DELETE FROM function_embeddings WHERE id IN ({ph})", prefixed
-        )
+        # Table may not exist yet for brand-new projects.
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ) as cur:
+            if not await cur.fetchone():
+                return
+        ph = ",".join("?" * len(function_ids))
+        await conn.execute(f"DELETE FROM {table} WHERE id IN ({ph})", function_ids)
         await conn.commit()
 
     async def query_similar(
@@ -235,30 +291,101 @@ class EmbeddingStore:
     ) -> list[dict[str, Any]]:
         embedding = await self._embed_single(snippet)
         conn = self._db._db
-        # Request extra candidates when project-filtering so we still get top_k results
-        # after the JOIN filters out other projects.
-        k_inner = top_k * 5 if project_id else top_k
-        pid_filter = "AND n.project_id = ?" if project_id else ""
-        async with conn.execute(
-            f"""
-            SELECT knn.id, knn.distance,
-                   n.file, n.module, n.name, n.signature, n.summary, n.project_id
-            FROM (
-                SELECT id, distance
-                FROM function_embeddings
-                WHERE embedding MATCH ? AND k = ?
-                ORDER BY distance
-            ) knn
-            JOIN nodes n
-              ON n.id          = substr(knn.id, instr(knn.id, '::') + 2)
-             AND n.project_id  = substr(knn.id, 1, instr(knn.id, '::') - 1)
-            {pid_filter}
-            LIMIT ?
-            """,
-            (_f32(embedding), k_inner, *((project_id,) if project_id else ()), top_k),
-        ) as cur:
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, row)) for row in await cur.fetchall()]
+
+        if project_id:
+            # Single-project query: scan only that project's table.
+            table = _emb_table(project_id)
+            async with conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ) as cur:
+                if not await cur.fetchone():
+                    return []
+            async with conn.execute(
+                f"""
+                SELECT knn.id, knn.distance,
+                       n.file, n.module, n.name, n.signature, n.summary, n.project_id
+                FROM (
+                    SELECT id, distance FROM {table}
+                    WHERE embedding MATCH ? AND k = ?
+                    ORDER BY distance
+                ) knn
+                JOIN nodes n ON n.id = knn.id AND n.project_id = ?
+                """,
+                (_f32(embedding), top_k, project_id),
+            ) as cur:
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, row)) for row in await cur.fetchall()]
+        else:
+            # Cross-project query: UNION across all project tables via a CTE,
+            # then JOIN to nodes using (id, project_id) to avoid cross-project collisions.
+            async with conn.execute(
+                "SELECT id FROM projects ORDER BY created_at"
+            ) as cur:
+                project_ids = [row[0] for row in await cur.fetchall()]
+
+            # Build list of tables that actually exist.
+            valid: list[tuple[str, str]] = []
+            for pid in project_ids:
+                t = _emb_table(pid)
+                async with conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (t,)
+                ) as cur:
+                    if await cur.fetchone():
+                        valid.append((pid, t))
+
+            if not valid:
+                return []
+
+            # CTE: each project contributes top_k candidates; global ORDER BY picks the best.
+            parts = [
+                f"SELECT ? AS pid, id, distance FROM {t} WHERE embedding MATCH ? AND k = ?"
+                for _, t in valid
+            ]
+            params: list[Any] = []
+            for pid, _ in valid:
+                params.extend([pid, _f32(embedding), top_k])
+            params.append(top_k)
+
+            cte_sql = " UNION ALL ".join(parts)
+            sql = f"""
+                WITH knn AS (
+                    {cte_sql}
+                    ORDER BY distance LIMIT ?
+                )
+                SELECT knn.id, knn.distance, knn.pid AS project_id,
+                       n.file, n.module, n.name, n.signature, n.summary
+                FROM knn
+                JOIN nodes n ON n.id = knn.id AND n.project_id = knn.pid
+            """
+            async with conn.execute(sql, params) as cur:
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, row)) for row in await cur.fetchall()]
+
+        # Normalize L2 distance [0, 2] → similarity [0, 1] for unit-normalized embeddings.
+        for r in rows:
+            r["similarity"] = round(1.0 - r["distance"] / 2.0, 4)
+        return rows
+
+    async def count_embeddings(self, project_id: str | None = None) -> int:
+        """Count embedded functions. If project_id given, count only that project."""
+        conn = self._db._db
+        if project_id:
+            table = _emb_table(project_id)
+            async with conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ) as cur:
+                if not await cur.fetchone():
+                    return 0
+            async with conn.execute(f"SELECT COUNT(*) FROM {table}") as cur:
+                return (await cur.fetchone())[0]
+        # Sum across known projects only — avoids counting vec0 shadow tables
+        # (_info, _rowids, _chunks, etc.) that also match 'function_embeddings_%'.
+        async with conn.execute("SELECT id FROM projects") as cur:
+            project_ids = [row[0] for row in await cur.fetchall()]
+        total = 0
+        for pid in project_ids:
+            total += await self.count_embeddings(pid)
+        return total
 
     async def get_summaries(
         self, function_ids: list[str], project_id: str
@@ -342,7 +469,7 @@ class EmbeddingStore:
                 messages=[{"role": "user", "content": prompt}],
             )
             summary = resp.content[0].text.strip()
-            print(f"[embeddings]     → {summary[:80]}")
+            print(f"[embeddings]     summary: {chunk.id[:60]} → {summary[:60]}")
             return summary
         except Exception as exc:
             fallback = chunk.docstring[:200] if chunk.docstring else chunk.signature
