@@ -13,28 +13,36 @@ _SUPPORTED_EXTENSIONS = {".py", ".ts", ".tsx"}
 _parser = TreeSitterParser()
 
 
+def _derive_project_id(path: str) -> str:
+    """Derive a stable project slug from a path. Uses the last path component."""
+    return Path(path).name or "default"
+
+
 class Indexer:
     def __init__(self, db: CallGraphDB, embeddings: EmbeddingStore) -> None:
         self._db = db
         self._embeddings = embeddings
 
-    async def index_project(self, path: str) -> dict:
+    async def index_project(self, path: str, project_id: str = "") -> dict:
         """
         Full index of a project directory.
         1. Walk source files.
         2. Parse call graph.
         3. Store nodes + edges in SQLite.
-        4. Embed all functions, store in sqlite-vec.
+        4. Embed changed functions, store in sqlite-vec.
         """
+        if not project_id:
+            project_id = _derive_project_id(path)
+
         source_files = _collect_source_files(path)
         if not source_files:
-            return {"status": "no source files found", "path": path}
+            return {"status": "no source files found", "path": path, "project_id": project_id}
 
         all_nodes = []
         all_edges = []
         contents: dict[str, str] = {}
 
-        print(f"[indexer] index_project: {len(source_files)} files found under {path!r}")
+        print(f"[indexer] index_project: project={project_id!r} {len(source_files)} files under {path!r}")
         for fp in source_files:
             try:
                 content = Path(fp).read_text(encoding="utf-8", errors="replace")
@@ -48,9 +56,9 @@ class Indexer:
 
         # Snapshot existing summaries and body hashes before deletion.
         existing_summaries: dict[str, str] = {}
-        old_hashes: dict[str, str] = {}  # node_id -> body_hash
+        old_hashes: dict[str, str] = {}
         for fp in contents:
-            for node in await self._db.get_nodes_by_file(fp):
+            for node in await self._db.get_nodes_by_file(fp, project_id):
                 if node["summary"]:
                     existing_summaries[node["id"]] = node["summary"]
                 old_hashes[node["id"]] = node.get("body_hash", "")
@@ -59,16 +67,16 @@ class Indexer:
         new_hashes = {n.id: n.body_hash for n in all_nodes}
         changed_ids = {nid for nid, h in new_hashes.items() if old_hashes.get(nid) != h}
         deleted_ids = set(old_hashes.keys()) - set(new_hashes.keys())
-        await self._embeddings.delete_by_ids(list(changed_ids | deleted_ids))
+        await self._embeddings.delete_by_ids(list(changed_ids | deleted_ids), project_id)
 
         # Wipe and rewrite call graph for all parsed files (edges change at file granularity).
         for fp in contents:
-            await self._db.delete_file_data(fp)
+            await self._db.delete_file_data(fp, project_id)
 
         print(f"[indexer] call graph: {len(all_nodes)} nodes, {len(all_edges)} edges total — writing to db")
-        await self._db.upsert_nodes(all_nodes)
-        all_ids = await self._db.get_all_node_ids()
-        await self._db.upsert_edges(all_edges, all_ids)
+        await self._db.upsert_nodes(all_nodes, project_id)
+        all_ids = await self._db.get_all_node_ids(project_id)
+        await self._db.upsert_edges(all_edges, all_ids, project_id)
         print(f"[indexer] call graph written ok")
 
         # Only embed functions that changed — unchanged ones keep their existing vectors.
@@ -83,11 +91,16 @@ class Indexer:
             print(f"[indexer] starting embedding for {len(chunks)} chunks")
             await self._embeddings.upsert_chunks(
                 chunks,
+                project_id=project_id,
                 existing_summaries=existing_summaries if existing_summaries else None,
             )
 
+        # Register / update project record.
+        await self._db.upsert_project(project_id, project_id, path)
+
         result = {
             "status": "ok",
+            "project_id": project_id,
             "files_indexed": len(contents),
             "functions_indexed": len(all_nodes),
             "functions_reembedded": len(chunks),
@@ -96,16 +109,25 @@ class Indexer:
         print(f"[indexer] index_project complete: {result}")
         return result
 
-    async def index_changes(self, file_paths: list[str], file_contents: dict[str, str], project_root: str = "") -> dict:
+    async def index_changes(
+        self,
+        file_paths: list[str],
+        file_contents: dict[str, str],
+        project_root: str = "",
+        project_id: str = "",
+    ) -> dict:
         """
         Incremental update for changed files.
         Diffs at function granularity — only re-embeds functions whose body actually changed.
         """
+        if not project_id:
+            project_id = _derive_project_id(project_root) if project_root else "default"
+
         # Snapshot existing summaries and body hashes before any deletion.
         existing_summaries: dict[str, str] = {}
-        old_hashes: dict[str, str] = {}  # node_id -> body_hash
+        old_hashes: dict[str, str] = {}
         for fp in file_paths:
-            for node in await self._db.get_nodes_by_file(fp):
+            for node in await self._db.get_nodes_by_file(fp, project_id):
                 if node["summary"]:
                     existing_summaries[node["id"]] = node["summary"]
                 old_hashes[node["id"]] = node.get("body_hash", "")
@@ -114,21 +136,21 @@ class Indexer:
         updated_edges = []
         changed_ids: set[str] = set()
 
-        print(f"[indexer] index_changes: {len(file_paths)} files, project_root={project_root!r}")
+        print(f"[indexer] index_changes: project={project_id!r} {len(file_paths)} files")
         for fp in file_paths:
             content = file_contents.get(fp)
 
             if content is None:
                 # Deleted file — wipe all its embeddings (while nodes still exist for ID lookup).
-                await self._embeddings.delete_by_file(fp)
-                await self._db.delete_file_data(fp)
+                await self._embeddings.delete_by_file(fp, project_id)
+                await self._db.delete_file_data(fp, project_id)
                 print(f"[indexer]   {fp}: deleted (purged from index)")
                 continue
 
             ext = Path(fp).suffix.lower()
             if ext not in _SUPPORTED_EXTENSIONS:
-                await self._embeddings.delete_by_file(fp)
-                await self._db.delete_file_data(fp)
+                await self._embeddings.delete_by_file(fp, project_id)
+                await self._db.delete_file_data(fp, project_id)
                 print(f"[indexer]   {fp}: skipped (unsupported extension {ext!r})")
                 continue
 
@@ -137,13 +159,17 @@ class Indexer:
 
             # Functions whose body changed or are brand-new need a fresh embedding.
             file_changed = {nid for nid, h in new_hashes.items() if old_hashes.get(nid) != h}
-            file_deleted = {nid for nid in old_hashes if nid in
-                            {n["id"] for n in await self._db.get_nodes_by_file(fp)}
-                            and nid not in new_hashes}
-            await self._embeddings.delete_by_ids(list(file_changed | file_deleted))
+            existing_file_ids = {
+                n["id"] for n in await self._db.get_nodes_by_file(fp, project_id)
+            }
+            file_deleted = {
+                nid for nid in old_hashes
+                if nid in existing_file_ids and nid not in new_hashes
+            }
+            await self._embeddings.delete_by_ids(list(file_changed | file_deleted), project_id)
 
             # Refresh call graph for the whole file — edges can change in any function.
-            await self._db.delete_file_data(fp)
+            await self._db.delete_file_data(fp, project_id)
             updated_nodes.extend(nodes)
             updated_edges.extend(edges)
             changed_ids |= file_changed
@@ -153,10 +179,10 @@ class Indexer:
 
         if updated_nodes:
             print(f"[indexer] call graph: {len(updated_nodes)} nodes, {len(updated_edges)} edges — writing to db")
-            await self._db.upsert_nodes(updated_nodes)
+            await self._db.upsert_nodes(updated_nodes, project_id)
         if updated_edges:
-            all_ids = await self._db.get_all_node_ids()
-            await self._db.upsert_edges(updated_edges, all_ids)
+            all_ids = await self._db.get_all_node_ids(project_id)
+            await self._db.upsert_edges(updated_edges, all_ids, project_id)
         if updated_nodes or updated_edges:
             print(f"[indexer] call graph written ok")
 
@@ -171,11 +197,17 @@ class Indexer:
             print(f"[indexer] starting embedding for {len(updated_chunks)} chunks")
             await self._embeddings.upsert_chunks(
                 updated_chunks,
+                project_id=project_id,
                 existing_summaries=existing_summaries if existing_summaries else None,
             )
 
+        # Update project last_indexed timestamp.
+        if updated_nodes or updated_chunks:
+            await self._db.upsert_project(project_id, project_id, project_root)
+
         result = {
             "status": "ok",
+            "project_id": project_id,
             "files_updated": len([fp for fp in file_paths if file_contents.get(fp) is not None]),
             "functions_updated": len(updated_nodes),
             "functions_reembedded": len(updated_chunks),
@@ -184,16 +216,21 @@ class Indexer:
         return result
 
     async def reindex_call_graph_only(
-        self, file_paths: list[str], file_contents: dict[str, str], project_root: str = ""
+        self,
+        file_paths: list[str],
+        file_contents: dict[str, str],
+        project_root: str = "",
+        project_id: str = "",
     ) -> dict:
         """Re-parse call graph for the given files without touching embeddings."""
-        # Snapshot all existing node IDs and non-empty summaries before deletion.
-        # IDs are used for orphan embedding cleanup; summaries are restored after upsert.
+        if not project_id:
+            project_id = _derive_project_id(project_root) if project_root else "default"
+
         existing_summaries: dict[str, str] = {}
         existing_node_ids: set[str] = set()
         for fp in file_paths:
             if file_contents.get(fp) is not None:
-                for node in await self._db.get_nodes_by_file(fp):
+                for node in await self._db.get_nodes_by_file(fp, project_id):
                     existing_node_ids.add(node["id"])
                     if node["summary"]:
                         existing_summaries[node["id"]] = node["summary"]
@@ -204,10 +241,8 @@ class Indexer:
         for fp in file_paths:
             content = file_contents.get(fp)
             if content is None:
-                # Deleted file: clean up its embeddings before removing nodes
-                # (subquery in delete_by_file needs the nodes row to resolve IDs).
-                await self._embeddings.delete_by_file(fp)
-            await self._db.delete_file_data(fp)
+                await self._embeddings.delete_by_file(fp, project_id)
+            await self._db.delete_file_data(fp, project_id)
             if content is None:
                 continue
             ext = Path(fp).suffix.lower()
@@ -217,29 +252,25 @@ class Indexer:
             updated_nodes.extend(nodes)
             updated_edges.extend(edges)
 
-        # Compute the set of re-parsed node IDs upfront — used in both blocks below.
         new_node_ids = {n.id for n in updated_nodes}
 
-        # Clean up embeddings for functions that no longer exist after the re-parse.
-        # Use existing_node_ids (all nodes) not existing_summaries (only summarised nodes)
-        # so functions with empty summaries are also cleaned up correctly.
         if existing_node_ids:
             orphaned = [nid for nid in existing_node_ids if nid not in new_node_ids]
             if orphaned:
-                await self._embeddings.delete_by_ids(orphaned)
+                await self._embeddings.delete_by_ids(orphaned, project_id)
 
         if updated_nodes:
-            await self._db.upsert_nodes(updated_nodes)
-            # Restore summaries for nodes that survived the re-parse (batch, one fsync).
+            await self._db.upsert_nodes(updated_nodes, project_id)
             surviving = {nid: s for nid, s in existing_summaries.items() if nid in new_node_ids}
             if surviving:
-                await self._db.batch_update_summaries(surviving)
+                await self._db.batch_update_summaries(surviving, project_id)
         if updated_edges:
-            all_ids = await self._db.get_all_node_ids()
-            await self._db.upsert_edges(updated_edges, all_ids)
+            all_ids = await self._db.get_all_node_ids(project_id)
+            await self._db.upsert_edges(updated_edges, all_ids, project_id)
 
         return {
             "status": "ok",
+            "project_id": project_id,
             "files_updated": len([fp for fp in file_paths if file_contents.get(fp) is not None]),
             "nodes_updated": len(updated_nodes),
             "edges_updated": len(updated_edges),
@@ -251,14 +282,17 @@ class Indexer:
         file_contents: dict[str, str],
         force_summaries: bool = False,
         project_root: str = "",
+        project_id: str = "",
     ) -> dict:
-        """Re-embed functions for the given files without touching the call graph.
-        Pass force_summaries=True to regenerate LLM summaries even for known functions."""
+        """Re-embed functions for the given files without touching the call graph."""
+        if not project_id:
+            project_id = _derive_project_id(project_root) if project_root else "default"
+
         updated_chunks = []
 
         for fp in file_paths:
             content = file_contents.get(fp)
-            await self._embeddings.delete_by_file(fp)
+            await self._embeddings.delete_by_file(fp, project_id)
             if content is None:
                 continue
             ext = Path(fp).suffix.lower()
@@ -268,16 +302,18 @@ class Indexer:
 
         if updated_chunks:
             existing = {} if force_summaries else await self._embeddings.get_summaries(
-                [c.id for c in updated_chunks]
+                [c.id for c in updated_chunks], project_id
             )
             await self._embeddings.upsert_chunks(
                 updated_chunks,
+                project_id=project_id,
                 existing_summaries=existing,
                 force_summaries=force_summaries,
             )
 
         return {
             "status": "ok",
+            "project_id": project_id,
             "files_updated": len([fp for fp in file_paths if file_contents.get(fp) is not None]),
             "functions_reembedded": len(updated_chunks),
             "summaries_regenerated": force_summaries,

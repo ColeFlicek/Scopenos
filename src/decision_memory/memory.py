@@ -42,6 +42,7 @@ class DecisionMemory:
         trigger: str = "",
         linked_function_ids: list[str] | None = None,
         parent_decision_id: str | None = None,
+        project_id: str = "default",
     ) -> dict[str, str]:
         decision_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -56,6 +57,7 @@ class DecisionMemory:
         try:
             await self._db.insert_decision({
                 "id": decision_id,
+                "project_id": project_id,
                 "type": type,
                 "description": description,
                 "rejected_alternatives": rejected_alternatives,
@@ -71,32 +73,39 @@ class DecisionMemory:
 
         return {"decision_id": decision_id, "created_at": now}
 
-    async def get_decision_history(self, function_name: str) -> list[dict[str, Any]]:
+    async def get_decision_history(
+        self, function_name: str, project_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """All decisions linked to a function, ordered chronologically. Pure SQLite."""
-        return await self._db.get_decisions_for_function(function_name)
+        return await self._db.get_decisions_for_function(function_name, project_id)
 
-    async def query_decisions(self, query_text: str, top_k: int = 10) -> list[dict[str, Any]]:
+    async def query_decisions(
+        self, query_text: str, top_k: int = 10, project_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Semantic search over decision reasoning.
         Finds prior thinking similar to the query — not code structure.
+        When project_id is given, only decisions for that project are returned.
         """
-        hits = await self._embeddings.query_decision_embeddings(query_text, top_k)
+        hits = await self._embeddings.query_decision_embeddings(query_text, top_k * 3 if project_id else top_k)
         if not hits:
             return []
         id_to_distance = {h["id"]: h["distance"] for h in hits}
         ph = ",".join("?" * len(hits))
+        pid_clause = " AND project_id = ?" if project_id else ""
         async with self._db._db.execute(
-            f"SELECT * FROM decisions WHERE id IN ({ph})", list(id_to_distance.keys())
+            f"SELECT * FROM decisions WHERE id IN ({ph}){pid_clause}",
+            [*id_to_distance.keys(), *((project_id,) if project_id else ())],
         ) as cur:
             rows = {r["id"]: dict(r) for r in await cur.fetchall()}
         results = []
         for hit in hits:
             rec = rows.get(hit["id"])
             if rec:
-                # sqlite-vec returns L2 distance; convert to a 0–1 similarity score
-                # using the known range [0, 2] for unit-normalized embeddings.
                 rec["score"] = round(1.0 - hit["distance"] / 2.0, 4)
                 results.append(rec)
+            if len(results) >= top_k:
+                break
         return results
 
 

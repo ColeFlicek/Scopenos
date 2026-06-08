@@ -14,6 +14,19 @@ fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
+# Derive project_id: prefer ACIP_PROJECT env var, then git remote basename, then dirname.
+if [ -n "${ACIP_PROJECT:-}" ]; then
+  PROJECT_ID="$ACIP_PROJECT"
+else
+  REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
+  if [ -n "$REMOTE_URL" ]; then
+    # Strip trailing .git, take last path segment
+    PROJECT_ID=$(echo "$REMOTE_URL" | sed 's/\.git$//' | sed 's|.*[/:]||')
+  else
+    PROJECT_ID=$(basename "$REPO_ROOT")
+  fi
+fi
+
 # ── Re-index changed files ──────────────────────────────────────────────────────
 
 FILES_JSON=$(echo "$CHANGED" | while IFS= read -r f; do
@@ -23,19 +36,21 @@ done | paste -sd ',' - | sed 's/^/[/' | sed 's/$/]/')
 curl --silent --show-error --max-time 30 \
   -X POST "${ACIP_URL}/index" \
   -H "Content-Type: application/json" \
-  -d "{\"changed_files\": ${FILES_JSON}, \"project_root\": \"${REPO_ROOT}\"}" \
+  -d "{\"changed_files\": ${FILES_JSON}, \"project_root\": \"${REPO_ROOT}\", \"project_id\": \"${PROJECT_ID}\"}" \
   > /dev/null
 
-echo "[acip] index_changes triggered for $(echo "$CHANGED" | wc -l | tr -d ' ') files"
+echo "[acip] index_changes triggered for $(echo "$CHANGED" | wc -l | tr -d ' ') files (project: ${PROJECT_ID})"
 
 # ── Log decision ────────────────────────────────────────────────────────────────
 
-python3 - <<'PYEOF'
+ACIP_PROJECT_ID="$PROJECT_ID" ACIP_URL="$ACIP_URL" REPO_ROOT="$REPO_ROOT" python3 - <<'PYEOF'
 import json, os, subprocess, sys
 try:
     from urllib.request import urlopen, Request as UReq
 
-    acip_url = os.environ.get("ACIP_URL", "http://localhost:3004")
+    acip_url    = os.environ.get("ACIP_URL", "http://localhost:3004")
+    project_id  = os.environ.get("ACIP_PROJECT_ID", "default")
+    repo_root   = os.environ.get("REPO_ROOT", "")
 
     msg   = subprocess.check_output(["git", "log", "-1", "--format=%s"]).decode().strip()
     body  = subprocess.check_output(["git", "log", "-1", "--format=%b"]).decode().strip()
@@ -59,8 +74,6 @@ try:
     else:
         type_ = "Patch"
 
-    # Build description: commit message + body + diff stat so get_decision_history
-    # answers "what changed" without requiring a separate git show.
     parts = [msg]
     if body:
         parts.append(body)
@@ -68,15 +81,13 @@ try:
     description = " — ".join(parts)
 
     # Resolve changed files → actual indexed function IDs via the ACIP API.
-    # Falls back to module-path approximation if the server can't be reached.
-    repo_root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"]).decode().strip()
     abs_files = [f"{repo_root}/{f}" for f in changed if f.endswith((".py", ".ts", ".tsx"))]
     linked = None
     if abs_files:
         try:
             fn_req = UReq(
                 f"{acip_url}/api/functions",
-                data=json.dumps({"files": abs_files}).encode(),
+                data=json.dumps({"files": abs_files, "project_id": project_id}).encode(),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
@@ -84,8 +95,6 @@ try:
                 fn_resp = json.loads(r.read())
             linked = fn_resp.get("function_ids") or None
         except Exception:
-            # Server unreachable — fall back to module paths so the decision
-            # is still logged, just without per-function granularity.
             linked = [f.replace("/", ".").removesuffix(".py") for f in changed
                       if f.endswith((".py", ".ts", ".tsx"))] or None
 
@@ -94,6 +103,7 @@ try:
         "description": description,
         "trigger": f"git:{hash_[:8]}",
         "linked_function_ids": linked,
+        "project_id": project_id,
     }).encode()
 
     req = UReq(

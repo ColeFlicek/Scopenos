@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-from collections import defaultdict
-from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
@@ -86,32 +84,9 @@ def register_routes(mcp, get_services) -> None:
                 for k in ("EMBEDDING_PROVIDER", "EMBEDDING_MODEL", "EMBEDDING_DIM")
             )
 
-            # ── Projects ───────────────────────────────────────────────────
-            # Isolated in its own try/except so a projects-query failure doesn't
-            # clobber the already-collected layer health data above.
+            # ── Projects (from projects table) ─────────────────────────────
             try:
-                async with db._db.execute("SELECT file, COUNT(*) FROM nodes GROUP BY file") as cur:
-                    files = [(r[0], r[1]) for r in await cur.fetchall()]
-
-                groups: dict[str, dict] = defaultdict(lambda: {"nodes": 0, "edges": 0, "embedded": 0})
-                for f, count in files:
-                    groups[_project_root(f)]["nodes"] += count
-
-                for root in list(groups.keys()):
-                    escaped = root.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                    prefix = escaped + "/%"
-                    async with db._db.execute(
-                        "SELECT COUNT(*) FROM edges WHERE file LIKE ? ESCAPE '\\'", (prefix,)
-                    ) as cur:
-                        groups[root]["edges"] = (await cur.fetchone())[0]
-                    async with db._db.execute(
-                        """SELECT COUNT(*) FROM function_embeddings
-                           WHERE id IN (SELECT id FROM nodes WHERE file LIKE ? ESCAPE '\\')""",
-                        (prefix,)
-                    ) as cur:
-                        groups[root]["embedded"] = (await cur.fetchone())[0]
-
-                result["projects"] = [{"path": k, **v} for k, v in sorted(groups.items())]
+                result["projects"] = await db.list_projects()
             except Exception as proj_exc:
                 result["projects"] = [{"error": str(proj_exc)}]
 
@@ -177,9 +152,3 @@ def register_routes(mcp, get_services) -> None:
             result["server"] = {"status": "error", "error": str(exc)}
 
         return JSONResponse(result)
-
-
-def _project_root(file_path: str) -> str:
-    parts = Path(file_path).parts
-    depth = min(4, max(2, len(parts) - 1))
-    return str(Path(*parts[:depth]))

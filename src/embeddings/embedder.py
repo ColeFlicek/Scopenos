@@ -69,6 +69,11 @@ def _f32(v: list[float]) -> bytes:
     return struct.pack(f"{len(v)}f", *v)
 
 
+def _emb_id(project_id: str, node_id: str) -> str:
+    """Embedding row ID format: '{project_id}::{node_id}'."""
+    return f"{project_id}::{node_id}"
+
+
 class EmbeddingStore:
     """
     Manages all vector embeddings using sqlite-vec — no external server required.
@@ -76,6 +81,10 @@ class EmbeddingStore:
     Two vec0 virtual tables live in the same SQLite file as the call graph:
       - function_embeddings  (Layer 2): code similarity — function bodies + summaries
       - decision_embeddings  (Layer 3): reasoning similarity — intent + context
+
+    Embedding IDs for functions are prefixed: "{project_id}::{node_id}".
+    This keeps per-project vectors isolated inside a shared vec0 table.
+    Decision embedding IDs are plain UUIDs (globally unique, no prefix needed).
 
     The connection is owned by CallGraphDB; this class borrows it.
     """
@@ -111,6 +120,21 @@ class EmbeddingStore:
                 f"model needs {self._dim}d. Delete SQLITE_PATH and restart to re-index."
             )
 
+        # Detect old single-project embedding IDs (no '::' prefix) after schema migration.
+        # These vectors are now unreachable — wipe and let re-index regenerate them.
+        try:
+            async with conn.execute(
+                "SELECT id FROM function_embeddings LIMIT 1"
+            ) as cur:
+                sample = await cur.fetchone()
+            if sample and "::" not in str(sample[0]):
+                print("[embeddings] Detected old single-project embedding IDs — wiping for re-index")
+                await conn.execute("DROP TABLE IF EXISTS function_embeddings")
+                await conn.execute("DROP TABLE IF EXISTS decision_embeddings")
+                await conn.commit()
+        except Exception:
+            pass  # table doesn't exist yet (fresh install), or already new format
+
         await conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS function_embeddings USING vec0(
                 id TEXT PRIMARY KEY,
@@ -143,6 +167,7 @@ class EmbeddingStore:
     async def upsert_chunks(
         self,
         chunks: list[FunctionChunk],
+        project_id: str,
         existing_summaries: dict[str, str] | None = None,
         force_summaries: bool = False,
     ) -> None:
@@ -172,59 +197,79 @@ class EmbeddingStore:
         conn = self._db._db
         for chunk, embedding in zip(chunks, embeddings):
             await conn.execute(
-                "UPDATE nodes SET summary = ? WHERE id = ?", (chunk.summary, chunk.id)
+                "UPDATE nodes SET summary = ? WHERE id = ? AND project_id = ?",
+                (chunk.summary, chunk.id, project_id),
             )
             await conn.execute(
                 "INSERT OR REPLACE INTO function_embeddings(id, embedding) VALUES (?, ?)",
-                (chunk.id, _f32(embedding))
+                (_emb_id(project_id, chunk.id), _f32(embedding)),
             )
         await conn.commit()
         print(f"[embeddings] stored {len(chunks)} embeddings ok")
 
-    async def delete_by_file(self, file_path: str) -> None:
-        # Must be called BEFORE CallGraphDB.delete_file_data — we need nodes to resolve IDs.
+    async def delete_by_file(self, file_path: str, project_id: str) -> None:
+        # Look up node IDs for this file+project, then delete their prefixed embeddings.
+        # Must be called BEFORE CallGraphDB.delete_file_data (needs the nodes rows).
         conn = self._db._db
+        async with conn.execute(
+            "SELECT id FROM nodes WHERE file = ? AND project_id = ?",
+            (file_path, project_id),
+        ) as cur:
+            node_ids = [row[0] for row in await cur.fetchall()]
+        if node_ids:
+            await self.delete_by_ids(node_ids, project_id)
+
+    async def delete_by_ids(self, function_ids: list[str], project_id: str) -> None:
+        if not function_ids:
+            return
+        prefixed = [_emb_id(project_id, fid) for fid in function_ids]
+        conn = self._db._db
+        ph = ",".join("?" * len(prefixed))
         await conn.execute(
-            "DELETE FROM function_embeddings WHERE id IN (SELECT id FROM nodes WHERE file = ?)",
-            (file_path,)
+            f"DELETE FROM function_embeddings WHERE id IN ({ph})", prefixed
         )
         await conn.commit()
 
-    async def delete_by_ids(self, function_ids: list[str]) -> None:
-        if not function_ids:
-            return
-        conn = self._db._db
-        ph = ",".join("?" * len(function_ids))
-        await conn.execute(f"DELETE FROM function_embeddings WHERE id IN ({ph})", function_ids)
-        await conn.commit()
-
-    async def query_similar(self, snippet: str, top_k: int = 10) -> list[dict[str, Any]]:
+    async def query_similar(
+        self, snippet: str, top_k: int = 10, project_id: str | None = None
+    ) -> list[dict[str, Any]]:
         embedding = await self._embed_single(snippet)
         conn = self._db._db
+        # Request extra candidates when project-filtering so we still get top_k results
+        # after the JOIN filters out other projects.
+        k_inner = top_k * 5 if project_id else top_k
+        pid_filter = "AND n.project_id = ?" if project_id else ""
         async with conn.execute(
-            """
+            f"""
             SELECT knn.id, knn.distance,
-                   n.file, n.module, n.name, n.signature, n.summary
+                   n.file, n.module, n.name, n.signature, n.summary, n.project_id
             FROM (
                 SELECT id, distance
                 FROM function_embeddings
                 WHERE embedding MATCH ? AND k = ?
                 ORDER BY distance
             ) knn
-            JOIN nodes n ON n.id = knn.id
+            JOIN nodes n
+              ON n.id          = substr(knn.id, instr(knn.id, '::') + 2)
+             AND n.project_id  = substr(knn.id, 1, instr(knn.id, '::') - 1)
+            {pid_filter}
+            LIMIT ?
             """,
-            (_f32(embedding), top_k)
+            (_f32(embedding), k_inner, *((project_id,) if project_id else ()), top_k),
         ) as cur:
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in await cur.fetchall()]
 
-    async def get_summaries(self, function_ids: list[str]) -> dict[str, str]:
+    async def get_summaries(
+        self, function_ids: list[str], project_id: str
+    ) -> dict[str, str]:
         if not function_ids:
             return {}
         conn = self._db._db
         ph = ",".join("?" * len(function_ids))
         async with conn.execute(
-            f"SELECT id, summary FROM nodes WHERE id IN ({ph})", function_ids
+            f"SELECT id, summary FROM nodes WHERE id IN ({ph}) AND project_id = ?",
+            [*function_ids, project_id],
         ) as cur:
             return {r[0]: r[1] for r in await cur.fetchall()}
 
@@ -235,7 +280,7 @@ class EmbeddingStore:
         conn = self._db._db
         await conn.execute(
             "INSERT OR REPLACE INTO decision_embeddings(id, embedding) VALUES (?, ?)",
-            (decision_id, _f32(embedding))
+            (decision_id, _f32(embedding)),
         )
         await conn.commit()
 
@@ -251,13 +296,15 @@ class EmbeddingStore:
             WHERE embedding MATCH ? AND k = ?
             ORDER BY distance
             """,
-            (_f32(embedding), top_k)
+            (_f32(embedding), top_k),
         ) as cur:
             return [{"id": r[0], "distance": r[1]} for r in await cur.fetchall()]
 
     async def delete_decision_embedding(self, decision_id: str) -> None:
         conn = self._db._db
-        await conn.execute("DELETE FROM decision_embeddings WHERE id = ?", (decision_id,))
+        await conn.execute(
+            "DELETE FROM decision_embeddings WHERE id = ?", (decision_id,)
+        )
         await conn.commit()
 
     # ── Internals ──────────────────────────────────────────────────────────
