@@ -215,6 +215,32 @@ async def http_get_functions_for_files(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
+# ── Bulk index HTTP endpoint (used by acip-import slash command) ──────────────
+
+@mcp.custom_route("/api/index-bulk", methods=["POST"])
+async def http_index_bulk(request: Request) -> JSONResponse:
+    """
+    POST /api/index-bulk
+    Body: {"project_root": "/abs/path", "files": {"abs/path/file.py": "<content>", ...}}
+    Indexes a full project from file contents supplied by the caller — no server-side
+    file I/O required. Used when the project lives on a different machine than the
+    ACIP server (e.g. the Claude Code workspace vs TheHive).
+    """
+    try:
+        data = await request.json()
+        project_root: str = data.get("project_root", "")
+        files: dict[str, str] = data.get("files", {})
+        if not files:
+            return JSONResponse({"status": "error", "detail": "no files provided"}, status_code=400)
+        svcs = await _get_services()
+        result = await svcs["indexer"].index_changes(
+            list(files.keys()), files, project_root=project_root
+        )
+        return JSONResponse(result)
+    except Exception as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
 # ── Git hook HTTP endpoint ─────────────────────────────────────────────────────
 
 @mcp.custom_route("/index", methods=["POST"])

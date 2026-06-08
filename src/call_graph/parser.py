@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +29,7 @@ class FunctionNode:
     signature: str
     body: str         # truncated at 2000 chars for storage
     docstring: str
+    body_hash: str = ""  # sha256[:16] of full function text — used to skip re-embedding unchanged functions
 
 
 @dataclass
@@ -149,12 +151,13 @@ def _visit_python(
         func_text = _node_text(node, source)
         signature = func_text.split("\n")[0].strip()
         docstring = _extract_python_docstring(node, source)
-        body_text = func_text[:2000]
+        body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
 
         nodes.append(FunctionNode(
             id=func_id, name=qual_name, file=file_path, module=module,
             type="method" if parent_class else "function",
-            signature=signature, body=body_text, docstring=docstring,
+            signature=signature, body=func_text[:2000], docstring=docstring,
+            body_hash=body_hash,
         ))
 
         # Collect calls inside this function (not descending into nested defs)
@@ -287,11 +290,13 @@ def _visit_typescript(
         func_id = f"{module}.{qual_name}"
         func_text = _node_text(node, source)
         signature = func_text.split("\n")[0].strip()
+        body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
 
         nodes.append(FunctionNode(
             id=func_id, name=qual_name, file=file_path, module=module,
             type="method" if parent_class else "function",
             signature=signature, body=func_text[:2000], docstring="",
+            body_hash=body_hash,
         ))
 
         _collect_ts_calls(node, func_id, file_path, source, edges)

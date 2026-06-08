@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     name        TEXT NOT NULL,
     signature   TEXT NOT NULL DEFAULT '',
     docstring   TEXT NOT NULL DEFAULT '',
-    summary     TEXT NOT NULL DEFAULT ''
+    summary     TEXT NOT NULL DEFAULT '',
+    body_hash   TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS edges (
@@ -69,8 +70,13 @@ class CallGraphDB:
         self._db = await aiosqlite.connect(self._path, check_same_thread=False)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(DDL)
+        # Migrate existing DBs: add body_hash column if absent.
+        try:
+            await self._db.execute("ALTER TABLE nodes ADD COLUMN body_hash TEXT NOT NULL DEFAULT ''")
+            await self._db.commit()
+        except Exception:
+            pass  # column already exists
         # Dedup any duplicate edges from before the UNIQUE index was added.
-        # Runs after DDL so the table is guaranteed to exist.
         await self._db.execute(
             "DELETE FROM edges WHERE rowid NOT IN "
             "(SELECT MIN(rowid) FROM edges GROUP BY caller_id, callee_id, edge_type, file)"
@@ -85,16 +91,16 @@ class CallGraphDB:
 
     async def upsert_nodes(self, nodes: list[FunctionNode]) -> None:
         rows = [
-            (n.id, n.file, n.module, n.type, n.name, n.signature, n.docstring)
+            (n.id, n.file, n.module, n.type, n.name, n.signature, n.docstring, n.body_hash)
             for n in nodes
         ]
         await self._db.executemany(
-            """INSERT INTO nodes(id,file,module,type,name,signature,docstring,summary)
-               VALUES(?,?,?,?,?,?,?,'')
+            """INSERT INTO nodes(id,file,module,type,name,signature,docstring,summary,body_hash)
+               VALUES(?,?,?,?,?,?,?,'',?)
                ON CONFLICT(id) DO UPDATE SET
                    file=excluded.file, module=excluded.module, type=excluded.type,
                    name=excluded.name, signature=excluded.signature,
-                   docstring=excluded.docstring""",
+                   docstring=excluded.docstring, body_hash=excluded.body_hash""",
             rows,
         )
         await self._db.commit()
