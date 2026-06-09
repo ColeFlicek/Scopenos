@@ -21,15 +21,18 @@ class DecisionMemory:
     """
 
     def __init__(self, db: CallGraphDB, embeddings: EmbeddingStore) -> None:
+        """Store references to the call-graph database and embedding store."""
         self._db = db
         self._embeddings = embeddings
 
     @classmethod
     async def create(cls, db: CallGraphDB, embeddings: EmbeddingStore) -> "DecisionMemory":
+        """Async factory — return a fully wired DecisionMemory instance."""
         # decision_embeddings vec0 table already created by EmbeddingStore.init()
         return cls(db, embeddings)
 
     async def close(self) -> None:
+        """No-op — layers below own and manage their own connections."""
         pass
 
     # ── MCP tools ──────────────────────────────────────────────────────────
@@ -44,6 +47,7 @@ class DecisionMemory:
         parent_decision_id: str | None = None,
         project_id: str = "default",
     ) -> dict[str, str]:
+        """Record a decision with semantic embedding, linked to function IDs; returns its id."""
         decision_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 

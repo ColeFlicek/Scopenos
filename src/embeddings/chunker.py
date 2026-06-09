@@ -23,11 +23,13 @@ class FunctionChunk:
 
 
 def extract_chunks(file_path: str, content: str, project_root: str = "") -> list[FunctionChunk]:
+    """Parse a source file and return a FunctionChunk for every function/class node."""
     nodes, _ = _parser.parse_file(file_path, content, project_root)
     return [_node_to_chunk(n) for n in nodes]
 
 
 def _node_to_chunk(node: FunctionNode) -> FunctionChunk:
+    """Convert a FunctionNode (call-graph layer) to a FunctionChunk (embedding layer)."""
     chunk = FunctionChunk(
         id=node.id,
         name=node.name,

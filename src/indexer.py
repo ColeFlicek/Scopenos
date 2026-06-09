@@ -14,12 +14,13 @@ _parser = TreeSitterParser()
 
 
 def _derive_project_id(path: str) -> str:
-    """Derive a stable project slug from a path. Uses the last path component."""
+    """Derive a stable project slug from a directory path (last path component)."""
     return Path(path).name or "default"
 
 
 class Indexer:
     def __init__(self, db: CallGraphDB, embeddings: EmbeddingStore) -> None:
+        """Store references to the call-graph database and embedding store."""
         self._db = db
         self._embeddings = embeddings
 
@@ -321,6 +322,7 @@ class Indexer:
 
 
 def _collect_source_files(root: str) -> list[str]:
+    """Walk a directory tree and return all supported source file paths, skipping VCS/build dirs."""
     result = []
     skip_dirs = {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", "dist", "build"}
     for dirpath, dirnames, filenames in os.walk(root):

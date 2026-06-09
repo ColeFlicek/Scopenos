@@ -131,16 +131,19 @@ CREATE INDEX IF NOT EXISTS idx_impr_status  ON agent_improvements(status);
 
 class CallGraphDB:
     def __init__(self, db_path: str) -> None:
+        """Store the database path; connection is opened by init()."""
         self._path = db_path
         self._db: aiosqlite.Connection | None = None
 
     @classmethod
     async def create(cls, db_path: str) -> "CallGraphDB":
+        """Async factory — create and fully initialize a CallGraphDB instance."""
         obj = cls(db_path)
         await obj.init()
         return obj
 
     async def init(self) -> None:
+        """Open the SQLite connection, apply DDL, and run schema migrations."""
         self._db = await aiosqlite.connect(self._path, check_same_thread=False)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(DDL)
@@ -258,12 +261,14 @@ class CallGraphDB:
         print("[storage] NOTE: Embeddings will be cleared by EmbeddingStore on next startup.")
 
     async def close(self) -> None:
+        """Close the underlying SQLite connection."""
         if self._db:
             await self._db.close()
 
     # ── Projects ───────────────────────────────────────────────────────────
 
     async def upsert_project(self, project_id: str, name: str, root: str = "") -> None:
+        """Insert or update a project record, refreshing the last_indexed timestamp."""
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
             """INSERT INTO projects(id, name, root, created_at, last_indexed)
@@ -275,6 +280,7 @@ class CallGraphDB:
         await self._db.commit()
 
     async def list_projects(self) -> list[dict]:
+        """Return all registered projects with node and edge counts."""
         async with self._db.execute(
             """
             SELECT p.id, p.name, p.root, p.created_at, p.last_indexed,
@@ -292,6 +298,7 @@ class CallGraphDB:
     # ── Nodes ──────────────────────────────────────────────────────────────
 
     async def upsert_nodes(self, nodes: list[FunctionNode], project_id: str) -> None:
+        """Insert or update a batch of function/class nodes for a project."""
         import json
         rows = [
             (project_id, n.id, n.file, n.module, n.type, n.name,
@@ -311,6 +318,7 @@ class CallGraphDB:
         await self._db.commit()
 
     async def update_summary(self, node_id: str, summary: str, project_id: str) -> None:
+        """Update the LLM-generated summary for a single node."""
         await self._db.execute(
             "UPDATE nodes SET summary=? WHERE id=? AND project_id=?",
             (summary, node_id, project_id),
@@ -320,6 +328,7 @@ class CallGraphDB:
     async def batch_update_summaries(
         self, summaries: dict[str, str], project_id: str
     ) -> None:
+        """Bulk-update summaries for multiple nodes in a single executemany call."""
         if not summaries:
             return
         await self._db.executemany(
@@ -329,6 +338,7 @@ class CallGraphDB:
         await self._db.commit()
 
     async def get_node(self, node_id: str, project_id: str | None = None) -> dict | None:
+        """Fetch a single node by ID, optionally scoped to a project."""
         if project_id:
             async with self._db.execute(
                 "SELECT * FROM nodes WHERE id=? AND project_id=?", (node_id, project_id)
@@ -342,6 +352,7 @@ class CallGraphDB:
         return dict(row) if row else None
 
     async def get_nodes_by_file(self, file_path: str, project_id: str | None = None) -> list[dict]:
+        """Return all nodes belonging to a specific source file."""
         if project_id:
             async with self._db.execute(
                 "SELECT * FROM nodes WHERE file=? AND project_id=?", (file_path, project_id)
@@ -379,6 +390,7 @@ class CallGraphDB:
     async def upsert_edges(
         self, edges: list[CallEdge], all_node_ids: set[str], project_id: str
     ) -> None:
+        """Insert call edges, resolving bare callee names to known node IDs where possible."""
         rows = []
         for e in edges:
             callee_id = _resolve_callee(e.callee_name, all_node_ids)
@@ -391,6 +403,7 @@ class CallGraphDB:
         await self._db.commit()
 
     async def delete_file_data(self, file_path: str, project_id: str) -> None:
+        """Delete all nodes and edges belonging to a file in a project."""
         await self._db.execute(
             "DELETE FROM nodes WHERE file=? AND project_id=?", (file_path, project_id)
         )
@@ -404,6 +417,7 @@ class CallGraphDB:
     async def get_callers(
         self, function_name: str, project_id: str | None = None
     ) -> list[dict]:
+        """Return all functions that directly call the target function."""
         targets = await self.find_node_by_name(function_name, project_id)
         if not targets:
             return []
@@ -430,6 +444,7 @@ class CallGraphDB:
     async def get_callees(
         self, function_name: str, project_id: str | None = None
     ) -> list[dict]:
+        """Return all functions directly called by the target function."""
         targets = await self.find_node_by_name(function_name, project_id)
         if not targets:
             return []
@@ -502,6 +517,7 @@ class CallGraphDB:
         return results
 
     async def get_all_node_ids(self, project_id: str | None = None) -> set[str]:
+        """Return the set of all node IDs for a project, or all projects if unscoped."""
         if project_id:
             async with self._db.execute(
                 "SELECT id FROM nodes WHERE project_id=?", (project_id,)
@@ -513,6 +529,7 @@ class CallGraphDB:
     # ── Decision helpers ───────────────────────────────────────────────────
 
     async def insert_decision(self, decision: dict) -> None:
+        """Insert a raw decision record into the decisions table."""
         await self._db.execute(
             """INSERT OR REPLACE INTO decisions
                (id,project_id,type,description,rejected_alternatives,
@@ -526,6 +543,7 @@ class CallGraphDB:
     async def insert_decision_functions(
         self, decision_id: str, function_ids: list[str]
     ) -> None:
+        """Link a decision to a list of function IDs in decision_functions."""
         rows = [(decision_id, fid) for fid in function_ids]
         await self._db.executemany(
             "INSERT OR IGNORE INTO decision_functions(decision_id,function_id) VALUES(?,?)",
@@ -536,6 +554,7 @@ class CallGraphDB:
     async def get_decisions_for_function(
         self, function_name: str, project_id: str | None = None
     ) -> list[dict]:
+        """Return all decisions linked to a function, in chronological order."""
         targets = await self.find_node_by_name(function_name, project_id)
         if not targets:
             return []
@@ -570,6 +589,7 @@ class CallGraphDB:
         structural_expression: str = "{}",
         threshold: float = 0.85,
     ) -> dict:
+        """Persist a new contract record in draft status and return it."""
         import json
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
@@ -584,6 +604,7 @@ class CallGraphDB:
         return await self.get_contract(contract_id)
 
     async def get_contract(self, contract_id: str) -> dict | None:
+        """Fetch a contract by ID, decoding project_ids from JSON."""
         import json
         async with self._db.execute(
             "SELECT * FROM contracts WHERE id = ?", (contract_id,)
@@ -596,6 +617,7 @@ class CallGraphDB:
         return r
 
     async def list_contracts(self, project_id: str | None = None) -> list[dict]:
+        """Return all contracts, optionally filtered to those covering a specific project."""
         import json
         async with self._db.execute(
             "SELECT * FROM contracts ORDER BY created_at DESC"
@@ -609,6 +631,7 @@ class CallGraphDB:
         return result
 
     async def update_contract_status(self, contract_id: str, status: str) -> None:
+        """Set the status field on a contract (e.g. 'active' or 'draft')."""
         await self._db.execute(
             "UPDATE contracts SET status = ? WHERE id = ?", (status, contract_id)
         )
@@ -617,6 +640,7 @@ class CallGraphDB:
     async def update_contract_structural(
         self, contract_id: str, structural_expression: str
     ) -> None:
+        """Replace the structural_expression JSON for a contract in-place."""
         await self._db.execute(
             "UPDATE contracts SET structural_expression = ? WHERE id = ?",
             (structural_expression, contract_id),
@@ -624,6 +648,7 @@ class CallGraphDB:
         await self._db.commit()
 
     async def delete_contract(self, contract_id: str) -> None:
+        """Hard-delete a contract and its cascading examples and violations."""
         await self._db.execute("DELETE FROM contracts WHERE id = ?", (contract_id,))
         await self._db.commit()
 
@@ -648,6 +673,7 @@ class CallGraphDB:
         await self._db.commit()
 
     async def list_contract_examples(self, contract_id: str) -> list[dict]:
+        """Return all violation and compliance examples for a contract, ordered by creation time."""
         async with self._db.execute(
             "SELECT * FROM contract_examples WHERE contract_id = ? ORDER BY created_at",
             (contract_id,),
@@ -662,6 +688,7 @@ class CallGraphDB:
         violation_type: str,
         score: float,
     ) -> None:
+        """Record a single contract violation event for a function."""
         import uuid
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
@@ -676,6 +703,7 @@ class CallGraphDB:
     async def list_violations(
         self, project_id: str | None = None, limit: int = 100
     ) -> list[dict]:
+        """Return recent contract violations, optionally filtered by project."""
         if project_id:
             async with self._db.execute(
                 """SELECT cv.*, c.title AS contract_title
@@ -708,6 +736,7 @@ class CallGraphDB:
         suggested_fix: str,
         reproduction_steps: str,
     ) -> dict:
+        """Insert a new agent improvement report and return it."""
         import json
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
@@ -725,6 +754,7 @@ class CallGraphDB:
         return await self.get_improvement(improvement_id)
 
     async def get_improvement(self, improvement_id: str) -> dict | None:
+        """Fetch a single improvement by ID, deserializing affected_functions from JSON."""
         import json
         async with self._db.execute(
             "SELECT * FROM agent_improvements WHERE id = ?", (improvement_id,)
@@ -741,6 +771,7 @@ class CallGraphDB:
         project_id: str | None = None,
         status: str | None = "open",
     ) -> list[dict]:
+        """List improvement reports, filterable by project and status, newest first."""
         import json
         clauses, params = [], []
         if project_id is not None:
@@ -765,6 +796,7 @@ class CallGraphDB:
         resolution_notes: str,
         status: str = "done",
     ) -> dict:
+        """Mark an improvement as resolved with a final status and resolution notes."""
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
             """UPDATE agent_improvements
@@ -792,6 +824,7 @@ class CallGraphDB:
             all_nodes = [dict(r) for r in await cur.fetchall()]
 
         def _subsystem(node_id: str) -> str:
+            """Group a node by the first two dot-segments of its ID."""
             parts = node_id.split(".")
             return ".".join(parts[:2]) if len(parts) >= 2 else parts[0]
 

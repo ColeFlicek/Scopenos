@@ -390,4 +390,5 @@ print("Then run: index_project(\\"" + PROJECT_ROOT + "\\") to index the codebase
 
 
 def _default_claude_home() -> str:
+    """Return the default Claude home directory path (~/.claude)."""
     return os.path.expanduser("~/.claude")

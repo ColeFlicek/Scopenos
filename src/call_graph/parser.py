@@ -43,6 +43,7 @@ class CallEdge:
 
 class TreeSitterParser:
     def __init__(self) -> None:
+        """Initialize language parsers for all installed tree-sitter grammars."""
         self._parsers: dict[str, "Parser"] = {}
         if _HAS_TREE_SITTER:
             self._parsers[".py"] = Parser(Language(tspython.language()))
@@ -57,6 +58,7 @@ class TreeSitterParser:
     def parse_file(
         self, file_path: str, content: str, project_root: str = ""
     ) -> tuple[list[FunctionNode], list[CallEdge]]:
+        """Parse a source file and return (nodes, edges) for all functions and calls."""
         ext = Path(file_path).suffix.lower()
         if ext not in self._parsers:
             return [], []
@@ -77,6 +79,7 @@ class TreeSitterParser:
 def _parse_python(
     root: "Node", file_path: str, module: str, source: bytes
 ) -> tuple[list[FunctionNode], list[CallEdge]]:
+    """Entry point for Python AST traversal — collects all nodes and call edges."""
     nodes: list[FunctionNode] = []
     edges: list[CallEdge] = []
     _visit_python(root, file_path, module, source, nodes, edges,
@@ -118,6 +121,7 @@ def _visit_python(
     enclosing_class: str | None = None,
     _decorators: list | None = None,
 ) -> None:
+    """Recursively visit a Python AST node, extracting FunctionNodes and CallEdges."""
     # enclosing_func: full ID of the innermost enclosing function (None at module scope)
     # enclosing_class: full ID of the innermost enclosing class (None at module/function scope)
     # parent_class: bare class name — truthy when directly inside a class body
@@ -227,7 +231,7 @@ def _visit_python(
 def _collect_python_calls(
     node: "Node", caller_id: str, file_path: str, source: bytes, edges: list[CallEdge]
 ) -> None:
-    """Recursively collect call nodes, stopping at nested function/class definitions."""
+    """Walk a subtree collecting call edges, stopping at nested function/class definitions."""
     for child in node.children:
         if child.type in ("function_definition", "class_definition"):
             continue  # don't recurse into nested defs or classes
@@ -243,6 +247,7 @@ def _collect_python_calls(
 def _extract_python_imports(
     root: "Node", file_path: str, module: str, source: bytes, edges: list[CallEdge]
 ) -> None:
+    """Add import edges for all import/import-from statements in the module root."""
     for node in _walk(root):
         if node.type == "import_statement":
             for child in node.children:
@@ -255,6 +260,7 @@ def _extract_python_imports(
 
 
 def _extract_python_docstring(func_node: "Node", source: bytes) -> str:
+    """Extract and return the docstring text from a function_definition node, if present."""
     block = next((c for c in func_node.children if c.type == "block"), None)
     if not block:
         return ""
@@ -290,6 +296,7 @@ _TS_FUNC_TYPES = {
 def _parse_typescript(
     root: "Node", file_path: str, module: str, source: bytes
 ) -> tuple[list[FunctionNode], list[CallEdge]]:
+    """Entry point for TypeScript AST traversal — collects all nodes and call edges."""
     nodes: list[FunctionNode] = []
     edges: list[CallEdge] = []
     _visit_typescript(root, file_path, module, source, nodes, edges, parent_class=None)
@@ -305,6 +312,7 @@ def _visit_typescript(
     edges: list[CallEdge],
     parent_class: str | None,
 ) -> None:
+    """Recursively visit a TypeScript AST node, extracting FunctionNodes and CallEdges."""
     if node.type == "class_declaration":
         class_name = _child_text(node, "type_identifier", source) or _child_text(node, "identifier", source)
         if class_name:
@@ -354,6 +362,7 @@ def _visit_typescript(
 def _collect_ts_calls(
     node: "Node", caller_id: str, file_path: str, source: bytes, edges: list[CallEdge]
 ) -> None:
+    """Walk a TypeScript subtree collecting call expression edges, skipping nested functions."""
     for child in node.children:
         if child.type in _TS_FUNC_TYPES:
             continue
@@ -369,19 +378,23 @@ def _collect_ts_calls(
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _text(node: "Node", source: bytes) -> str:
+    """Decode the source bytes for a tree-sitter node to a UTF-8 string."""
     return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
 
 
 def _node_text(node: "Node", source: bytes) -> str:
+    """Return the full source text of a tree-sitter node."""
     return _text(node, source)
 
 
 def _child_text(node: "Node", child_type: str, source: bytes) -> str:
+    """Return the text of the first child with the given node type, or empty string."""
     child = next((c for c in node.children if c.type == child_type), None)
     return _text(child, source) if child else ""
 
 
 def _resolve_call_name(node: "Node", source: bytes) -> str:
+    """Extract the rightmost identifier from a call-expression function reference node."""
     if node.type == "identifier":
         return _text(node, source)
     # attribute / member_expression: take the rightmost identifier
@@ -393,12 +406,14 @@ def _resolve_call_name(node: "Node", source: bytes) -> str:
 
 
 def _walk(node: "Node"):
+    """Yield every node in a tree-sitter subtree in pre-order."""
     yield node
     for child in node.children:
         yield from _walk(child)
 
 
 def _path_to_module(file_path: str, project_root: str) -> str:
+    """Convert a source file path to a dotted module name, relative to project_root."""
     if project_root:
         try:
             rel = os.path.relpath(file_path, project_root)

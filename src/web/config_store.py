@@ -7,10 +7,12 @@ from typing import Any
 
 
 def _data_dir() -> Path:
+    """Return the directory containing the ACIP SQLite database."""
     return Path(os.getenv("SQLITE_PATH", "/data/call_graph.db")).parent
 
 
 def read_file_config() -> dict[str, Any]:
+    """Read config.json from the data directory; returns empty dict on absence or parse error."""
     path = _data_dir() / "config.json"
     if path.exists():
         try:
@@ -21,6 +23,7 @@ def read_file_config() -> dict[str, Any]:
 
 
 def write_file_config(updates: dict[str, Any]) -> None:
+    """Merge updates into config.json; None values remove the corresponding key."""
     path = _data_dir() / "config.json"
     current = read_file_config()
     for k, v in updates.items():
@@ -33,7 +36,9 @@ def write_file_config(updates: dict[str, Any]) -> None:
 
 
 def get_key_info() -> dict[str, dict]:
+    """Return masked previews of the configured API key environment variables."""
     def _preview(name: str) -> dict:
+        """Build a set/not-set info dict with a masked preview of an API key value."""
         val = os.getenv(name, "")
         if not val:
             return {"set": False, "preview": "not set"}

@@ -20,6 +20,7 @@ class ContractManager:
     """
 
     def __init__(self, db, embeddings) -> None:
+        """Wire up database, embeddings store, and Anthropic client."""
         self._db = db
         self._embeddings = embeddings
         self._anthropic = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -55,6 +56,7 @@ class ContractManager:
         )
 
         def _to_str(c) -> str:
+            """Coerce a contract example to a plain string — LLM may return dicts."""
             return c if isinstance(c, str) else json.dumps(c)
 
         examples = (
@@ -66,6 +68,7 @@ class ContractManager:
         return await self._contract_with_examples(contract_id)
 
     async def _llm_parse_contract(self, natural_language: str) -> dict:
+        """Call Claude Haiku to parse a natural-language rule into structured contract fields."""
         prompt = f"""You are helping build a code contract enforcement system.
 
 A user has written this architectural rule:
@@ -131,9 +134,11 @@ Return ONLY the JSON object, no markdown, no explanation."""
         return await self._contract_with_examples(contract_id)
 
     async def deactivate(self, contract_id: str) -> None:
+        """Set a contract's status back to draft, pausing enforcement."""
         await self._db.update_contract_status(contract_id, "draft")
 
     async def delete(self, contract_id: str) -> None:
+        """Permanently delete a contract and all its embeddings."""
         await self._embeddings.delete_contract_embeddings(contract_id)
         await self._db.delete_contract(contract_id)
 
@@ -145,7 +150,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
         violation_examples: list[str],
         compliance_examples: list[str],
     ) -> dict:
-        """Replace examples on a draft contract (before approval)."""
+        """Replace violation/compliance examples; re-embeds if contract is already active."""
         examples = (
             [{"type": "violation", "code": c} for c in violation_examples]
             + [{"type": "compliance", "code": c} for c in compliance_examples]
@@ -162,10 +167,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
     # ── Checking ───────────────────────────────────────────────────────────
 
     async def check_project(self, project_id: str) -> list[dict]:
-        """
-        Run all active contracts against the call graph and indexed functions of a project.
-        Returns list of violation dicts.
-        """
+        """Run all active contracts against a project's call graph and return all violations."""
         contracts = await self._db.list_contracts(project_id)
         active = [c for c in contracts if c["status"] == "active"]
         if not active:
@@ -183,10 +185,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
     async def check_functions(
         self, project_id: str, function_ids: list[str]
     ) -> list[dict]:
-        """
-        Check a specific set of function IDs against all active contracts.
-        Used by post-commit hook to check only newly changed functions.
-        """
+        """Check a specific set of function IDs against all active contracts (used by the post-commit hook)."""
         contracts = await self._db.list_contracts(project_id)
         active = [c for c in contracts if c["status"] == "active"]
         if not active or not function_ids:
@@ -237,7 +236,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
     async def _check_structural(
         self, contract_id: str, project_id: str, expr: dict
     ) -> list[dict]:
-        """Check ALL functions in a project for structural violations."""
+        """Scan all project functions for structural violations via call-graph traversal."""
         prohibited = [p.lower() for p in expr.get("prohibited_patterns", [])]
         required_callee = expr.get("required_callee")
         scope_exclusions = [s.lower() for s in expr.get("scope_exclusions", [])]
@@ -297,7 +296,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
     async def _check_structural_for_function(
         self, contract_id: str, project_id: str, function_id: str, expr: dict
     ) -> list[dict]:
-        """Check a single function for structural violations."""
+        """Check one function against a contract's prohibited patterns and required callee."""
         prohibited = [p.lower() for p in expr.get("prohibited_patterns", [])]
         required_callee = expr.get("required_callee")
         scope_exclusions = [s.lower() for s in expr.get("scope_exclusions", [])]
@@ -351,6 +350,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
     # ── Helpers ────────────────────────────────────────────────────────────
 
     async def _contract_with_examples(self, contract_id: str) -> dict:
+        """Fetch a contract and attach its violation/compliance example lists."""
         contract = await self._db.get_contract(contract_id)
         if not contract:
             return {}
@@ -360,6 +360,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
         return contract
 
     async def list_contracts(self, project_id: str | None = None) -> list[dict]:
+        """Return all contracts with examples attached, optionally filtered to a project."""
         contracts = await self._db.list_contracts(project_id)
         result = []
         for c in contracts:

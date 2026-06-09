@@ -10,17 +10,21 @@ from .template import HTML
 
 
 def register_routes(mcp, get_services) -> None:
+    """Register all HTTP API and UI routes on the FastMCP server instance."""
 
     @mcp.custom_route("/ui", methods=["GET"])
     async def dashboard(request: Request) -> HTMLResponse:
+        """Serve the web dashboard HTML page."""
         return HTMLResponse(HTML)
 
     @mcp.custom_route("/", methods=["GET"])
     async def root_redirect(request: Request) -> HTMLResponse:
+        """Redirect the root path to the web dashboard."""
         return HTMLResponse('<meta http-equiv="refresh" content="0;url=/ui">', status_code=302)
 
     @mcp.custom_route("/api/status", methods=["GET"])
     async def api_status(request: Request) -> JSONResponse:
+        """Return a full status snapshot covering all layers, projects, and config."""
         result: dict = {
             "layers": {},
             "config": {},
@@ -101,6 +105,7 @@ def register_routes(mcp, get_services) -> None:
 
     @mcp.custom_route("/api/config", methods=["POST"])
     async def api_save_config(request: Request) -> JSONResponse:
+        """Persist allowed embedding configuration keys to config.json."""
         try:
             data = await request.json()
             allowed = {"EMBEDDING_PROVIDER", "EMBEDDING_MODEL", "EMBEDDING_DIM", "OLLAMA_BASE_URL"}
@@ -111,6 +116,7 @@ def register_routes(mcp, get_services) -> None:
 
     @mcp.custom_route("/api/health", methods=["GET"])
     async def api_health(request: Request) -> JSONResponse:
+        """Return a lightweight health check result for all three ACIP layers."""
         result: dict = {}
         try:
             svcs = await get_services()

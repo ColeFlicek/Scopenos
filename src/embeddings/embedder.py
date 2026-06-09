@@ -31,6 +31,7 @@ _PROVIDER_DEFAULTS: dict[str, tuple[str, int]] = {
 
 
 def _resolve_config() -> tuple[str, str, int, str]:
+    """Read embedding provider, model, dimension, and Ollama URL from config file then env."""
     try:
         from ..web.config_store import read_file_config
         file_cfg = read_file_config()
@@ -54,6 +55,7 @@ def _resolve_config() -> tuple[str, str, int, str]:
 
 
 def _make_embed_client(provider: str, ollama_base_url: str) -> AsyncOpenAI:
+    """Instantiate an AsyncOpenAI-compatible client for the configured provider."""
     if provider == "ollama":
         return AsyncOpenAI(base_url=f"{ollama_base_url}/v1", api_key="ollama")
     return AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -96,6 +98,7 @@ class EmbeddingStore:
     """
 
     def __init__(self, db) -> None:  # db: CallGraphDB (avoid circular import at type level)
+        """Initialize with a CallGraphDB reference and resolve embedding configuration."""
         self._db = db
         self._anthropic = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         self._provider, self._model, self._dim, ollama_url = _resolve_config()
@@ -104,11 +107,13 @@ class EmbeddingStore:
 
     @classmethod
     async def create(cls, db) -> "EmbeddingStore":
+        """Async factory — create and fully initialize an EmbeddingStore instance."""
         obj = cls(db)
         await obj.init()
         return obj
 
     async def init(self) -> None:
+        """Load sqlite-vec extension, run migrations, and ensure DDL is applied."""
         conn = self._db._db
         _load_vec_ext(conn._connection)
 
@@ -187,7 +192,7 @@ class EmbeddingStore:
               f"{len(by_project)} projects ({skipped} stale entries dropped)")
 
     async def _ensure_emb_table(self, conn, project_id: str) -> str:
-        """Create project-specific embedding table if not exists. Returns table name."""
+        """Create the per-project vec0 embedding table if absent; return its name."""
         table = _emb_table(project_id)
         await conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS {table} USING vec0(
@@ -198,6 +203,7 @@ class EmbeddingStore:
         return table
 
     async def close(self) -> None:
+        """No-op — the connection is owned and closed by CallGraphDB."""
         pass  # connection owned by CallGraphDB
 
     # ── Shared ─────────────────────────────────────────────────────────────
@@ -236,6 +242,7 @@ class EmbeddingStore:
             sem = asyncio.Semaphore(SUMMARY_CONCURRENCY)
 
             async def _summarize(chunk: FunctionChunk) -> str:
+                """Acquire a semaphore slot and generate a summary for one chunk."""
                 async with sem:
                     return await self._generate_summary(chunk)
 
@@ -262,6 +269,7 @@ class EmbeddingStore:
         print(f"[embeddings] stored {len(chunks)} embeddings ok")
 
     async def delete_by_file(self, file_path: str, project_id: str) -> None:
+        """Remove embedding vectors for all functions belonging to a source file."""
         conn = self._db._db
         async with conn.execute(
             "SELECT id FROM nodes WHERE file = ? AND project_id = ?",
@@ -272,6 +280,7 @@ class EmbeddingStore:
             await self.delete_by_ids(node_ids, project_id)
 
     async def delete_by_ids(self, function_ids: list[str], project_id: str) -> None:
+        """Remove embedding vectors for specific function IDs from a project's vec0 table."""
         if not function_ids:
             return
         table = _emb_table(project_id)
@@ -289,6 +298,7 @@ class EmbeddingStore:
     async def query_similar(
         self, snippet: str, top_k: int = 10, project_id: str | None = None
     ) -> list[dict[str, Any]]:
+        """KNN search returning the top-k functions semantically similar to a code snippet."""
         embedding = await self._embed_single(snippet)
         conn = self._db._db
 
@@ -367,7 +377,7 @@ class EmbeddingStore:
         return rows
 
     async def count_embeddings(self, project_id: str | None = None) -> int:
-        """Count embedded functions. If project_id given, count only that project."""
+        """Count embedded functions for a project, or across all projects if unscoped."""
         conn = self._db._db
         if project_id:
             table = _emb_table(project_id)
@@ -390,6 +400,7 @@ class EmbeddingStore:
     async def get_summaries(
         self, function_ids: list[str], project_id: str
     ) -> dict[str, str]:
+        """Fetch the LLM-generated summaries for a list of function IDs in a project."""
         if not function_ids:
             return {}
         conn = self._db._db
@@ -403,6 +414,7 @@ class EmbeddingStore:
     # ── Layer 3: decision embeddings ───────────────────────────────────────
 
     async def upsert_decision_embedding(self, decision_id: str, text: str) -> None:
+        """Embed a decision's reasoning text and store it in the decision_embeddings table."""
         embedding = await self._embed_single(text)
         conn = self._db._db
         await conn.execute(
@@ -414,6 +426,7 @@ class EmbeddingStore:
     async def query_decision_embeddings(
         self, query_text: str, top_k: int = 10
     ) -> list[dict[str, Any]]:
+        """KNN search over decision reasoning embeddings; returns id and distance."""
         embedding = await self._embed_single(query_text)
         conn = self._db._db
         async with conn.execute(
@@ -428,6 +441,7 @@ class EmbeddingStore:
             return [{"id": r[0], "distance": r[1]} for r in await cur.fetchall()]
 
     async def delete_decision_embedding(self, decision_id: str) -> None:
+        """Remove a decision's embedding from the decision_embeddings table."""
         conn = self._db._db
         await conn.execute(
             "DELETE FROM decision_embeddings WHERE id = ?", (decision_id,)
@@ -437,11 +451,12 @@ class EmbeddingStore:
     # ── Layer 4: contract embeddings ───────────────────────────────────────
 
     def _contract_table(self, contract_id: str, kind: str) -> str:
-        """vec0 table name for contract violation/compliance examples."""
+        """Return the vec0 table name for a contract's violation or compliance examples."""
         safe = re.sub(r"[^a-zA-Z0-9]", "_", contract_id)
         return f"contract_{kind}_{safe}"
 
     async def _ensure_contract_tables(self, conn, contract_id: str) -> tuple[str, str]:
+        """Create vec0 violation and compliance tables for a contract; return their names."""
         viol_table = self._contract_table(contract_id, "violation")
         comp_table = self._contract_table(contract_id, "compliance")
         for table in (viol_table, comp_table):
@@ -459,7 +474,7 @@ class EmbeddingStore:
         violation_codes: list[str],
         compliance_codes: list[str],
     ) -> None:
-        """Embed violation/compliance examples and store in per-contract vec0 tables."""
+        """Embed violation/compliance code examples and store them in per-contract vec0 tables."""
         import uuid
         conn = self._db._db
         viol_table, comp_table = await self._ensure_contract_tables(conn, contract_id)
@@ -490,7 +505,7 @@ class EmbeddingStore:
         await conn.commit()
 
     async def delete_contract_embeddings(self, contract_id: str) -> None:
-        """Drop vec0 tables for a deleted contract."""
+        """Drop the vec0 violation and compliance tables for a deleted contract."""
         conn = self._db._db
         for kind in ("violation", "compliance"):
             table = self._contract_table(contract_id, kind)
@@ -563,10 +578,12 @@ class EmbeddingStore:
     # ── Internals ──────────────────────────────────────────────────────────
 
     async def _embed_single(self, text: str) -> list[float]:
+        """Embed a single text string via the configured provider and return the float vector."""
         resp = await self._embed_client.embeddings.create(model=self._model, input=text)
         return resp.data[0].embedding
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed a list of texts in batches of 100, logging progress per batch."""
         if not texts:
             return []
         results: list[list[float]] = []
@@ -582,6 +599,7 @@ class EmbeddingStore:
         return results
 
     async def _generate_summary(self, chunk: FunctionChunk) -> str:
+        """Generate a one-sentence LLM summary for a function chunk via Claude Haiku."""
         prompt = (
             f"Write a single sentence describing what this function does.\n\n"
             f"Function: {chunk.id}\nSignature: {chunk.signature}\n"
