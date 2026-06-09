@@ -339,7 +339,7 @@ async def get_project_home(project_id: str) -> str:
     - chokepoints: functions everything depends on — touch carefully
     - entry_points: top of the call graph (nothing calls these)
     - risk_surface: high-churn AND high-impact functions — highest change risk
-    - health: contract compliance, knowledge gaps, churn hotspots
+    - health: contract compliance, top_knowledge_gaps (ranked by caller count), churn hotspots
     - recent_decisions: what changed in this codebase recently and why
 
     This replaces reading files for architectural understanding. After this call,

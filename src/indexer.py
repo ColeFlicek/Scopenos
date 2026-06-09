@@ -8,7 +8,7 @@ from .call_graph.storage import CallGraphDB
 from .embeddings.chunker import extract_chunks
 from .embeddings.embedder import EmbeddingStore
 
-_SUPPORTED_EXTENSIONS = {".py", ".ts", ".tsx"}
+_SUPPORTED_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
 
 _parser = TreeSitterParser()
 
@@ -324,7 +324,11 @@ class Indexer:
 def _collect_source_files(root: str) -> list[str]:
     """Walk a directory tree and return all supported source file paths, skipping VCS/build dirs."""
     result = []
-    skip_dirs = {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", "dist", "build"}
+    skip_dirs = {
+        ".git", ".venv", "venv", "node_modules", "__pycache__",
+        ".mypy_cache", "dist", "build", ".next", ".nuxt", ".svelte-kit",
+        ".turbo", "out", ".output",
+    }
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in skip_dirs]
         for fname in filenames:

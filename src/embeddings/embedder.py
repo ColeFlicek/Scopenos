@@ -227,6 +227,7 @@ class EmbeddingStore:
             return
 
         cached_count = 0
+        docstring_count = 0
         if existing_summaries and not force_summaries:
             for chunk in chunks:
                 if not chunk.summary and chunk.id in existing_summaries:
@@ -235,9 +236,16 @@ class EmbeddingStore:
                         chunk.summary = cached
                         cached_count += 1
 
+        # Use docstring as summary directly — it's ground truth, no LLM needed.
+        if not force_summaries:
+            for chunk in chunks:
+                if not chunk.summary and chunk.docstring:
+                    chunk.summary = chunk.docstring[:200]
+                    docstring_count += 1
+
         needs_summary = [c for c in chunks if not c.summary or force_summaries]
         print(f"[embeddings] summarising {len(needs_summary)}/{len(chunks)} functions "
-              f"({cached_count} summaries reused from cache)")
+              f"({cached_count} from cache, {docstring_count} from docstring)")
 
         if needs_summary:
             # Parallel summarization bounded by SUMMARY_CONCURRENCY.

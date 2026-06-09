@@ -50,6 +50,9 @@ class TreeSitterParser:
         if _HAS_TREE_SITTER and _HAS_TS:
             self._parsers[".ts"] = Parser(Language(tstypescript.language_typescript()))
             self._parsers[".tsx"] = Parser(Language(tstypescript.language_tsx()))
+            # JS/JSX use the TypeScript grammar — it's a strict superset of JavaScript
+            self._parsers[".js"] = Parser(Language(tstypescript.language_typescript()))
+            self._parsers[".jsx"] = Parser(Language(tstypescript.language_tsx()))
 
     @property
     def supported_extensions(self) -> set[str]:
@@ -70,7 +73,7 @@ class TreeSitterParser:
 
         if ext == ".py":
             return _parse_python(tree.root_node, file_path, module, source)
-        if ext in (".ts", ".tsx"):
+        if ext in (".ts", ".tsx", ".js", ".jsx"):
             return _parse_typescript(tree.root_node, file_path, module, source)
         return [], []
 
@@ -286,6 +289,28 @@ def _extract_python_docstring(func_node: "Node", source: bytes) -> str:
 
 # ── TypeScript ────────────────────────────────────────────────────────────────
 
+
+def _extract_ts_jsdoc(node: "Node", source: bytes) -> str:
+    """Extract the JSDoc block (/** ... */) immediately preceding a TypeScript node.
+
+    Scans backwards in the source bytes from the node's start position.
+    Returns empty string if no JSDoc is present or if non-whitespace separates
+    the comment from the node (meaning it belongs to a different construct).
+    """
+    before = source[:node.start_byte]
+    end_idx = before.rfind(b"*/")
+    if end_idx < 0:
+        return ""
+    start_idx = before.rfind(b"/**", 0, end_idx + 2)
+    if start_idx < 0:
+        return ""
+    # Reject if anything other than whitespace sits between comment and node
+    if before[end_idx + 2:].strip():
+        return ""
+    content = before[start_idx + 3:end_idx].decode("utf-8", errors="replace")
+    lines = [line.strip().lstrip("* ") for line in content.splitlines()]
+    return " ".join(l for l in lines if l).strip()[:500]
+
 _TS_FUNC_TYPES = {
     "function_declaration",
     "method_definition",
@@ -345,11 +370,12 @@ def _visit_typescript(
         func_text = _node_text(node, source)
         signature = func_text.split("\n")[0].strip()
         body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        docstring = _extract_ts_jsdoc(node, source)
 
         nodes.append(FunctionNode(
             id=func_id, name=qual_name, file=file_path, module=module,
             type="method" if parent_class else "function",
-            signature=signature, body=func_text[:2000], docstring="",
+            signature=signature, body=func_text[:2000], docstring=docstring,
             body_hash=body_hash,
         ))
 

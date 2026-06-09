@@ -126,6 +126,12 @@ CREATE TABLE IF NOT EXISTS agent_improvements (
 
 CREATE INDEX IF NOT EXISTS idx_impr_project ON agent_improvements(project_id);
 CREATE INDEX IF NOT EXISTS idx_impr_status  ON agent_improvements(status);
+
+CREATE TABLE IF NOT EXISTS project_home_snapshots (
+    project_id   TEXT PRIMARY KEY,
+    hashes       TEXT NOT NULL DEFAULT '{}',
+    captured_at  TEXT NOT NULL
+);
 """
 
 
@@ -807,6 +813,32 @@ class CallGraphDB:
         await self._db.commit()
         return await self.get_improvement(improvement_id)
 
+    # ── Project Home snapshots ─────────────────────────────────────────────────
+
+    async def _save_project_snapshot(
+        self, project_id: str, hashes: dict[str, str], captured_at: str
+    ) -> None:
+        """Persist the current function-hash map so the next call can diff against it."""
+        await self._db.execute(
+            """INSERT INTO project_home_snapshots(project_id, hashes, captured_at)
+               VALUES(?, ?, ?)
+               ON CONFLICT(project_id) DO UPDATE SET
+                   hashes=excluded.hashes, captured_at=excluded.captured_at""",
+            (project_id, json.dumps(hashes), captured_at),
+        )
+        await self._db.commit()
+
+    async def _load_project_snapshot(self, project_id: str) -> dict | None:
+        """Load the previous project-home snapshot, or None if this is the first call."""
+        async with self._db.execute(
+            "SELECT hashes, captured_at FROM project_home_snapshots WHERE project_id = ?",
+            (project_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return {"hashes": json.loads(row[0]), "captured_at": row[1]}
+
     # ── Project Home ───────────────────────────────────────────────────────
 
     async def get_project_home_data(self, project_id: str) -> dict:
@@ -818,7 +850,7 @@ class CallGraphDB:
 
         # ── Subsystems: group nodes by first two module segments ─────────
         async with db.execute(
-            "SELECT id, name, type, module, summary FROM nodes WHERE project_id = ?",
+            "SELECT id, name, type, module, summary, docstring, body_hash FROM nodes WHERE project_id = ?",
             (project_id,),
         ) as cur:
             all_nodes = [dict(r) for r in await cur.fetchall()]
@@ -860,12 +892,23 @@ class CallGraphDB:
         ) as cur:
             churn: dict[str, int] = {r[0]: r[1] for r in await cur.fetchall()}
 
-        # ── Knowledge gaps ────────────────────────────────────────────────
+        # ── Knowledge gaps: ranked by caller_count ────────────────────────
         documented = set(churn.keys())
-        gap_count = sum(
-            1 for n in all_nodes
-            if not n.get("summary") and n["id"] not in documented
-        )
+        top_knowledge_gaps = sorted(
+            [
+                {
+                    "id": n["id"],
+                    "name": n["name"],
+                    "module": n["module"],
+                    "caller_count": caller_counts.get(n["id"], 0),
+                }
+                for n in all_nodes
+                if not n.get("summary") and not n.get("docstring")
+                and n["id"] not in documented
+                and n["type"] not in ("class", "ClassDef")
+            ],
+            key=lambda x: -x["caller_count"],
+        )[:10]
 
         # ── Build subsystems list ─────────────────────────────────────────
         subsystems = []
@@ -1023,6 +1066,51 @@ class CallGraphDB:
                 rd["description"] = rd["description"][:120]
                 recent_decisions.append(rd)
 
+        # ── Cross-session diff ────────────────────────────────────────────
+        # Compare current function hashes against the previous snapshot to surface
+        # what changed since the last get_project_home call (different session or agent).
+        now_iso = datetime.now(timezone.utc).isoformat()
+        current_hashes = {n["id"]: n.get("body_hash", "") for n in all_nodes}
+        prev_snapshot = await self._load_project_snapshot(project_id)
+        since_last_session = None
+
+        if prev_snapshot:
+            prev_hashes: dict[str, str] = prev_snapshot.get("hashes", {})
+            prev_time: str = prev_snapshot.get("captured_at", "")
+            node_map = {n["id"]: n for n in all_nodes}
+            new_ids = set(current_hashes) - set(prev_hashes)
+            removed_ids = set(prev_hashes) - set(current_hashes)
+            modified_ids = {
+                nid for nid in current_hashes
+                if nid in prev_hashes and current_hashes[nid] != prev_hashes[nid]
+            }
+            async with db.execute(
+                """SELECT id, type, description, created_at FROM decisions
+                   WHERE project_id = ? AND created_at > ?
+                   ORDER BY created_at DESC LIMIT 20""",
+                (project_id, prev_time),
+            ) as cur:
+                decisions_since = []
+                for r in await cur.fetchall():
+                    d = dict(r)
+                    d["description"] = d["description"][:120]
+                    decisions_since.append(d)
+            since_last_session = {
+                "since": prev_time,
+                "functions_added": [
+                    {"id": nid, "name": node_map[nid]["name"], "module": node_map[nid]["module"]}
+                    for nid in sorted(new_ids) if nid in node_map
+                ],
+                "functions_modified": [
+                    {"id": nid, "name": node_map[nid]["name"], "module": node_map[nid]["module"]}
+                    for nid in sorted(modified_ids) if nid in node_map
+                ],
+                "functions_removed": sorted(removed_ids),
+                "decisions_since": decisions_since,
+            }
+
+        await self._save_project_snapshot(project_id, current_hashes, now_iso)
+
         return {
             "project_id": project_id,
             "function_count": len(all_nodes),
@@ -1032,7 +1120,7 @@ class CallGraphDB:
             "entry_points": entry_points,
             "risk_surface": risk_surface,
             "health": {
-                "knowledge_gap_count": gap_count,
+                "top_knowledge_gaps": top_knowledge_gaps,
                 "churn_hotspots": churn_hotspots,
                 "active_contract_count": len(active_contracts),
                 "active_contracts": [{"id": c["id"], "title": c["title"]} for c in active_contracts],
@@ -1040,6 +1128,7 @@ class CallGraphDB:
                 "risk_detection_mode": risk_detection_mode,
             },
             "recent_decisions": recent_decisions,
+            "since_last_session": since_last_session,
         }
 
 
