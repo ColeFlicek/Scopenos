@@ -54,9 +54,12 @@ class ContractManager:
             threshold=0.85,
         )
 
+        def _to_str(c) -> str:
+            return c if isinstance(c, str) else json.dumps(c)
+
         examples = (
-            [{"type": "violation", "code": c} for c in parsed.get("violation_examples", [])]
-            + [{"type": "compliance", "code": c} for c in parsed.get("compliance_examples", [])]
+            [{"type": "violation", "code": _to_str(c)} for c in parsed.get("violation_examples", [])]
+            + [{"type": "compliance", "code": _to_str(c)} for c in parsed.get("compliance_examples", [])]
         )
         await self._db.upsert_contract_examples(contract_id, examples)
 
