@@ -6,20 +6,7 @@
 
 ## Active — implement next
 
-### Project Management Interface
-ACIP as the issue tracker — but one that knows about the codebase.
-
-Issues aren't stored in Jira or a doc disconnected from code. They live in ACIP, linked to specific function IDs. A bug report automatically knows which functions are on its blast radius. A feature request is linked to the call graph nodes that need to change. "What's the backlog for the auth module?" is a semantic query, not a manual filter.
-
-This is the interface for the ideas-to-implementation loop. To-dos, hotfixes, feature ideas, and architectural debt all live here, queryable by the agent before it starts work.
-
-**New surface area:**
-- `issues` table: `(id, project_id, type, title, description, status, priority, created_at, resolved_at, resolved_by_commit)`
-- `issue_functions` join table: issue ↔ function_id many-to-many
-- `issue_embeddings` vec0 table: semantic issue search
-- `create_issue()`, `list_issues()`, `get_issues_for_function()`, `resolve_issue()` MCP tools
-- Web UI: issues panel with backlog view and per-function issue list
-- Auto-linking: when creating an issue, semantic search suggests relevant functions
+*No active items. Select from back burner or ideas below.*
 
 ---
 
@@ -72,6 +59,7 @@ Measure whether tests cover the *behaviors* functions implement, not just the li
 | Similarity score normalization | 2026-06-09 | L2 → [0,1] match percentage |
 | Web UI project selector + search panel | 2026-06-09 | |
 | `/acip-import` slash command | 2026-06-08 | Three-step onboarding in one command |
+| ~~Project Management Interface~~ | — | Skipped — markdown files + function ID references serve the same purpose without a dedicated tracker |
 | Invariant Contracts | 2026-06-09 | LLM-generated violation/compliance examples, structural + semantic enforcement, MCP tools, web UI, post-commit hook. Destructive ops (delete/update) web-UI-only to prevent agent bypass. |
 | Project Home (`get_project_home`) | 2026-06-09 | Single MCP call returns subsystems, wiring, chokepoints, risk surface, health. Replaces file reads for architectural understanding. |
 | `setup_acip_client` one-call onboarding | 2026-06-09 | Generates setup script: hooks, settings.json, CLAUDE.md, memory files, git hook. |
