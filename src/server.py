@@ -247,6 +247,32 @@ async def query_decisions(
     return json.dumps(results)
 
 
+# ── Project Home tool ────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_project_home(project_id: str) -> str:
+    """
+    Architectural intelligence snapshot for a project. Call this FIRST at the
+    start of any session before reading files or forming an implementation plan.
+
+    Returns in a single call:
+    - subsystems: module groups with function counts, anchor class, and what it does
+    - connections: which subsystems call which (the wiring diagram)
+    - chokepoints: functions everything depends on — touch carefully
+    - entry_points: top of the call graph (nothing calls these)
+    - risk_surface: high-churn AND high-impact functions — highest change risk
+    - health: contract compliance, knowledge gaps, churn hotspots
+    - recent_decisions: what changed in this codebase recently and why
+
+    This replaces reading files for architectural understanding. After this call,
+    use query_similar_functions / get_impact_radius for specific functions, then
+    Read() only for exact implementation of the function you are about to modify.
+    """
+    svcs = await _get_services()
+    result = await svcs["db"].get_project_home_data(project_id)
+    return json.dumps(result)
+
+
 # ── Contract tools ────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -594,6 +620,18 @@ async def http_check_contracts(request: Request) -> JSONResponse:
         else:
             violations = await svcs["contracts"].check_project(project_id)
         return JSONResponse({"violations": violations})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
+@mcp.custom_route("/api/project-home/{project_id}", methods=["GET"])
+async def http_project_home(request: Request) -> JSONResponse:
+    """GET /api/project-home/{project_id} — architectural snapshot for web UI"""
+    try:
+        project_id = request.path_params["project_id"]
+        svcs = await _get_services()
+        result = await svcs["db"].get_project_home_data(project_id)
+        return JSONResponse(result)
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 

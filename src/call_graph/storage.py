@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any
@@ -667,6 +668,187 @@ class CallGraphDB:
             (limit,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+    # ── Project Home ───────────────────────────────────────────────────────
+
+    async def get_project_home_data(self, project_id: str) -> dict:
+        """
+        Compute a full architectural intelligence snapshot for one project.
+        All SQL — no LLM calls. Used by get_project_home MCP tool and web UI.
+        """
+        db = self._db
+
+        # ── Subsystems: group nodes by first two module segments ─────────
+        async with db.execute(
+            "SELECT id, name, type, module, summary FROM nodes WHERE project_id = ?",
+            (project_id,),
+        ) as cur:
+            all_nodes = [dict(r) for r in await cur.fetchall()]
+
+        def _subsystem(node_id: str) -> str:
+            parts = node_id.split(".")
+            return ".".join(parts[:2]) if len(parts) >= 2 else parts[0]
+
+        subsystem_nodes: dict[str, list[dict]] = {}
+        for n in all_nodes:
+            s = _subsystem(n["id"])
+            subsystem_nodes.setdefault(s, []).append(n)
+
+        # ── Caller counts for all nodes (for chokepoints + risk) ─────────
+        async with db.execute(
+            """SELECT callee_id, COUNT(DISTINCT caller_id) AS cnt
+               FROM edges WHERE project_id = ?
+               GROUP BY callee_id""",
+            (project_id,),
+        ) as cur:
+            caller_counts: dict[str, int] = {r[0]: r[1] for r in await cur.fetchall()}
+
+        # ── All edges (for connections between subsystems) ────────────────
+        async with db.execute(
+            "SELECT caller_id, callee_id FROM edges WHERE project_id = ?",
+            (project_id,),
+        ) as cur:
+            all_edges = await cur.fetchall()
+
+        # ── Churn: decision count per function ────────────────────────────
+        async with db.execute(
+            """SELECT df.function_id, COUNT(*) AS cnt
+               FROM decision_functions df
+               JOIN decisions d ON d.id = df.decision_id
+               WHERE d.project_id = ?
+               GROUP BY df.function_id""",
+            (project_id,),
+        ) as cur:
+            churn: dict[str, int] = {r[0]: r[1] for r in await cur.fetchall()}
+
+        # ── Knowledge gaps ────────────────────────────────────────────────
+        documented = set(churn.keys())
+        gap_count = sum(
+            1 for n in all_nodes
+            if not n.get("summary") and n["id"] not in documented
+        )
+
+        # ── Build subsystems list ─────────────────────────────────────────
+        subsystems = []
+        for s_name, nodes in sorted(subsystem_nodes.items(),
+                                     key=lambda x: len(x[1]), reverse=True):
+            # Pick anchor: class definition, or most-called function
+            anchor = next(
+                (n for n in nodes if n["type"] in ("class", "ClassDef")), None
+            )
+            if anchor is None:
+                anchor = max(nodes, key=lambda n: caller_counts.get(n["id"], 0))
+            subsystems.append({
+                "name": s_name,
+                "function_count": len(nodes),
+                "anchor": anchor["id"],
+                "anchor_summary": (anchor.get("summary") or "")[:120],
+            })
+
+        # ── Cross-subsystem connections ───────────────────────────────────
+        conn_counts: dict[tuple, int] = {}
+        for caller_id, callee_id in all_edges:
+            s_from = _subsystem(caller_id)
+            s_to = _subsystem(callee_id)
+            if s_from != s_to:
+                key = (s_from, s_to)
+                conn_counts[key] = conn_counts.get(key, 0) + 1
+
+        connections = [
+            {"from": k[0], "to": k[1], "edge_count": v}
+            for k, v in sorted(conn_counts.items(), key=lambda x: -x[1])
+            if v >= 2  # only meaningful connections
+        ]
+
+        # ── Chokepoints: top 5 by caller count ───────────────────────────
+        chokepoints = sorted(
+            [{"id": nid, "caller_count": cnt} for nid, cnt in caller_counts.items()],
+            key=lambda x: -x["caller_count"],
+        )[:5]
+
+        # ── Entry points: nodes with no callers ───────────────────────────
+        callee_ids = {r[1] for r in all_edges}
+        entry_points = [
+            {"id": n["id"], "name": n["name"]}
+            for n in all_nodes
+            if n["id"] not in callee_ids and n["type"] not in ("class", "ClassDef")
+        ][:8]
+
+        # ── Risk surface: high churn AND high callers ─────────────────────
+        risk_surface = [
+            {
+                "id": fid,
+                "churn": ch,
+                "caller_count": caller_counts.get(fid, 0),
+            }
+            for fid, ch in churn.items()
+            if ch >= 3 and caller_counts.get(fid, 0) >= 3
+        ]
+        risk_surface.sort(key=lambda x: -(x["churn"] * x["caller_count"]))
+        risk_surface = risk_surface[:5]
+
+        # ── Churn hotspots: top 5 most-patched ───────────────────────────
+        churn_hotspots = sorted(
+            [{"id": fid, "decision_count": cnt} for fid, cnt in churn.items()],
+            key=lambda x: -x["decision_count"],
+        )[:5]
+
+        # ── Active contracts + recent violations ──────────────────────────
+        async with db.execute(
+            "SELECT id, title, status, project_ids FROM contracts WHERE status = 'active'"
+        ) as cur:
+            all_contracts = [dict(r) for r in await cur.fetchall()]
+
+        active_contracts = [
+            c for c in all_contracts
+            if project_id in json.loads(c.get("project_ids") or "[]")
+        ]
+
+        async with db.execute(
+            """SELECT COUNT(*) FROM contract_violations cv
+               JOIN contracts c ON c.id = cv.contract_id
+               WHERE cv.project_id = ?
+               AND cv.detected_at > datetime('now', '-7 days')""",
+            (project_id,),
+        ) as cur:
+            recent_violation_count = (await cur.fetchone())[0]
+
+        # ── Recent decisions ──────────────────────────────────────────────
+        async with db.execute(
+            """SELECT d.id, d.type, d.description, d.created_at,
+                      GROUP_CONCAT(df.function_id) AS function_ids
+               FROM decisions d
+               LEFT JOIN decision_functions df ON df.decision_id = d.id
+               WHERE d.project_id = ?
+               GROUP BY d.id
+               ORDER BY d.created_at DESC LIMIT 5""",
+            (project_id,),
+        ) as cur:
+            recent_decisions = []
+            for r in await cur.fetchall():
+                rd = dict(r)
+                rd["function_ids"] = rd["function_ids"].split(",") if rd["function_ids"] else []
+                rd["description"] = rd["description"][:120]
+                recent_decisions.append(rd)
+
+        return {
+            "project_id": project_id,
+            "function_count": len(all_nodes),
+            "subsystems": subsystems,
+            "connections": connections,
+            "chokepoints": chokepoints,
+            "entry_points": entry_points,
+            "risk_surface": risk_surface,
+            "health": {
+                "knowledge_gap_count": gap_count,
+                "churn_hotspots": churn_hotspots,
+                "active_contract_count": len(active_contracts),
+                "active_contracts": [{"id": c["id"], "title": c["title"]} for c in active_contracts],
+                "recent_violation_count": recent_violation_count,
+            },
+            "recent_decisions": recent_decisions,
+        }
 
 
 def _resolve_callee(callee_name: str, all_ids: set[str]) -> str:

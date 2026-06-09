@@ -296,7 +296,14 @@ HTML = r"""<!DOCTYPE html>
     </div>
 
     <nav>
-      <div class="nav-item active" id="nav-overview" onclick="showPanel('overview')">
+      <div class="nav-item active" id="nav-home" onclick="showPanel('home')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+        home
+      </div>
+      <div class="nav-item" id="nav-overview" onclick="showPanel('overview')">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
           <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
@@ -355,8 +362,33 @@ HTML = r"""<!DOCTYPE html>
 
     <div class="content">
 
+      <!-- ─── HOME ─── -->
+      <div class="panel active" id="panel-home">
+
+        <!-- Project selector -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="scope-bar">
+            <span class="scope-label">project</span>
+            <select id="home-project" onchange="loadHome()" style="max-width:280px;">
+              <option value="">— select a project —</option>
+            </select>
+            <button class="btn btn-ghost btn-sm" onclick="loadHome()" style="margin-left:8px;">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
+              </svg>
+              refresh
+            </button>
+            <span id="home-msg" style="font-size:11px;color:var(--text3);margin-left:8px;"></span>
+          </div>
+        </div>
+
+        <div id="home-body">
+          <div class="empty" style="margin-top:40px;">select a project above to load its architectural snapshot</div>
+        </div>
+      </div>
+
       <!-- ─── OVERVIEW ─── -->
-      <div class="panel active" id="panel-overview">
+      <div class="panel" id="panel-overview">
 
         <!-- Project scope selector -->
         <div class="card" style="margin-bottom:16px;">
@@ -712,6 +744,7 @@ HTML = r"""<!DOCTYPE html>
     'nomic-embed-text':768,'mxbai-embed-large':1024,'all-minilm':384
   };
   const PAGE_META = {
+    home:      ['home',      'architectural intelligence · subsystems · risk surface · wiring'],
     overview:  ['overview',  'system status · layer health · indexed projects'],
     search:    ['search',    'semantic similarity search across indexed projects'],
     contracts: ['contracts', 'invariant contracts · architectural rule enforcement'],
@@ -737,7 +770,7 @@ HTML = r"""<!DOCTYPE html>
   // ── Project scope selector ──────────────────────────────────────────────
 
   function populateProjectSelectors(projects) {
-    ['proj-scope', 'search-project', 'ct-filter-project'].forEach(selId => {
+    ['proj-scope', 'search-project', 'ct-filter-project', 'home-project'].forEach(selId => {
       const sel = document.getElementById(selId);
       if (!sel) return;
       const cur = sel.value;
@@ -1036,6 +1069,7 @@ HTML = r"""<!DOCTYPE html>
     const [title, sub] = PAGE_META[name];
     document.getElementById('page-title').textContent = title;
     document.getElementById('page-sub').textContent   = sub;
+    if (name === 'home' && document.getElementById('home-project').value) loadHome();
     if (name === 'contracts') {
       loadContracts();
       loadViolations();
@@ -1343,6 +1377,173 @@ HTML = r"""<!DOCTYPE html>
     } catch(e) {
       body.innerHTML = `<div class="empty">error: ${e.message}</div>`;
     }
+  }
+
+  // ── Project Home ────────────────────────────────────────────────────────
+
+  async function loadHome() {
+    const pid = document.getElementById('home-project').value;
+    const body = document.getElementById('home-body');
+    const msg  = document.getElementById('home-msg');
+    if (!pid) {
+      body.innerHTML = '<div class="empty" style="margin-top:40px;">select a project above to load its architectural snapshot</div>';
+      return;
+    }
+    msg.textContent = 'loading...';
+    try {
+      const d = await fetch(`/api/project-home/${encodeURIComponent(pid)}`).then(r => r.json());
+      if (d.status === 'error') throw new Error(d.detail);
+      msg.textContent = `${d.function_count} functions`;
+      body.innerHTML = renderHome(d);
+    } catch(e) {
+      msg.textContent = '';
+      body.innerHTML = `<div class="empty">error: ${e.message}</div>`;
+    }
+  }
+
+  function renderHome(d) {
+    const sections = [];
+
+    // ── Subsystems ──────────────────────────────────────────────────────
+    sections.push(`
+      <div class="card" style="margin-bottom:16px;">
+        <div class="section-header">
+          <div class="section-title">subsystems</div>
+          <div class="section-sub">module groups · anchor class · what each layer does</div>
+        </div>
+        <div style="padding:4px 0;">
+          ${(d.subsystems||[]).map(s => `
+            <div style="display:grid;grid-template-columns:180px 60px 1fr;align-items:start;gap:16px;padding:12px 22px;border-bottom:1px solid var(--border);">
+              <div>
+                <div style="font-size:12px;font-weight:700;color:var(--accent2);">${s.name}</div>
+                <div style="font-size:10px;color:var(--text3);margin-top:2px;">${s.anchor.split('.').slice(-1)[0]}</div>
+              </div>
+              <div style="font-size:11px;color:var(--text3);padding-top:2px;">${s.function_count} fns</div>
+              <div style="font-size:11px;color:var(--text2);line-height:1.5;">${escHtml(s.anchor_summary||'—')}</div>
+            </div>`).join('')}
+        </div>
+      </div>`);
+
+    // ── Connections ──────────────────────────────────────────────────────
+    if ((d.connections||[]).length) {
+      sections.push(`
+        <div class="card" style="margin-bottom:16px;">
+          <div class="section-header">
+            <div class="section-title">wiring</div>
+            <div class="section-sub">cross-subsystem call graph — how the layers connect</div>
+          </div>
+          <div style="padding:4px 0;">
+            ${(d.connections||[]).map(c => `
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 22px;border-bottom:1px solid var(--border);">
+                <span style="font-size:11px;font-weight:700;color:var(--accent2);min-width:160px;">${c.from}</span>
+                <svg width="16" height="10" viewBox="0 0 16 10" fill="none">
+                  <path d="M0 5h13M9 1l4 4-4 4" stroke="var(--text3)" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <span style="font-size:11px;color:var(--text);">${c.to}</span>
+                <span style="font-size:10px;color:var(--text3);margin-left:auto;">${c.edge_count} calls</span>
+              </div>`).join('')}
+          </div>
+        </div>`);
+    }
+
+    // ── Chokepoints + Entry points ───────────────────────────────────────
+    const riskRows = (d.risk_surface||[]).map(r =>
+      `<tr>
+        <td style="color:var(--red);text-align:left;font-size:11px;">${r.id.split('.').slice(-2).join('.')}</td>
+        <td>${r.churn}</td><td>${r.caller_count}</td>
+        <td><span style="font-size:9px;font-weight:700;color:var(--red);letter-spacing:.08em;">HIGH RISK</span></td>
+      </tr>`).join('');
+
+    const chkRows = (d.chokepoints||[]).map(c =>
+      `<tr>
+        <td style="color:var(--amber);text-align:left;font-size:11px;">${c.id.split('.').slice(-2).join('.')}</td>
+        <td colspan="2">${c.caller_count} callers</td>
+        <td><span style="font-size:9px;font-weight:700;color:var(--amber);letter-spacing:.08em;">CHOKEPOINT</span></td>
+      </tr>`).join('');
+
+    if (riskRows || chkRows) {
+      sections.push(`
+        <div class="card" style="margin-bottom:16px;">
+          <div class="section-header">
+            <div class="section-title">risk surface</div>
+            <div class="section-sub">high-churn + high-impact functions · chokepoints · touch carefully</div>
+          </div>
+          <table class="data-table">
+            <thead><tr><th style="text-align:left;">function</th><th>patches</th><th>callers</th><th>flag</th></tr></thead>
+            <tbody>${riskRows}${chkRows}</tbody>
+          </table>
+        </div>`);
+    }
+
+    // ── Entry points ─────────────────────────────────────────────────────
+    if ((d.entry_points||[]).length) {
+      sections.push(`
+        <div class="card" style="margin-bottom:16px;">
+          <div class="section-header">
+            <div class="section-title">entry points</div>
+            <div class="section-sub">top of the call graph — nothing calls these</div>
+          </div>
+          <div style="padding:12px 22px;display:flex;flex-wrap:wrap;gap:8px;">
+            ${(d.entry_points||[]).map(e =>
+              `<span style="font-size:11px;background:var(--bg4);border:1px solid var(--border2);border-radius:4px;padding:4px 10px;color:var(--text2);">${e.name}</span>`
+            ).join('')}
+          </div>
+        </div>`);
+    }
+
+    // ── Health + recent decisions ────────────────────────────────────────
+    const h = d.health || {};
+    const contractStatus = h.active_contract_count > 0
+      ? (h.recent_violation_count === 0
+          ? `<span style="color:var(--green);">${h.active_contract_count} active · 0 violations</span>`
+          : `<span style="color:var(--red);">${h.active_contract_count} active · ${h.recent_violation_count} recent violations</span>`)
+      : `<span style="color:var(--text3);">none</span>`;
+
+    sections.push(`
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div class="card">
+          <div class="section-header">
+            <div class="section-title">health</div>
+          </div>
+          <div style="padding:16px 22px;display:flex;flex-direction:column;gap:12px;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;">
+              <span style="color:var(--text3);">contracts</span>${contractStatus}
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:12px;">
+              <span style="color:var(--text3);">knowledge gaps</span>
+              <span style="color:${h.knowledge_gap_count > 20 ? 'var(--amber)' : 'var(--text2)'};">${h.knowledge_gap_count} functions undocumented</span>
+            </div>
+            ${(h.churn_hotspots||[]).length ? `
+            <div style="font-size:10px;color:var(--text3);border-top:1px solid var(--border);padding-top:10px;">
+              <div style="font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;">churn hotspots</div>
+              ${h.churn_hotspots.map(c =>
+                `<div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                  <span style="color:var(--text2);">${c.id.split('.').slice(-2).join('.')}</span>
+                  <span style="color:var(--amber);">${c.decision_count} patches</span>
+                </div>`
+              ).join('')}
+            </div>` : ''}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-header"><div class="section-title">recent decisions</div></div>
+          <div style="padding:4px 0;">
+            ${(d.recent_decisions||[]).length
+              ? d.recent_decisions.map(dec => `
+                <div style="padding:10px 18px;border-bottom:1px solid var(--border);">
+                  <div style="display:flex;gap:8px;align-items:center;margin-bottom:3px;">
+                    <span style="font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--accent2);text-transform:uppercase;">${dec.type}</span>
+                    <span style="font-size:10px;color:var(--text3);">${(dec.created_at||'').slice(0,10)}</span>
+                  </div>
+                  <div style="font-size:11px;color:var(--text2);line-height:1.5;">${escHtml(dec.description)}</div>
+                </div>`).join('')
+              : '<div class="empty" style="padding:20px;">no decisions logged yet</div>'}
+          </div>
+        </div>
+      </div>`);
+
+    return sections.join('');
   }
 
   window.addEventListener('DOMContentLoaded', loadStatus);
