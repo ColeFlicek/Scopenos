@@ -77,11 +77,12 @@ Return a JSON object with these fields:
 - "rule_type": one of "SEMANTIC", "BOUNDARY", or "PRESENCE"
   - SEMANTIC: rule about what code patterns are allowed/forbidden
   - BOUNDARY: rule about which modules/layers may call which
-  - PRESENCE: rule about whether a specific function/pattern must or must not exist
+  - PRESENCE: rule about whether specific metadata (e.g. docstrings, comments) must be present on all functions
 - "structural_expression": a JSON object with:
   - "prohibited_patterns": list of function/method names that are forbidden (e.g. ["execute", "raw_query"])
   - "required_callee": the function that MUST be used instead (e.g. "read_secrets"), or null
-  - "scope_exclusions": module prefixes that are exempt from the rule (e.g. ["auth", "db.internal"])
+  - "scope_exclusions": list of bare function names or name prefixes that are explicitly exempt (e.g. ["__repr__", "__str__"])
+  - "missing_metadata": for PRESENCE rules only — list of node fields that must be non-empty on every function. Use ["docstring"] if the rule requires docstrings/comments on all functions. Leave as [] for non-PRESENCE rules.
 - "violation_examples": list of 4-5 short Python code snippets (3-8 lines each) that VIOLATE this rule. Make them look realistic — different ways to express the same violation.
 - "compliance_examples": list of 2-3 short Python code snippets (3-8 lines each) that CORRECTLY FOLLOW this rule.
 
@@ -240,11 +241,45 @@ Return ONLY the JSON object, no markdown, no explanation."""
         prohibited = [p.lower() for p in expr.get("prohibited_patterns", [])]
         required_callee = expr.get("required_callee")
         scope_exclusions = [s.lower() for s in expr.get("scope_exclusions", [])]
-        if not prohibited and not required_callee:
-            return []
+        missing_metadata = expr.get("missing_metadata", [])
 
         violations = []
-        # Get all edges in the project.
+
+        # ── Missing-metadata check (e.g. docstring required on all functions) ──
+        if "docstring" in missing_metadata:
+            exempt_names = {s.lower() for s in scope_exclusions}
+            async with self._db._db.execute(
+                """SELECT id, name FROM nodes
+                   WHERE project_id = ?
+                   AND type NOT IN ('class', 'ClassDef')
+                   AND (docstring = '' OR docstring IS NULL)""",
+                (project_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+            for row in rows:
+                fn_id, fn_name = row[0], row[1]
+                bare = fn_name.split(".")[-1].lower()
+                if bare in exempt_names:
+                    continue
+                await self._db.log_violation(
+                    contract_id=contract_id,
+                    function_id=fn_id,
+                    project_id=project_id,
+                    violation_type="missing_docstring",
+                    score=1.0,
+                )
+                violations.append({
+                    "contract_id": contract_id,
+                    "function_id": fn_id,
+                    "project_id": project_id,
+                    "violation_type": "missing_docstring",
+                    "score": 1.0,
+                })
+
+        if not prohibited and not required_callee:
+            return violations
+
+        # ── Call-graph structural check ────────────────────────────────────────
         async with self._db._db.execute(
             "SELECT DISTINCT caller_id FROM edges WHERE project_id = ?", (project_id,)
         ) as cur:
