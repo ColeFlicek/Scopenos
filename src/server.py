@@ -122,6 +122,27 @@ async def index_changes(
 # ── Call graph tools ──────────────────────────────────────────────────────────
 
 @mcp.tool()
+async def reembed_project(project_id: str) -> str:
+    """
+    Re-embed all functions for a project using the current two-tier embedding strategy,
+    without touching the call graph or edges.
+
+    Use this when:
+    - A project was indexed before the two-tier embedding system (documented functions
+      use the configured model; undocumented use text-embedding-3-large fallback)
+    - Embeddings were corrupted or deleted but the call graph is intact
+    - You want to switch embedding providers and re-embed everything
+
+    This is a migration/recovery tool — normal re-indexing via index_project handles
+    new and changed functions automatically. After this completes, call
+    enrich_summaries(project_id) to upgrade undocumented functions to LLM-quality embeddings.
+    """
+    svcs = await _get_services()
+    result = await svcs["indexer"].reembed_project(project_id)
+    return json.dumps(result)
+
+
+@mcp.tool()
 async def enrich_summaries(project_id: str, limit: int = 500) -> str:
     """
     Generate LLM summaries for functions that were embedded using the large-model fallback

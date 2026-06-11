@@ -343,6 +343,58 @@ class Indexer:
         }
 
 
+    async def reembed_project(self, project_id: str) -> dict:
+        """Re-embed all functions for a project using the current embedding strategy,
+        without touching the call graph. Use this to migrate an existing project to
+        the two-tier embedding system or to recover from a corrupted embedding state."""
+        all_nodes = await self._db.get_all_nodes(project_id)
+        if not all_nodes:
+            return {"status": "error", "message": f"No nodes found for project '{project_id}'."}
+
+        path = await self._db.get_project_root(project_id)
+        if not path:
+            return {"status": "error", "message": f"Project root not found for '{project_id}'. Re-index with index_project first."}
+
+        # Wipe existing embeddings — every function will be re-embedded fresh.
+        await self._embeddings.delete_by_ids([n["id"] for n in all_nodes], project_id)
+
+        # Preserve any LLM-generated summaries from prior enrich_summaries runs.
+        existing_summaries = {n["id"]: n["summary"] for n in all_nodes if n.get("summary")}
+
+        # Re-parse source to get function bodies for embedding text.
+        node_ids = {n["id"] for n in all_nodes}
+        source_files = _collect_source_files(path)
+        chunks = []
+        for fp in source_files:
+            try:
+                content = Path(fp).read_text(encoding="utf-8", errors="replace")
+                for c in extract_chunks(fp, content, project_root=path):
+                    if c.id in node_ids:
+                        chunks.append(c)
+            except Exception as exc:
+                print(f"[indexer] reembed_project: skipping {fp}: {exc}")
+
+        print(f"[indexer] reembed_project: re-embedding {len(chunks)} functions for '{project_id}'")
+        embed_stats = await self._embeddings.upsert_chunks(
+            chunks, project_id=project_id,
+            existing_summaries=existing_summaries or None,
+        )
+
+        result = {
+            "status": "ok",
+            "project_id": project_id,
+            "functions_reembedded": len(chunks),
+            "embedded_with_docs": embed_stats["docs"],
+            "embedded_large_fallback": embed_stats["fallback"],
+        }
+        if embed_stats["fallback"]:
+            result["note"] = (
+                f"{embed_stats['fallback']} functions used the large-model fallback. "
+                f"Call enrich_summaries('{project_id}') to generate LLM summaries and improve search quality."
+            )
+        return result
+
+
 def _collect_source_files(root: str) -> list[str]:
     """Walk a directory tree and return all supported source file paths, skipping VCS/build dirs."""
     result = []

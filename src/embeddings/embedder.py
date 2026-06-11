@@ -310,6 +310,19 @@ class EmbeddingStore:
         await conn.execute(f"DELETE FROM {table} WHERE id IN ({ph})", function_ids)
         await conn.commit()
 
+    async def get_embedded_ids(self, project_id: str) -> set:
+        """Return the set of function IDs that currently have an embedding vector."""
+        table = _emb_table(project_id)
+        conn = self._db._db
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ) as cur:
+            if not await cur.fetchone():
+                return set()
+        async with conn.execute(f"SELECT id FROM {table}") as cur:
+            return {row[0] for row in await cur.fetchall()}
+
+
     async def enrich_summaries(self, project_id: str, limit: int = 500) -> dict:
         """LLM-summarize functions embedded via the large-model fallback, then re-embed with the
         configured model. User-initiated only — never called automatically during indexing."""

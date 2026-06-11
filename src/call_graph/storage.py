@@ -349,6 +349,25 @@ class CallGraphDB:
         )
         await self._db.commit()
 
+    async def get_all_nodes(self, project_id: str) -> list[dict]:
+        """Return all nodes for a project including summary and docstring fields."""
+        async with self._db.execute(
+            "SELECT id, name, file, module, type, signature, docstring, summary, body_hash "
+            "FROM nodes WHERE project_id = ?",
+            (project_id,),
+        ) as cur:
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in await cur.fetchall()]
+
+    async def get_project_root(self, project_id: str) -> str:
+        """Return the filesystem root path for a project, or empty string if not found."""
+        async with self._db.execute(
+            "SELECT root FROM projects WHERE id = ?", (project_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else ""
+
+
     async def get_node(self, node_id: str, project_id: str | None = None) -> dict | None:
         """Fetch a single node by ID, optionally scoped to a project."""
         if project_id:
