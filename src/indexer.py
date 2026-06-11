@@ -101,9 +101,10 @@ class Indexer:
         ]
         print(f"[indexer] {len(changed_ids)} changed, {len(deleted_ids)} removed, "
               f"{len(all_nodes) - len(changed_ids)} unchanged (skipping embed)")
+        embed_stats = {"docs": 0, "fallback": 0}
         if chunks:
             print(f"[indexer] starting embedding for {len(chunks)} chunks")
-            await self._embeddings.upsert_chunks(
+            embed_stats = await self._embeddings.upsert_chunks(
                 chunks,
                 project_id=project_id,
                 existing_summaries=existing_summaries if existing_summaries else None,
@@ -119,7 +120,15 @@ class Indexer:
             "functions_indexed": len(all_nodes),
             "functions_reembedded": len(chunks),
             "edges_indexed": len(all_edges),
+            "embedded_with_docs": embed_stats["docs"],
+            "embedded_large_fallback": embed_stats["fallback"],
         }
+        if embed_stats["fallback"]:
+            result["note"] = (
+                f"{embed_stats['fallback']} functions had no docstring or leading comment and were "
+                f"embedded with text-embedding-3-large. Call enrich_summaries('{project_id}') to "
+                f"generate LLM summaries and re-embed them with {{}}, which will improve semantic search quality."
+            ).format(self._embeddings._model)
         print(f"[indexer] index_project complete: {result}")
         return result
 

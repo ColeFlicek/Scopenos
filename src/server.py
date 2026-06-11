@@ -122,6 +122,24 @@ async def index_changes(
 # ── Call graph tools ──────────────────────────────────────────────────────────
 
 @mcp.tool()
+async def enrich_summaries(project_id: str, limit: int = 500) -> str:
+    """
+    Generate LLM summaries for functions that were embedded using the large-model fallback
+    (i.e., functions with no docstring or leading comment), then re-embed them with the
+    configured model for better semantic search quality.
+
+    This is intentionally user-initiated — it costs Anthropic API tokens (~$0.30 per 1,000
+    functions) and may take several minutes for large batches.
+
+    project_id: the project to enrich (must match the value used in index_project).
+    limit: max functions to process in this call. Call repeatedly to enrich all functions.
+    """
+    svcs = await _get_services()
+    result = await svcs["embeddings"].enrich_summaries(project_id, limit=limit)
+    return json.dumps(result)
+
+
+@mcp.tool()
 async def get_callers(function_name: str, project_id: str = "") -> str:
     """
     Return all functions that call the specified function. Accepts a bare name,

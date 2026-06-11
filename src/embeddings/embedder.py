@@ -104,6 +104,9 @@ class EmbeddingStore:
         self._anthropic = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         self._provider, self._model, self._dim, ollama_url = _resolve_config()
         self._embed_client = _make_embed_client(self._provider, ollama_url)
+        # Always OpenAI for large-model fallback — used for undocumented functions
+        self._large_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self._large_model = "text-embedding-3-large"
         print(f"[embeddings] provider={self._provider} model={self._model} dim={self._dim}")
 
     @classmethod
@@ -306,6 +309,75 @@ class EmbeddingStore:
         ph = ",".join("?" * len(function_ids))
         await conn.execute(f"DELETE FROM {table} WHERE id IN ({ph})", function_ids)
         await conn.commit()
+
+    async def enrich_summaries(self, project_id: str, limit: int = 500) -> dict:
+        """LLM-summarize functions embedded via the large-model fallback, then re-embed with the
+        configured model. User-initiated only — never called automatically during indexing."""
+        conn = self._db._db
+        async with conn.execute(
+            "SELECT id, name, signature, docstring, file FROM nodes "
+            "WHERE project_id = ? AND embedding_model = 'text-embedding-3-large' LIMIT ?",
+            (project_id, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+
+        if not rows:
+            return {"enriched": 0, "remaining": 0,
+                    "message": "No functions need enrichment — all are already on the configured model."}
+
+        from .chunker import FunctionChunk
+        chunks = [
+            FunctionChunk(
+                id=row[0], name=row[1], signature=row[2], docstring=row[3] or "",
+                leading_comment="", summary="", file=row[4], module="",
+                type="function", body="", embed_text="",
+            )
+            for row in rows
+        ]
+
+        sem = asyncio.Semaphore(SUMMARY_CONCURRENCY)
+
+        async def _summarize(chunk: FunctionChunk) -> str:
+            async with sem:
+                return await self._generate_summary(chunk)
+
+        print(f"[embeddings] enriching {len(chunks)} functions with LLM summaries")
+        summaries = await asyncio.gather(*[_summarize(c) for c in chunks])
+        for chunk, summary in zip(chunks, summaries):
+            chunk.summary = summary
+
+        table = await self._ensure_emb_table(conn, project_id)
+        texts = [prepare_embed_text(c) for c in chunks]
+        embeddings = await self._embed_batch(texts)
+
+        for chunk, emb in zip(chunks, embeddings):
+            await conn.execute(
+                "UPDATE nodes SET summary = ?, embedding_model = ? WHERE id = ? AND project_id = ?",
+                (chunk.summary, self._model, chunk.id, project_id),
+            )
+            await conn.execute(f"DELETE FROM {table} WHERE id = ?", (chunk.id,))
+            await conn.execute(
+                f"INSERT INTO {table}(id, embedding) VALUES (?, ?)",
+                (chunk.id, _f32(emb)),
+            )
+        await conn.commit()
+
+        async with conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE project_id = ? AND embedding_model = 'text-embedding-3-large'",
+            (project_id,),
+        ) as cur:
+            remaining = (await cur.fetchone())[0]
+
+        return {
+            "enriched": len(chunks),
+            "remaining": remaining,
+            "message": (
+                f"Enriched {len(chunks)} functions with LLM summaries and re-embedded with {self._model}. "
+                + (f"{remaining} still use large-model fallback — call enrich_summaries again to continue."
+                   if remaining else "All functions are now on the configured model.")
+            ),
+        }
+
 
     async def query_similar(
         self, snippet: str, top_k: int = 10, project_id: str | None = None
@@ -594,6 +666,19 @@ class EmbeddingStore:
         """Embed a single text string via the configured provider and return the float vector."""
         resp = await self._embed_client.embeddings.create(model=self._model, input=text)
         return resp.data[0].embedding
+
+    async def _embed_batch_large(self, texts: list[str]) -> list[list[float]]:
+        """Embed using text-embedding-3-large truncated to self._dim for table compatibility."""
+        results = []
+        for i in range(0, len(texts), 100):
+            batch = texts[i:i + 100]
+            resp = await self._large_client.embeddings.create(
+                model=self._large_model,
+                input=batch,
+                dimensions=self._dim,
+            )
+            results.extend(r.embedding for r in sorted(resp.data, key=lambda x: x.index))
+        return results
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of texts in batches of 100, logging progress per batch."""

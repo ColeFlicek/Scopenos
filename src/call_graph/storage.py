@@ -35,8 +35,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     signature   TEXT NOT NULL DEFAULT '',
     docstring   TEXT NOT NULL DEFAULT '',
     summary     TEXT NOT NULL DEFAULT '',
-    body_hash   TEXT NOT NULL DEFAULT '',
-    decorators  TEXT NOT NULL DEFAULT '[]',
+    body_hash      TEXT NOT NULL DEFAULT '',
+    decorators     TEXT NOT NULL DEFAULT '[]',
+    embedding_model TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (project_id, id)
 );
 
@@ -167,6 +168,11 @@ class CallGraphDB:
         if "decorators" not in cols:
             await self._db.execute(
                 "ALTER TABLE nodes ADD COLUMN decorators TEXT NOT NULL DEFAULT '[]'"
+            )
+            await self._db.commit()
+        if "embedding_model" not in cols:
+            await self._db.execute(
+                "ALTER TABLE nodes ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''"
             )
             await self._db.commit()
 

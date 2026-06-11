@@ -17,6 +17,7 @@ class FunctionChunk:
     type: str
     signature: str
     docstring: str
+    leading_comment: str
     body: str           # full body, not truncated here — embedder truncates to token budget
     embed_text: str     # pre-formatted text to embed (populated by prepare_embed_text)
     summary: str = ""   # populated later by LLM
@@ -38,6 +39,7 @@ def _node_to_chunk(node: FunctionNode) -> FunctionChunk:
         type=node.type,
         signature=node.signature,
         docstring=node.docstring,
+        leading_comment=node.leading_comment,
         body=node.body,
         embed_text="",
     )
@@ -52,6 +54,8 @@ def prepare_embed_text(chunk: FunctionChunk) -> str:
     parts = [f"Function: {chunk.id}", f"Signature: {chunk.signature}"]
     if chunk.docstring:
         parts.append(f"Docstring: {chunk.docstring}")
+    elif chunk.leading_comment:
+        parts.append(f"Comment: {chunk.leading_comment}")
     if chunk.summary:
         parts.append(f"Summary: {chunk.summary}")
     body_truncated = chunk.body[:2000] if chunk.body else ""

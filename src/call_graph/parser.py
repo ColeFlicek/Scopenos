@@ -29,6 +29,7 @@ class FunctionNode:
     signature: str
     body: str         # truncated at 2000 chars for storage
     docstring: str
+    leading_comment: str = ""  # leading # comment block before first real statement
     body_hash: str = ""  # sha256[:16] of full function text — used to skip re-embedding unchanged functions
     decorators: list = field(default_factory=list)  # decorator call names, e.g. ["router.get", "login_required"]
 
@@ -203,12 +204,14 @@ def _visit_python(
         func_text = _node_text(node, source)
         signature = func_text.split("\n")[0].strip()
         docstring = _extract_python_docstring(node, source)
+        leading_comment = _extract_python_leading_comment(node, source) if not docstring else ""
         body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
 
         nodes.append(FunctionNode(
             id=func_id, name=qual_name, file=file_path, module=module,
             type="method" if parent_class else "function",
             signature=signature, body=func_text[:2000], docstring=docstring,
+            leading_comment=leading_comment,
             body_hash=body_hash,
             decorators=_decorators or [],
         ))
@@ -285,6 +288,22 @@ def _extract_python_docstring(func_node: "Node", source: bytes) -> str:
         if raw.startswith(delim) and raw.endswith(delim) and len(raw) >= 2 * len(delim):
             return raw[len(delim):-len(delim)][:500]
     return raw[:500]
+
+
+def _extract_python_leading_comment(func_node: "Node", source: bytes) -> str:
+    """Extract consecutive # comment lines at the top of a function body (before any real code)."""
+    block = next((c for c in func_node.children if c.type == "block"), None)
+    if not block:
+        return ""
+    lines = []
+    for child in block.children:
+        if child.type == "\n":
+            continue
+        if child.type == "comment":
+            lines.append(_text(child, source).lstrip("# ").strip())
+        else:
+            break
+    return " ".join(lines)[:500]
 
 
 # ── TypeScript ────────────────────────────────────────────────────────────────
