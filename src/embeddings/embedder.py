@@ -408,18 +408,23 @@ class EmbeddingStore:
 
         if project_id:
             # Single-project query: scan only that project's table.
-            table = _emb_table(project_id)
+            # Use LOWER() comparison — sqlite_master name lookups are case-sensitive
+            # but project_ids may differ in case from when the table was created.
+            table_candidate = _emb_table(project_id)
             async with conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                "SELECT name FROM sqlite_master WHERE type='table' AND LOWER(name)=LOWER(?)",
+                (table_candidate,)
             ) as cur:
-                if not await cur.fetchone():
+                row = await cur.fetchone()
+                if not row:
                     return []
+                table = row[0]  # use the actual canonical name from the DB
             async with conn.execute(
                 f"""
                 SELECT knn.id, knn.distance,
                        n.file, n.module, n.name, n.signature, n.summary, n.project_id
                 FROM (
-                    SELECT id, distance FROM {table}
+                    SELECT id, distance FROM "{table}"
                     WHERE embedding MATCH ? AND k = ?
                     ORDER BY distance
                 ) knn
@@ -442,10 +447,12 @@ class EmbeddingStore:
             for pid in project_ids:
                 t = _emb_table(pid)
                 async with conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (t,)
+                    "SELECT name FROM sqlite_master WHERE type='table' AND LOWER(name)=LOWER(?)",
+                    (t,)
                 ) as cur:
-                    if await cur.fetchone():
-                        valid.append((pid, t))
+                    row = await cur.fetchone()
+                    if row:
+                        valid.append((pid, row[0]))  # use canonical name from DB
 
             if not valid:
                 return []
