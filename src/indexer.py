@@ -392,6 +392,27 @@ class Indexer:
             except Exception as exc:
                 print(f"[indexer] reembed_project: skipping {fp}: {exc}")
 
+        if not chunks:
+            # Source files not accessible (e.g. project indexed from a remote machine).
+            # Fall back to building FunctionChunks from stored node metadata.
+            print(f"[indexer] reembed_project: no source files at {path!r}, "
+                  "embedding from stored node metadata")
+            from .embeddings.chunker import FunctionChunk
+            for node in all_nodes:
+                chunks.append(FunctionChunk(
+                    id=node["id"],
+                    name=node.get("name", ""),
+                    signature=node.get("signature", ""),
+                    docstring=node.get("docstring", "") or "",
+                    leading_comment="",
+                    summary=existing_summaries.get(node["id"], ""),
+                    file=node.get("file", ""),
+                    module=node.get("module", ""),
+                    type=node.get("type", "function"),
+                    body="",
+                    embed_text="",
+                ))
+
         print(f"[indexer] reembed_project: re-embedding {len(chunks)} functions for '{project_id}'")
         embed_stats = await self._embeddings.upsert_chunks(
             chunks, project_id=project_id,
