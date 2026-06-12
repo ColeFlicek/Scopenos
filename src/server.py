@@ -1175,6 +1175,18 @@ async def lsp_get_diagnostics(
     return json.dumps(result)
 
 
+@mcp.custom_route("/api/reembed/{project_id}", methods=["POST"])
+async def http_reembed_project(request: Request) -> JSONResponse:
+    """POST /api/reembed/{project_id} — force re-embed all functions for a project."""
+    try:
+        project_id = request.path_params["project_id"]
+        svcs = await _get_services()
+        result = await svcs["indexer"].reembed_project(project_id)
+        return JSONResponse(result)
+    except Exception as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
