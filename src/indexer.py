@@ -7,6 +7,8 @@ from .call_graph.parser import TreeSitterParser
 from .call_graph.storage import CallGraphDB
 from .embeddings.chunker import extract_chunks
 from .embeddings.embedder import EmbeddingStore
+from .lsif_import import LsifImporter
+from .scip_import import ScipImporter
 
 _SUPPORTED_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
 
@@ -393,6 +395,109 @@ class Indexer:
                 f"Call enrich_summaries('{project_id}') to generate LLM summaries and improve search quality."
             )
         return result
+
+
+    async def index_lsif(self, path: str, project_id: str = "") -> dict:
+        """Ingest an LSIF NDJSON index file into ACIP.
+
+        Extracts symbol definitions with their hover documentation and imports
+        them as FunctionNode records into the call-graph + embedding pipeline.
+        Call-edge resolution is deferred to a future version.
+
+        path: filesystem path to the .lsif file on the ACIP server.
+        project_id: target project namespace (defaults to lsif filename stem).
+        """
+        if not project_id:
+            project_id = Path(path).stem or "lsif"
+
+        try:
+            importer = LsifImporter(project_root=str(Path(path).parent))
+            nodes, edges = importer.parse(path)
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+        if not nodes:
+            return {"status": "ok", "project_id": project_id, "symbols_imported": 0,
+                    "note": "No definition symbols found in LSIF file."}
+
+        await self._db.upsert_nodes(nodes, project_id)
+        all_ids = await self._db.get_all_node_ids(project_id)
+        if edges:
+            await self._db.upsert_edges(edges, all_ids, project_id)
+        await self._db.upsert_project(project_id, project_id, str(Path(path).parent))
+
+        chunks = []
+        for n in nodes:
+            from .embeddings.chunker import FunctionChunk
+            chunks.append(FunctionChunk(
+                id=n.id, name=n.name, signature=n.signature,
+                docstring=n.docstring, leading_comment=n.leading_comment,
+                summary="", file=n.file, module=n.module,
+                type=n.type, body=n.body, embed_text="",
+            ))
+        embed_stats = {"docs": 0, "fallback": 0}
+        if chunks:
+            embed_stats = await self._embeddings.upsert_chunks(chunks, project_id=project_id)
+
+        return {
+            "status": "ok",
+            "project_id": project_id,
+            "symbols_imported": len(nodes),
+            "edges_imported": len(edges),
+            "embedded_with_docs": embed_stats["docs"],
+            "embedded_large_fallback": embed_stats["fallback"],
+        }
+
+    async def index_scip(self, path: str, project_id: str = "") -> dict:
+        """Ingest a SCIP JSON index file into ACIP.
+
+        SCIP (Sourcegraph Code Intelligence Protocol) provides structured symbol
+        information with explicit documentation and relationships.  Produces
+        FunctionNode records and basic call edges from relationship data.
+
+        path: filesystem path to the .scip.json file on the ACIP server.
+        project_id: target project namespace (defaults to scip filename stem).
+        """
+        if not project_id:
+            project_id = Path(path).stem.split(".")[0] or "scip"
+
+        try:
+            importer = ScipImporter(project_root=str(Path(path).parent))
+            nodes, edges = importer.parse(path)
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+        if not nodes:
+            return {"status": "ok", "project_id": project_id, "symbols_imported": 0,
+                    "note": "No symbols with documentation found in SCIP file."}
+
+        await self._db.upsert_nodes(nodes, project_id)
+        all_ids = await self._db.get_all_node_ids(project_id)
+        if edges:
+            await self._db.upsert_edges(edges, all_ids, project_id)
+        await self._db.upsert_project(project_id, project_id, str(Path(path).parent))
+
+        chunks = []
+        for n in nodes:
+            from .embeddings.chunker import FunctionChunk
+            chunks.append(FunctionChunk(
+                id=n.id, name=n.name, signature=n.signature,
+                docstring=n.docstring, leading_comment=n.leading_comment,
+                summary="", file=n.file, module=n.module,
+                type=n.type, body=n.body, embed_text="",
+            ))
+        embed_stats = {"docs": 0, "fallback": 0}
+        if chunks:
+            embed_stats = await self._embeddings.upsert_chunks(chunks, project_id=project_id)
+
+        return {
+            "status": "ok",
+            "project_id": project_id,
+            "symbols_imported": len(nodes),
+            "edges_imported": len(edges),
+            "embedded_with_docs": embed_stats["docs"],
+            "embedded_large_fallback": embed_stats["fallback"],
+        }
 
 
 def _collect_source_files(root: str) -> list[str]:

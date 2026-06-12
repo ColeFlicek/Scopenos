@@ -868,6 +868,152 @@ async def http_list_violations(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
+
+# ── LSIF / SCIP ingestion ─────────────────────────────────────────────────────
+
+@mcp.tool()
+async def index_lsif(path: str, project_id: str = "") -> str:
+    """
+    Ingest a pre-built LSIF (Language Server Index Format) index file into ACIP.
+
+    LSIF files are produced by CI/CD indexers like lsif-py, lsif-tsc, lsif-java,
+    rust-analyzer, and others. They provide symbol definitions with hover
+    documentation and cross-reference data for any language without needing a
+    live tree-sitter parser.
+
+    path: absolute path to the .lsif NDJSON file on the ACIP server filesystem.
+    project_id: namespace for the indexed symbols (defaults to the lsif filename stem).
+
+    Use this when:
+    - Indexing a language not yet supported by tree-sitter
+    - Ingesting multi-repo or monorepo indexes built in CI
+    - Bootstrapping a project from an existing Sourcegraph or GitHub index export
+    """
+    svcs = await _get_services()
+    result = await svcs["indexer"].index_lsif(path, project_id=project_id)
+    return json.dumps(result)
+
+
+@mcp.tool()
+async def index_scip(path: str, project_id: str = "") -> str:
+    """
+    Ingest a pre-built SCIP (Sourcegraph Code Intelligence Protocol) JSON index
+    into ACIP.
+
+    SCIP is the successor to LSIF — produced by scip-python, scip-typescript,
+    scip-java, rust-analyzer, and others. The JSON form is accepted here (produced
+    by `scip convert --to json` or directly by some indexers).
+
+    SCIP provides explicit symbol documentation and relationship data, yielding
+    both FunctionNode records and call edges from the relationships section.
+
+    path: absolute path to the .scip.json file on the ACIP server filesystem.
+    project_id: namespace for the indexed symbols (defaults to the filename stem).
+    """
+    svcs = await _get_services()
+    result = await svcs["indexer"].index_scip(path, project_id=project_id)
+    return json.dumps(result)
+
+
+# ── LSP tools ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def lsp_get_definition(
+    file_path: str,
+    line: int,
+    column: int,
+    project_id: str = "",
+) -> str:
+    """
+    Return the definition location for the symbol at (line, column) in file_path.
+
+    Uses Jedi for Python files (accurate, no subprocess required).
+    For TypeScript, Rust, Go, and other languages, spawns the appropriate
+    language server if installed (typescript-language-server, rust-analyzer, gopls).
+
+    file_path: absolute path to the source file on the ACIP server.
+    line: 1-based line number.
+    column: 0-based column number.
+    project_id: used to resolve the project root for LSP workspace initialisation.
+    """
+    from .lsp_manager import (
+        python_get_definition, lsp_get_definition as lsp_def, lsp_command_for_file
+    )
+    from pathlib import Path as _Path
+    svcs = await _get_services()
+    project_root = await svcs["db"].get_project_root(project_id) if project_id else ""
+
+    ext = _Path(file_path).suffix.lower()
+    if ext == ".py":
+        result = await python_get_definition(file_path, line, column, project_root)
+    else:
+        cmd = lsp_command_for_file(file_path)
+        if not cmd:
+            return json.dumps({"error": f"No LSP configured for {ext} files."})
+        result = await lsp_def(file_path, line, column, cmd, project_root)
+    return json.dumps(result)
+
+
+@mcp.tool()
+async def lsp_find_references(
+    file_path: str,
+    line: int,
+    column: int,
+    project_id: str = "",
+) -> str:
+    """
+    Return all references to the symbol at (line, column) in file_path.
+
+    Uses Jedi for Python; spawns the appropriate language server for other languages.
+    Results include file path, line, and column for each reference site.
+
+    file_path: absolute path to the source file on the ACIP server.
+    line: 1-based line number.
+    column: 0-based column number.
+    project_id: used to resolve the project root.
+    """
+    from .lsp_manager import (
+        python_find_references, lsp_find_references as lsp_refs, lsp_command_for_file
+    )
+    from pathlib import Path as _Path
+    svcs = await _get_services()
+    project_root = await svcs["db"].get_project_root(project_id) if project_id else ""
+
+    ext = _Path(file_path).suffix.lower()
+    if ext == ".py":
+        result = await python_find_references(file_path, line, column, project_root)
+    else:
+        cmd = lsp_command_for_file(file_path)
+        if not cmd:
+            return json.dumps({"error": f"No LSP configured for {ext} files."})
+        result = await lsp_refs(file_path, line, column, cmd, project_root)
+    return json.dumps(result)
+
+
+@mcp.tool()
+async def lsp_get_diagnostics(
+    file_path: str,
+    project_id: str = "",
+) -> str:
+    """
+    Return compiler diagnostics (type errors, warnings) for file_path.
+
+    Uses pyright for Python if installed; falls back to Jedi syntax checking.
+    Returns a list of diagnostic objects with severity, message, line, and column.
+
+    Useful for surfacing type errors in functions you are about to edit, or for
+    validating that a change did not introduce new type violations.
+
+    file_path: absolute path to the source file on the ACIP server.
+    project_id: used to resolve the project root for language-server context.
+    """
+    from .lsp_manager import python_get_diagnostics
+    svcs = await _get_services()
+    project_root = await svcs["db"].get_project_root(project_id) if project_id else ""
+    result = await python_get_diagnostics(file_path, project_root)
+    return json.dumps(result)
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

@@ -5,7 +5,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Install LSP servers for TypeScript/JS and Python type checking
+RUN npm install -g typescript-language-server typescript 2>/dev/null || true
+RUN pip install --no-cache-dir pyright || true
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

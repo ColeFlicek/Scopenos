@@ -18,6 +18,42 @@ try:
 except ImportError:
     _HAS_TS = False
 
+try:
+    import tree_sitter_rust as tsrust
+    _HAS_RUST = True
+except ImportError:
+    _HAS_RUST = False
+
+try:
+    import tree_sitter_go as tsgo
+    _HAS_GO = True
+except ImportError:
+    _HAS_GO = False
+
+try:
+    import tree_sitter_java as tsjava
+    _HAS_JAVA = True
+except ImportError:
+    _HAS_JAVA = False
+
+try:
+    import tree_sitter_cpp as tscpp
+    _HAS_CPP = True
+except ImportError:
+    _HAS_CPP = False
+
+try:
+    import tree_sitter_c_sharp as tscsharp
+    _HAS_CSHARP = True
+except ImportError:
+    _HAS_CSHARP = False
+
+try:
+    import tree_sitter_ruby as tsruby
+    _HAS_RUBY = True
+except ImportError:
+    _HAS_RUBY = False
+
 
 @dataclass
 class FunctionNode:
@@ -54,6 +90,20 @@ class TreeSitterParser:
             # JS/JSX use the TypeScript grammar — it's a strict superset of JavaScript
             self._parsers[".js"] = Parser(Language(tstypescript.language_typescript()))
             self._parsers[".jsx"] = Parser(Language(tstypescript.language_tsx()))
+        if _HAS_TREE_SITTER and _HAS_RUST:
+            self._parsers[".rs"] = Parser(Language(tsrust.language()))
+        if _HAS_TREE_SITTER and _HAS_GO:
+            self._parsers[".go"] = Parser(Language(tsgo.language()))
+        if _HAS_TREE_SITTER and _HAS_JAVA:
+            self._parsers[".java"] = Parser(Language(tsjava.language()))
+        if _HAS_TREE_SITTER and _HAS_CPP:
+            self._parsers[".cpp"] = Parser(Language(tscpp.language()))
+            self._parsers[".cc"] = Parser(Language(tscpp.language()))
+            self._parsers[".hpp"] = Parser(Language(tscpp.language()))
+        if _HAS_TREE_SITTER and _HAS_CSHARP:
+            self._parsers[".cs"] = Parser(Language(tscsharp.language()))
+        if _HAS_TREE_SITTER and _HAS_RUBY:
+            self._parsers[".rb"] = Parser(Language(tsruby.language()))
 
     @property
     def supported_extensions(self) -> set[str]:
@@ -76,6 +126,18 @@ class TreeSitterParser:
             return _parse_python(tree.root_node, file_path, module, source)
         if ext in (".ts", ".tsx", ".js", ".jsx"):
             return _parse_typescript(tree.root_node, file_path, module, source)
+        if ext == ".rs":
+            return _parse_rust(tree.root_node, file_path, module, source)
+        if ext == ".go":
+            return _parse_go(tree.root_node, file_path, module, source)
+        if ext == ".java":
+            return _parse_java(tree.root_node, file_path, module, source)
+        if ext in (".cpp", ".cc", ".hpp"):
+            return _parse_cpp(tree.root_node, file_path, module, source)
+        if ext == ".cs":
+            return _parse_csharp(tree.root_node, file_path, module, source)
+        if ext == ".rb":
+            return _parse_ruby(tree.root_node, file_path, module, source)
         return [], []
 
 
@@ -421,6 +483,603 @@ def _collect_ts_calls(
         _collect_ts_calls(child, caller_id, file_path, source, edges)
 
 
+
+
+# ── Rust ──────────────────────────────────────────────────────────────────────
+
+def _extract_rust_doc(node: "Node", source: bytes) -> str:
+    """Extract consecutive /// doc-comment lines immediately before a Rust node."""
+    before = source[:node.start_byte]
+    lines = before.decode("utf-8", errors="replace").splitlines()
+    doc_lines = []
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped.startswith("///"):
+            doc_lines.insert(0, stripped[3:].strip())
+        elif stripped == "" or stripped.startswith("#["):
+            continue  # skip blank lines and attributes between comment and fn
+        else:
+            break
+    return " ".join(doc_lines).strip()[:500]
+
+
+_RUST_FUNC_TYPES = {"function_item"}
+_RUST_CLASS_TYPES = {"struct_item", "enum_item", "trait_item"}
+
+
+def _parse_rust(
+    root: "Node", file_path: str, module: str, source: bytes
+) -> tuple[list[FunctionNode], list[CallEdge]]:
+    """Extract functions and struct/enum/trait definitions from a Rust source file."""
+    nodes: list[FunctionNode] = []
+    edges: list[CallEdge] = []
+    _visit_rust(root, file_path, module, source, nodes, edges, parent_class=None)
+    return nodes, edges
+
+
+def _visit_rust(
+    node: "Node",
+    file_path: str,
+    module: str,
+    source: bytes,
+    nodes: list[FunctionNode],
+    edges: list[CallEdge],
+    parent_class: str | None,
+) -> None:
+    """Recursively visit a Rust AST, collecting function and type items."""
+    if node.type in _RUST_CLASS_TYPES:
+        name_node = next((c for c in node.children if c.type == "type_identifier"), None)
+        if name_node:
+            class_name = _text(name_node, source)
+            class_id = f"{module}.{class_name}"
+            sig = _node_text(node, source).split("\n")[0].strip()
+            nodes.append(FunctionNode(
+                id=class_id, name=class_name, file=file_path, module=module,
+                type="class", signature=sig, body="",
+                docstring=_extract_rust_doc(node, source), body_hash=hashlib.sha256(
+                    _node_text(node, source).encode("utf-8", errors="replace")
+                ).hexdigest()[:16],
+            ))
+        for child in node.children:
+            _visit_rust(child, file_path, module, source, nodes, edges, parent_class=class_name if name_node else parent_class)
+        return
+
+    if node.type == "impl_item":
+        # Extract the type name from impl declarations
+        type_node = next((c for c in node.children if c.type == "type_identifier"), None)
+        impl_class = _text(type_node, source) if type_node else parent_class
+        for child in node.children:
+            _visit_rust(child, file_path, module, source, nodes, edges, parent_class=impl_class)
+        return
+
+    if node.type in _RUST_FUNC_TYPES:
+        name_node = next((c for c in node.children if c.type == "identifier"), None)
+        if not name_node:
+            return
+        func_name = _text(name_node, source)
+        qual = f"{parent_class}.{func_name}" if parent_class else func_name
+        func_id = f"{module}.{qual}"
+        func_text = _node_text(node, source)
+        body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        nodes.append(FunctionNode(
+            id=func_id, name=qual, file=file_path, module=module,
+            type="method" if parent_class else "function",
+            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            docstring=_extract_rust_doc(node, source), body_hash=body_hash,
+        ))
+        _collect_rust_calls(node, func_id, file_path, source, edges)
+        return
+
+    for child in node.children:
+        _visit_rust(child, file_path, module, source, nodes, edges, parent_class=parent_class)
+
+
+def _collect_rust_calls(
+    node: "Node", caller_id: str, file_path: str, source: bytes, edges: list[CallEdge]
+) -> None:
+    """Collect call_expression and method_call_expression edges inside a Rust function."""
+    for child in node.children:
+        if child.type in _RUST_FUNC_TYPES:
+            continue
+        if child.type == "call_expression":
+            func_part = next((c for c in child.children if c.type in ("identifier", "field_expression", "scoped_identifier")), None)
+            if func_part:
+                name = _resolve_call_name(func_part, source)
+                if name:
+                    edges.append(CallEdge(caller_id=caller_id, callee_name=name, edge_type="calls", file=file_path))
+        elif child.type == "method_call_expression":
+            name_node = next((c for c in child.children if c.type == "field_identifier"), None)
+            if name_node:
+                edges.append(CallEdge(caller_id=caller_id, callee_name=_text(name_node, source), edge_type="calls", file=file_path))
+        _collect_rust_calls(child, caller_id, file_path, source, edges)
+
+
+# ── Go ────────────────────────────────────────────────────────────────────────
+
+def _extract_go_doc(node: "Node", source: bytes) -> str:
+    """Extract the leading // comment block immediately before a Go declaration."""
+    before = source[:node.start_byte]
+    lines = before.decode("utf-8", errors="replace").splitlines()
+    doc_lines = []
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            doc_lines.insert(0, stripped[2:].strip())
+        elif stripped == "":
+            continue
+        else:
+            break
+    return " ".join(doc_lines).strip()[:500]
+
+
+_GO_FUNC_TYPES = {"function_declaration", "method_declaration"}
+
+
+def _parse_go(
+    root: "Node", file_path: str, module: str, source: bytes
+) -> tuple[list[FunctionNode], list[CallEdge]]:
+    """Extract functions and methods from a Go source file."""
+    nodes: list[FunctionNode] = []
+    edges: list[CallEdge] = []
+    _visit_go(root, file_path, module, source, nodes, edges)
+    return nodes, edges
+
+
+def _visit_go(
+    node: "Node",
+    file_path: str,
+    module: str,
+    source: bytes,
+    nodes: list[FunctionNode],
+    edges: list[CallEdge],
+) -> None:
+    """Recursively visit a Go AST node, extracting function and type declarations."""
+    if node.type in _GO_FUNC_TYPES:
+        # For methods, receiver tells us the type
+        receiver_type = ""
+        if node.type == "method_declaration":
+            recv = next((c for c in node.children if c.type == "parameter_list"), None)
+            if recv:
+                type_node = next((c for c in _walk(recv) if c.type == "type_identifier"), None)
+                if type_node:
+                    receiver_type = _text(type_node, source)
+
+        name_node = next((c for c in node.children if c.type == "field_identifier"), None) or                     next((c for c in node.children if c.type == "identifier"), None)
+        if not name_node:
+            return
+
+        func_name = _text(name_node, source)
+        qual = f"{receiver_type}.{func_name}" if receiver_type else func_name
+        func_id = f"{module}.{qual}"
+        func_text = _node_text(node, source)
+        body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        nodes.append(FunctionNode(
+            id=func_id, name=qual, file=file_path, module=module,
+            type="method" if receiver_type else "function",
+            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            docstring=_extract_go_doc(node, source), body_hash=body_hash,
+        ))
+        _collect_go_calls(node, func_id, file_path, source, edges)
+        return
+
+    for child in node.children:
+        _visit_go(child, file_path, module, source, nodes, edges)
+
+
+def _collect_go_calls(
+    node: "Node", caller_id: str, file_path: str, source: bytes, edges: list[CallEdge]
+) -> None:
+    """Collect call_expression edges inside a Go function body."""
+    for child in node.children:
+        if child.type in _GO_FUNC_TYPES:
+            continue
+        if child.type == "call_expression":
+            func_part = next((c for c in child.children if c.type in ("identifier", "selector_expression")), None)
+            if func_part:
+                name = _resolve_call_name(func_part, source)
+                if name:
+                    edges.append(CallEdge(caller_id=caller_id, callee_name=name, edge_type="calls", file=file_path))
+        _collect_go_calls(child, caller_id, file_path, source, edges)
+
+
+# ── Java ──────────────────────────────────────────────────────────────────────
+
+def _extract_java_javadoc(node: "Node", source: bytes) -> str:
+    """Extract the /** ... */ Javadoc block immediately before a Java node."""
+    before = source[:node.start_byte]
+    end_idx = before.rfind(b"*/")
+    if end_idx < 0:
+        return ""
+    start_idx = before.rfind(b"/**", 0, end_idx + 2)
+    if start_idx < 0:
+        return ""
+    if before[end_idx + 2:].strip():
+        return ""
+    content = before[start_idx + 3:end_idx].decode("utf-8", errors="replace")
+    lines = [line.strip().lstrip("* ") for line in content.splitlines()]
+    return " ".join(l for l in lines if l).strip()[:500]
+
+
+_JAVA_CLASS_TYPES = {"class_declaration", "interface_declaration", "enum_declaration", "annotation_type_declaration"}
+_JAVA_FUNC_TYPES = {"method_declaration", "constructor_declaration"}
+
+
+def _parse_java(
+    root: "Node", file_path: str, module: str, source: bytes
+) -> tuple[list[FunctionNode], list[CallEdge]]:
+    """Extract classes and methods from a Java source file."""
+    nodes: list[FunctionNode] = []
+    edges: list[CallEdge] = []
+    _visit_java(root, file_path, module, source, nodes, edges, parent_class=None)
+    return nodes, edges
+
+
+def _visit_java(
+    node: "Node",
+    file_path: str,
+    module: str,
+    source: bytes,
+    nodes: list[FunctionNode],
+    edges: list[CallEdge],
+    parent_class: str | None,
+) -> None:
+    """Recursively visit a Java AST node."""
+    if node.type in _JAVA_CLASS_TYPES:
+        name_node = next((c for c in node.children if c.type == "identifier"), None)
+        if name_node:
+            class_name = _text(name_node, source)
+            class_id = f"{module}.{class_name}"
+            sig = _node_text(node, source).split("\n")[0].strip()
+            nodes.append(FunctionNode(
+                id=class_id, name=class_name, file=file_path, module=module,
+                type="class", signature=sig, body="",
+                docstring=_extract_java_javadoc(node, source),
+                body_hash=hashlib.sha256(sig.encode()).hexdigest()[:16],
+            ))
+            for child in node.children:
+                _visit_java(child, file_path, module, source, nodes, edges, parent_class=class_name)
+        return
+
+    if node.type in _JAVA_FUNC_TYPES:
+        name_node = next((c for c in node.children if c.type == "identifier"), None)
+        if not name_node:
+            return
+        func_name = _text(name_node, source)
+        qual = f"{parent_class}.{func_name}" if parent_class else func_name
+        func_id = f"{module}.{qual}"
+        func_text = _node_text(node, source)
+        body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        nodes.append(FunctionNode(
+            id=func_id, name=qual, file=file_path, module=module,
+            type="method" if parent_class else "function",
+            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            docstring=_extract_java_javadoc(node, source), body_hash=body_hash,
+        ))
+        _collect_java_calls(node, func_id, file_path, source, edges)
+        return
+
+    for child in node.children:
+        _visit_java(child, file_path, module, source, nodes, edges, parent_class=parent_class)
+
+
+def _collect_java_calls(
+    node: "Node", caller_id: str, file_path: str, source: bytes, edges: list[CallEdge]
+) -> None:
+    """Collect method_invocation and object_creation_expression edges."""
+    for child in node.children:
+        if child.type in _JAVA_FUNC_TYPES:
+            continue
+        if child.type in ("method_invocation", "object_creation_expression"):
+            name_node = next((c for c in child.children if c.type == "identifier"), None)
+            if name_node:
+                edges.append(CallEdge(caller_id=caller_id, callee_name=_text(name_node, source), edge_type="calls", file=file_path))
+        _collect_java_calls(child, caller_id, file_path, source, edges)
+
+
+# ── C++ ───────────────────────────────────────────────────────────────────────
+
+def _extract_cpp_doc(node: "Node", source: bytes) -> str:
+    """Extract leading // or /** doc comment before a C++ node."""
+    before = source[:node.start_byte]
+    # Try /** */ first
+    end_idx = before.rfind(b"*/")
+    if end_idx >= 0:
+        start_idx = before.rfind(b"/**", 0, end_idx + 2)
+        if start_idx >= 0 and not before[end_idx + 2:].strip():
+            content = before[start_idx + 3:end_idx].decode("utf-8", errors="replace")
+            lines = [line.strip().lstrip("* ") for line in content.splitlines()]
+            return " ".join(l for l in lines if l).strip()[:500]
+    # Fall back to leading // block
+    lines = before.decode("utf-8", errors="replace").splitlines()
+    doc_lines = []
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            doc_lines.insert(0, stripped[2:].strip())
+        elif stripped == "":
+            continue
+        else:
+            break
+    return " ".join(doc_lines).strip()[:500]
+
+
+def _parse_cpp(
+    root: "Node", file_path: str, module: str, source: bytes
+) -> tuple[list[FunctionNode], list[CallEdge]]:
+    """Extract functions and classes from a C++ source file."""
+    nodes: list[FunctionNode] = []
+    edges: list[CallEdge] = []
+    _visit_cpp(root, file_path, module, source, nodes, edges, parent_class=None)
+    return nodes, edges
+
+
+def _visit_cpp(
+    node: "Node",
+    file_path: str,
+    module: str,
+    source: bytes,
+    nodes: list[FunctionNode],
+    edges: list[CallEdge],
+    parent_class: str | None,
+) -> None:
+    """Recursively visit a C++ AST node."""
+    if node.type in ("class_specifier", "struct_specifier"):
+        name_node = next((c for c in node.children if c.type == "type_identifier"), None)
+        if name_node:
+            class_name = _text(name_node, source)
+            class_id = f"{module}.{class_name}"
+            sig = _node_text(node, source).split("\n")[0].strip()
+            nodes.append(FunctionNode(
+                id=class_id, name=class_name, file=file_path, module=module,
+                type="class", signature=sig, body="",
+                docstring=_extract_cpp_doc(node, source),
+                body_hash=hashlib.sha256(sig.encode()).hexdigest()[:16],
+            ))
+            for child in node.children:
+                _visit_cpp(child, file_path, module, source, nodes, edges, parent_class=class_name)
+        return
+
+    if node.type == "function_definition":
+        # C++ function names live inside the declarator chain
+        func_name = _cpp_func_name(node, source)
+        if not func_name:
+            return
+        qual = f"{parent_class}.{func_name}" if parent_class else func_name
+        func_id = f"{module}.{qual}"
+        func_text = _node_text(node, source)
+        body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        nodes.append(FunctionNode(
+            id=func_id, name=qual, file=file_path, module=module,
+            type="method" if parent_class else "function",
+            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            docstring=_extract_cpp_doc(node, source), body_hash=body_hash,
+        ))
+        _collect_cpp_calls(node, func_id, file_path, source, edges)
+        return
+
+    for child in node.children:
+        _visit_cpp(child, file_path, module, source, nodes, edges, parent_class=parent_class)
+
+
+def _cpp_func_name(node: "Node", source: bytes) -> str:
+    """Extract the function name from a C++ function_definition node."""
+    for child in node.children:
+        if child.type in ("function_declarator", "reference_declarator", "pointer_declarator"):
+            return _cpp_func_name(child, source)
+        if child.type == "qualified_identifier":
+            # e.g. MyClass::method → take the last segment
+            name_node = next((c for c in reversed(child.children) if c.type == "identifier"), None)
+            return _text(name_node, source) if name_node else ""
+        if child.type == "identifier":
+            return _text(child, source)
+    return ""
+
+
+def _collect_cpp_calls(
+    node: "Node", caller_id: str, file_path: str, source: bytes, edges: list[CallEdge]
+) -> None:
+    """Collect call_expression edges inside a C++ function body."""
+    for child in node.children:
+        if child.type == "function_definition":
+            continue
+        if child.type == "call_expression":
+            func_part = next((c for c in child.children if c.type in ("identifier", "field_expression", "qualified_identifier")), None)
+            if func_part:
+                name = _resolve_call_name(func_part, source)
+                if name:
+                    edges.append(CallEdge(caller_id=caller_id, callee_name=name, edge_type="calls", file=file_path))
+        _collect_cpp_calls(child, caller_id, file_path, source, edges)
+
+
+# ── C# ────────────────────────────────────────────────────────────────────────
+
+def _extract_csharp_doc(node: "Node", source: bytes) -> str:
+    """Extract leading /// XML-doc comment lines before a C# node."""
+    before = source[:node.start_byte]
+    lines = before.decode("utf-8", errors="replace").splitlines()
+    doc_lines = []
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped.startswith("///"):
+            doc_lines.insert(0, stripped[3:].strip())
+        elif stripped == "" or stripped.startswith("["):
+            continue
+        else:
+            break
+    return " ".join(doc_lines).strip()[:500]
+
+
+_CSHARP_CLASS_TYPES = {"class_declaration", "interface_declaration", "struct_declaration", "record_declaration"}
+_CSHARP_FUNC_TYPES = {"method_declaration", "constructor_declaration", "local_function_statement"}
+
+
+def _parse_csharp(
+    root: "Node", file_path: str, module: str, source: bytes
+) -> tuple[list[FunctionNode], list[CallEdge]]:
+    """Extract classes and methods from a C# source file."""
+    nodes: list[FunctionNode] = []
+    edges: list[CallEdge] = []
+    _visit_csharp(root, file_path, module, source, nodes, edges, parent_class=None)
+    return nodes, edges
+
+
+def _visit_csharp(
+    node: "Node",
+    file_path: str,
+    module: str,
+    source: bytes,
+    nodes: list[FunctionNode],
+    edges: list[CallEdge],
+    parent_class: str | None,
+) -> None:
+    """Recursively visit a C# AST node."""
+    if node.type in _CSHARP_CLASS_TYPES:
+        name_node = next((c for c in node.children if c.type == "identifier"), None)
+        if name_node:
+            class_name = _text(name_node, source)
+            class_id = f"{module}.{class_name}"
+            sig = _node_text(node, source).split("\n")[0].strip()
+            nodes.append(FunctionNode(
+                id=class_id, name=class_name, file=file_path, module=module,
+                type="class", signature=sig, body="",
+                docstring=_extract_csharp_doc(node, source),
+                body_hash=hashlib.sha256(sig.encode()).hexdigest()[:16],
+            ))
+            for child in node.children:
+                _visit_csharp(child, file_path, module, source, nodes, edges, parent_class=class_name)
+        return
+
+    if node.type in _CSHARP_FUNC_TYPES:
+        name_node = next((c for c in node.children if c.type == "identifier"), None)
+        if not name_node:
+            return
+        func_name = _text(name_node, source)
+        qual = f"{parent_class}.{func_name}" if parent_class else func_name
+        func_id = f"{module}.{qual}"
+        func_text = _node_text(node, source)
+        body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        nodes.append(FunctionNode(
+            id=func_id, name=qual, file=file_path, module=module,
+            type="method" if parent_class else "function",
+            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            docstring=_extract_csharp_doc(node, source), body_hash=body_hash,
+        ))
+        _collect_csharp_calls(node, func_id, file_path, source, edges)
+        return
+
+    for child in node.children:
+        _visit_csharp(child, file_path, module, source, nodes, edges, parent_class=parent_class)
+
+
+def _collect_csharp_calls(
+    node: "Node", caller_id: str, file_path: str, source: bytes, edges: list[CallEdge]
+) -> None:
+    """Collect invocation_expression edges inside a C# method body."""
+    for child in node.children:
+        if child.type in _CSHARP_FUNC_TYPES:
+            continue
+        if child.type == "invocation_expression":
+            func_part = next((c for c in child.children if c.type in ("identifier", "member_access_expression")), None)
+            if func_part:
+                name = _resolve_call_name(func_part, source)
+                if name:
+                    edges.append(CallEdge(caller_id=caller_id, callee_name=name, edge_type="calls", file=file_path))
+        _collect_csharp_calls(child, caller_id, file_path, source, edges)
+
+
+# ── Ruby ──────────────────────────────────────────────────────────────────────
+
+def _extract_ruby_doc(node: "Node", source: bytes) -> str:
+    """Extract leading # comment lines before a Ruby method or class."""
+    before = source[:node.start_byte]
+    lines = before.decode("utf-8", errors="replace").splitlines()
+    doc_lines = []
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            doc_lines.insert(0, stripped[1:].strip())
+        elif stripped == "":
+            continue
+        else:
+            break
+    return " ".join(doc_lines).strip()[:500]
+
+
+_RUBY_CLASS_TYPES = {"class", "module"}
+_RUBY_FUNC_TYPES = {"method", "singleton_method"}
+
+
+def _parse_ruby(
+    root: "Node", file_path: str, module: str, source: bytes
+) -> tuple[list[FunctionNode], list[CallEdge]]:
+    """Extract classes, modules, and methods from a Ruby source file."""
+    nodes: list[FunctionNode] = []
+    edges: list[CallEdge] = []
+    _visit_ruby(root, file_path, module, source, nodes, edges, parent_class=None)
+    return nodes, edges
+
+
+def _visit_ruby(
+    node: "Node",
+    file_path: str,
+    module: str,
+    source: bytes,
+    nodes: list[FunctionNode],
+    edges: list[CallEdge],
+    parent_class: str | None,
+) -> None:
+    """Recursively visit a Ruby AST node."""
+    if node.type in _RUBY_CLASS_TYPES:
+        name_node = next((c for c in node.children if c.type in ("constant", "scope_resolution")), None)
+        if name_node:
+            class_name = _text(name_node, source).split("::")[-1]
+            class_id = f"{module}.{class_name}"
+            sig = _node_text(node, source).split("\n")[0].strip()
+            nodes.append(FunctionNode(
+                id=class_id, name=class_name, file=file_path, module=module,
+                type="class", signature=sig, body="",
+                docstring=_extract_ruby_doc(node, source),
+                body_hash=hashlib.sha256(sig.encode()).hexdigest()[:16],
+            ))
+            for child in node.children:
+                _visit_ruby(child, file_path, module, source, nodes, edges, parent_class=class_name)
+        return
+
+    if node.type in _RUBY_FUNC_TYPES:
+        name_node = next((c for c in node.children if c.type == "identifier"), None)
+        if not name_node:
+            return
+        func_name = _text(name_node, source)
+        qual = f"{parent_class}.{func_name}" if parent_class else func_name
+        func_id = f"{module}.{qual}"
+        func_text = _node_text(node, source)
+        body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        nodes.append(FunctionNode(
+            id=func_id, name=qual, file=file_path, module=module,
+            type="method" if parent_class else "function",
+            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            docstring=_extract_ruby_doc(node, source), body_hash=body_hash,
+        ))
+        _collect_ruby_calls(node, func_id, file_path, source, edges)
+        return
+
+    for child in node.children:
+        _visit_ruby(child, file_path, module, source, nodes, edges, parent_class=parent_class)
+
+
+def _collect_ruby_calls(
+    node: "Node", caller_id: str, file_path: str, source: bytes, edges: list[CallEdge]
+) -> None:
+    """Collect call and method_call edges inside a Ruby method body."""
+    for child in node.children:
+        if child.type in _RUBY_FUNC_TYPES:
+            continue
+        if child.type in ("call", "method_call"):
+            name_node = next((c for c in child.children if c.type in ("identifier", "constant")), None)
+            if name_node:
+                edges.append(CallEdge(caller_id=caller_id, callee_name=_text(name_node, source), edge_type="calls", file=file_path))
+        _collect_ruby_calls(child, caller_id, file_path, source, edges)
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _text(node: "Node", source: bytes) -> str:
@@ -469,7 +1128,8 @@ def _path_to_module(file_path: str, project_root: str) -> str:
         rel = os.path.basename(file_path)
 
     rel = rel.replace("\\", "/")
-    for ext in (".py", ".ts", ".tsx", ".js", ".jsx"):
+    for ext in (".py", ".ts", ".tsx", ".js", ".jsx",
+               ".rs", ".go", ".java", ".cpp", ".cc", ".hpp", ".cs", ".rb"):
         if rel.endswith(ext):
             rel = rel[: -len(ext)]
             break
