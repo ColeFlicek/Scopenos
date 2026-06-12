@@ -1,3 +1,4 @@
+import asyncio
 from __future__ import annotations
 
 import os
@@ -57,18 +58,32 @@ class Indexer:
         all_nodes = []
         all_edges = []
         contents: dict[str, str] = {}
+        scip_used = False
 
-        print(f"[indexer] index_project: project={project_id!r} {len(source_files)} files under {path!r}")
-        for fp in source_files:
-            try:
-                content = Path(fp).read_text(encoding="utf-8", errors="replace")
-                nodes, edges = _parser.parse_file(fp, content, project_root=path)
-                all_nodes.extend(nodes)
-                all_edges.extend(edges)
-                contents[fp] = content
-                print(f"[indexer]   parsed {fp}: {len(nodes)} nodes, {len(edges)} edges")
-            except Exception as exc:
-                print(f"[indexer]   skipping {fp}: {exc}")
+        # Try SCIP indexer first (compiler-accurate, fault-tolerant, cross-repo).
+        # Falls back to tree-sitter if no SCIP indexer is installed for this language.
+        primary_lang = _detect_primary_language(source_files)
+        if primary_lang:
+            print(f"[indexer] index_project: trying SCIP for {primary_lang!r}")
+            scip_result = await _try_scip_index(path, project_id, primary_lang)
+            if scip_result is not None:
+                all_nodes, all_edges = scip_result
+                scip_used = True
+                print(f"[indexer] SCIP succeeded: {len(all_nodes)} nodes, {len(all_edges)} edges")
+
+        if not scip_used:
+            # Tree-sitter fallback: grammar-level parsing for all supported languages.
+            print(f"[indexer] index_project: project={project_id!r} {len(source_files)} files under {path!r}")
+            for fp in source_files:
+                try:
+                    content = Path(fp).read_text(encoding="utf-8", errors="replace")
+                    nodes, edges = _parser.parse_file(fp, content, project_root=path)
+                    all_nodes.extend(nodes)
+                    all_edges.extend(edges)
+                    contents[fp] = content
+                    print(f"[indexer]   parsed {fp}: {len(nodes)} nodes, {len(edges)} edges")
+                except Exception as exc:
+                    print(f"[indexer]   skipping {fp}: {exc}")
 
         # Snapshot existing summaries and body hashes before deletion.
         existing_summaries: dict[str, str] = {}
@@ -118,6 +133,7 @@ class Indexer:
         result = {
             "status": "ok",
             "project_id": project_id,
+            "structural_layer": "scip" if scip_used else "tree-sitter",
             "files_indexed": len(contents),
             "functions_indexed": len(all_nodes),
             "functions_reembedded": len(chunks),
@@ -498,6 +514,109 @@ class Indexer:
             "embedded_with_docs": embed_stats["docs"],
             "embedded_large_fallback": embed_stats["fallback"],
         }
+
+
+async def _try_scip_index(
+    project_path: str,
+    project_id: str,
+    language: str,
+) -> tuple[list, list] | None:
+    """Attempt to run a SCIP indexer for the detected language.
+
+    Returns (nodes, edges) on success, or None if the indexer is not installed
+    or fails — caller falls back to tree-sitter in that case.
+
+    Supported indexers (must be installed separately):
+      Python     — scip-python  (pip install scip-python)
+      TypeScript — scip-typescript  (npm install -g @sourcegraph/scip-typescript)
+    """
+    import subprocess
+    import tempfile
+
+    cmd_map = {
+        "python": ["scip-python", "index", "--project-name", project_id, "."],
+        "typescript": ["scip-typescript", "index", "--infer-tsconfig"],
+        "javascript": ["scip-typescript", "index", "--infer-tsconfig"],
+    }
+    cmd = cmd_map.get(language)
+    if not cmd:
+        return None
+
+    # Check the indexer binary exists before attempting
+    try:
+        check = await asyncio.create_subprocess_exec(
+            cmd[0], "--version",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await check.wait()
+        if check.returncode not in (0, 1):  # some tools return 1 for --version
+            return None
+    except FileNotFoundError:
+        return None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        scip_out = os.path.join(tmpdir, "index.scip.json")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=project_path,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            if proc.returncode != 0:
+                print(f"[indexer] scip indexer exited {proc.returncode}: {stderr.decode()[:200]}")
+                return None
+        except (asyncio.TimeoutError, Exception) as exc:
+            print(f"[indexer] scip indexer failed: {exc}")
+            return None
+
+        # scip-python outputs index.scip; convert to JSON form for ScipImporter
+        scip_bin = os.path.join(project_path, "index.scip")
+        if os.path.exists(scip_bin):
+            try:
+                conv = await asyncio.create_subprocess_exec(
+                    "scip", "convert", "--from", scip_bin, "--to", "json",
+                    "--output", scip_out,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(conv.communicate(), timeout=30)
+                # Clean up the binary .scip file
+                os.unlink(scip_bin)
+            except Exception as exc:
+                print(f"[indexer] scip convert failed: {exc}")
+                return None
+        elif not os.path.exists(scip_out):
+            print("[indexer] scip indexer produced no output file")
+            return None
+
+        from .scip_import import ScipImporter
+        try:
+            importer = ScipImporter(project_root=project_path)
+            nodes, edges = importer.parse(scip_out)
+            print(f"[indexer] SCIP index: {len(nodes)} symbols, {len(edges)} edges")
+            return nodes, edges
+        except Exception as exc:
+            print(f"[indexer] ScipImporter failed: {exc}")
+            return None
+
+
+def _detect_primary_language(source_files: list[str]) -> str:
+    """Return the dominant language in a project based on file extension counts."""
+    from collections import Counter
+    counts: Counter = Counter(Path(f).suffix.lower() for f in source_files)
+    priority = [".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".rs", ".go", ".cpp", ".cs", ".rb"]
+    for ext in priority:
+        if counts.get(ext, 0) > 0:
+            lang_map = {
+                ".py": "python", ".ts": "typescript", ".tsx": "typescript",
+                ".js": "javascript", ".jsx": "javascript", ".java": "java",
+                ".rs": "rust", ".go": "go", ".cpp": "cpp", ".cs": "csharp", ".rb": "ruby",
+            }
+            return lang_map.get(ext, "")
+    return ""
 
 
 def _collect_source_files(root: str) -> list[str]:

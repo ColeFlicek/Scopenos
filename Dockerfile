@@ -13,6 +13,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g typescript-language-server typescript 2>/dev/null || true
 RUN pip install --no-cache-dir pyright || true
 
+# Install SCIP indexers (primary structural layer)
+# scip-python: Python compiler-accurate call graph
+# @sourcegraph/scip-typescript: TypeScript/JS compiler-accurate call graph
+# scip CLI: converts .scip binary → JSON for ScipImporter
+RUN pip install --no-cache-dir scip-python || true
+RUN npm install -g @sourcegraph/scip-typescript 2>/dev/null || true
+RUN npm install -g @sourcegraph/scip 2>/dev/null || true
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

@@ -53,8 +53,15 @@ async def _get_services() -> dict[str, Any]:
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     """FastMCP lifespan — initialize all services on startup and close DB on shutdown."""
-    await _get_services()
+    from .file_watcher import start_file_watcher
+    svcs = await _get_services()
+    watcher_task = await start_file_watcher(svcs["db"], svcs["indexer"])
     yield
+    watcher_task.cancel()
+    try:
+        await watcher_task
+    except asyncio.CancelledError:
+        pass
     if _services.get("db"):
         await _services["db"].close()
 
@@ -893,33 +900,23 @@ async def http_list_violations(request: Request) -> JSONResponse:
 
 @mcp.tool()
 async def get_function_context(
-    name: str,
+    query: str,
     project_id: str = "",
     depth: int = 2,
 ) -> str:
     """
-    [EXECUTION TOOL — accepts a symbol name]
+    [PRIMARY ENTRY POINT — accepts natural language OR a symbol name]
 
-    One-call comprehensive context for a function. Chains call graph traversal,
-    decision memory, and semantic similarity into a single enriched payload.
+    One-call unified context pipeline. Runs semantic search to find the right
+    function, then chains call graph traversal and decision memory into a single
+    enriched payload. The agent never needs to call individual layer tools.
 
-    Replaces the common sequence of:
-      get_callers + get_callees + get_impact_radius + get_decision_history + query_similar_functions
+    Pipeline (Step 1: semantic search → Step 2: call graph → Step 3: decisions).
 
-    Use this at Tier 2 after get_project_home — when you know which function you
-    are about to touch and need the full picture before editing.
-
-    name: function name, qualified name (module.func), or full ID (module.Class.method).
+    query: natural language ("state transition function") OR a known symbol name.
+           Semantic search runs first; symbol lookup is the fallback.
     project_id: limit to a specific project. If omitted, searches all projects.
-    depth: call graph traversal depth for impact radius (default 2).
-
-    Returns a single dict containing:
-      - node: metadata (signature, docstring, file, module, type)
-      - callers: list of functions that call this one
-      - callees: list of functions this one calls
-      - impact_radius: functions affected by a change, with traversal depth
-      - decision_history: all architectural/design/implementation decisions linked here
-      - similar_functions: top-5 semantically similar functions
+    depth: call graph traversal depth (default 2).
     """
     import asyncio as _asyncio
     svcs = await _get_services()
@@ -929,11 +926,32 @@ async def get_function_context(
 
     pid = project_id or None
 
-    # Step 1: resolve the node
-    nodes = await db.find_node_by_name(name, pid)
-    if not nodes:
-        return json.dumps({"error": f"No function found matching '{name}'."})
-    node = nodes[0]
+    # Step 1: Semantic search — primary path for natural language queries.
+    # Embed the query and find the best matching function via KNN vector search.
+    # Fall back to exact/fuzzy symbol lookup when embeddings aren't available.
+    node = None
+    semantic_hits = await embeddings.query_similar(query, top_k=5, project_id=pid)
+    if semantic_hits:
+        top_id = semantic_hits[0].get("id", "")
+        name_hits = await db.find_node_by_name(top_id, pid)
+        if name_hits:
+            node = name_hits[0]
+
+    if node is None:
+        # Fallback: exact/fuzzy symbol name lookup (handles precise symbol queries
+        # and projects with no embeddings yet)
+        name_hits = await db.find_node_by_name(query, pid)
+        if name_hits:
+            node = name_hits[0]
+
+    if node is None:
+        return json.dumps({
+            "error": (
+                f"No function found matching '{query}'. "
+                "Try a more specific description or call index_project first."
+            )
+        })
+
     node_id = node["id"]
     node_project = node.get("project_id", project_id)
 
@@ -981,6 +999,35 @@ async def get_function_context(
         "decision_history": _safe(history, []),
         "similar_functions": similar_clean,
     })
+
+
+
+@mcp.tool()
+async def find_dependents(
+    symbol: str,
+    project_id: str = "",
+    depth: int = 3,
+) -> str:
+    """
+    [EXECUTION TOOL — accepts a symbol name]
+
+    Return everything that depends on the given symbol — all callers and their
+    callers, up to `depth` levels. Answers the question: "if I change this, what
+    breaks?"
+
+    This is the task-oriented complement to get_function_context. Use it when you
+    already know the symbol and want to understand the blast radius before editing.
+
+    symbol: function name, qualified name, or full ID.
+    project_id: limit to a specific project. If omitted, searches all projects.
+    depth: how many levels of dependents to traverse (default 3).
+
+    Returns a list of dependent symbols with their distance from the origin,
+    file location, and signature — ordered nearest-first.
+    """
+    svcs = await _get_services()
+    result = await svcs["db"].get_impact_radius(symbol, depth, project_id or None)
+    return json.dumps(result)
 
 
 # ── LSIF / SCIP ingestion ─────────────────────────────────────────────────────
