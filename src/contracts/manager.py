@@ -8,6 +8,8 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
+from .rule import ContractRule
+
 DRAFT_MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -193,11 +195,11 @@ Return ONLY the JSON object, no markdown, no explanation."""
 
         violations: list[dict] = []
         for contract in active:
-            structural_expr = json.loads(contract["structural_expression"])
+            rule = ContractRule.from_expr(json.loads(contract["structural_expression"]))
             for fid in function_ids:
                 # Structural check for this specific function.
                 viols = await self._check_structural_for_function(
-                    contract["id"], project_id, fid, structural_expr
+                    contract["id"], project_id, fid, rule
                 )
                 violations.extend(viols)
 
@@ -237,115 +239,75 @@ Return ONLY the JSON object, no markdown, no explanation."""
         self, contract_id: str, project_id: str, expr: dict
     ) -> list[dict]:
         """Scan all project functions for structural violations via call-graph traversal."""
-        prohibited = [p.lower() for p in expr.get("prohibited_patterns", [])]
-        required_callee = expr.get("required_callee")
-        scope_exclusions = [s.lower() for s in expr.get("scope_exclusions", [])]
-        missing_metadata = expr.get("missing_metadata", [])
+        rule = ContractRule.from_expr(expr)
+        violations: list[dict] = []
 
-        violations = []
-
-        # ── Missing-metadata check (e.g. docstring required on all functions) ──
-        if "docstring" in missing_metadata:
-            exempt_names = {s.lower() for s in scope_exclusions}
-            async with self._db._db.execute(
-                """SELECT id, name FROM nodes
-                   WHERE project_id = ?
-                   AND type NOT IN ('class', 'ClassDef')
-                   AND (docstring = '' OR docstring IS NULL)""",
-                (project_id,),
-            ) as cur:
-                rows = await cur.fetchall()
+        if rule.needs_metadata_check():
+            rows = await self._db.get_nodes_missing_docstring(
+                project_id, exclude_names=rule.excluded_names()
+            )
             for row in rows:
-                fn_id, fn_name = row[0], row[1]
-                bare = fn_name.split(".")[-1].lower()
-                if bare in exempt_names:
-                    continue
                 await self._db.log_violation(
                     contract_id=contract_id,
-                    function_id=fn_id,
+                    function_id=row["id"],
                     project_id=project_id,
                     violation_type="missing_docstring",
                     score=1.0,
                 )
                 violations.append({
                     "contract_id": contract_id,
-                    "function_id": fn_id,
+                    "function_id": row["id"],
                     "project_id": project_id,
                     "violation_type": "missing_docstring",
                     "score": 1.0,
                 })
 
-        if not prohibited and not required_callee:
+        if not rule.needs_call_graph_check():
             return violations
 
-        # ── Call-graph structural check ────────────────────────────────────────
-        async with self._db._db.execute(
-            "SELECT DISTINCT caller_id FROM edges WHERE project_id = ?", (project_id,)
-        ) as cur:
-            caller_ids = [row[0] for row in await cur.fetchall()]
-
+        caller_ids = await self._db.get_all_caller_ids(project_id)
         for caller_id in caller_ids:
-            if any(caller_id.lower().startswith(ex) for ex in scope_exclusions):
+            if rule.is_excluded(caller_id):
                 continue
             viols = await self._check_structural_for_function(
-                contract_id, project_id, caller_id, expr
+                contract_id, project_id, caller_id, rule
             )
             violations.extend(viols)
         return violations
 
     async def _check_structural_for_function(
-        self, contract_id: str, project_id: str, function_id: str, expr: dict
+        self,
+        contract_id: str,
+        project_id: str,
+        function_id: str,
+        rule: ContractRule,
     ) -> list[dict]:
-        """Check one function against a contract's prohibited patterns and required callee."""
-        prohibited = [p.lower() for p in expr.get("prohibited_patterns", [])]
-        required_callee = expr.get("required_callee")
-        scope_exclusions = [s.lower() for s in expr.get("scope_exclusions", [])]
-
-        if any(function_id.lower().startswith(ex) for ex in scope_exclusions):
+        """Check one function against a ContractRule using the canonical get_callees query."""
+        if rule.is_excluded(function_id) or not rule.needs_call_graph_check():
             return []
 
-        if not prohibited and not required_callee:
+        callees = await self._db.get_callees(function_id, project_id)
+        callee_ids = [c["id"] for c in callees]
+        matching = rule.find_prohibited_callees(callee_ids)
+
+        if not matching:
             return []
 
-        # Get all callees of this function.
-        async with self._db._db.execute(
-            "SELECT callee_id FROM edges WHERE caller_id = ? AND project_id = ?",
-            (function_id, project_id),
-        ) as cur:
-            callee_ids = [row[0] for row in await cur.fetchall()]
-
-        violations = []
-        callee_names = [c.split(".")[-1].lower() for c in callee_ids]
-
-        for pattern in prohibited:
-            matching_callees = [
-                c for c, name in zip(callee_ids, callee_names)
-                if name == pattern or name.startswith(pattern + "_") or name.endswith("_" + pattern)
-            ]
-            # If the required callee is also present, it's compliant.
-            if required_callee:
-                uses_required = any(
-                    required_callee.lower() in c.lower() for c in callee_ids
-                )
-                if uses_required:
-                    continue  # correct path used
-            if matching_callees:
-                await self._db.log_violation(
-                    contract_id=contract_id,
-                    function_id=function_id,
-                    project_id=project_id,
-                    violation_type="structural",
-                    score=1.0,
-                )
-                violations.append({
-                    "contract_id": contract_id,
-                    "function_id": function_id,
-                    "project_id": project_id,
-                    "violation_type": "structural",
-                    "score": 1.0,
-                    "matching_callees": matching_callees,
-                })
-        return violations
+        await self._db.log_violation(
+            contract_id=contract_id,
+            function_id=function_id,
+            project_id=project_id,
+            violation_type="structural",
+            score=1.0,
+        )
+        return [{
+            "contract_id": contract_id,
+            "function_id": function_id,
+            "project_id": project_id,
+            "violation_type": "structural",
+            "score": 1.0,
+            "matching_callees": matching,
+        }]
 
     # ── Helpers ────────────────────────────────────────────────────────────
 

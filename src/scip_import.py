@@ -52,11 +52,25 @@ class ScipImporter:
     def _extract(
         self, data: dict
     ) -> tuple[list[FunctionNode], list[CallEdge]]:
-        """Walk the SCIP document list and produce FunctionNode / CallEdge records."""
+        """Walk the SCIP document list and produce FunctionNode / CallEdge records.
+
+        Two-pass: first collect all internal symbol IDs (defined in project files),
+        then create external FunctionNodes for referenced symbols outside the project.
+        Internal nodes have is_external=False; external library stubs is_external=True.
+        """
         nodes: list[FunctionNode] = []
         edges: list[CallEdge] = []
         seen: set[str] = set()
 
+        # Pass 1: collect symbol IDs defined in project documents.
+        internal_symbols: set[str] = {
+            sym.get("symbol", "")
+            for doc in data.get("documents", [])
+            for sym in doc.get("symbols", [])
+            if sym.get("symbol")
+        }
+
+        # Pass 2: build nodes and edges.
         for doc in data.get("documents", []):
             rel_path = doc.get("relativePath", "")
             file_path = (
@@ -86,9 +100,10 @@ class ScipImporter:
                     continue
                 seen.add(node_id)
 
-                body_hash = hashlib.sha256(
-                    f"{file_path}:{sym_id}".encode()
-                ).hexdigest()[:16]
+                # Hash documentation — catches signature/docstring changes.
+                # Tree-sitter provides content-based hashes for internal nodes.
+                hash_input = doc_text if doc_text else f"{file_path}:{sym_id}"
+                body_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
 
                 nodes.append(FunctionNode(
                     id=node_id,
@@ -100,24 +115,64 @@ class ScipImporter:
                     body="",
                     docstring=docstring,
                     body_hash=body_hash,
+                    is_external=False,
                 ))
 
-                # Relationship edges: isReference means this symbol references another
                 for rel in sym.get("relationships", []):
-                    if rel.get("isReference") or rel.get("isImplementation"):
-                        callee_sym = rel.get("symbol", "")
-                        if callee_sym:
-                            edges.append(CallEdge(
-                                caller_id=node_id,
-                                callee_name=_scip_name(callee_sym),
-                                edge_type="calls",
-                                file=file_path,
+                    if not (rel.get("isReference") or rel.get("isImplementation")):
+                        continue
+                    callee_sym = rel.get("symbol", "")
+                    if not callee_sym:
+                        continue
+
+                    if callee_sym in internal_symbols:
+                        edges.append(CallEdge(
+                            caller_id=node_id,
+                            callee_name=_scip_name(callee_sym),
+                            edge_type="reference",
+                            file=file_path,
+                        ))
+                    else:
+                        # External symbol — create a stub node, link by exact ID.
+                        lib = _library_name(callee_sym)
+                        ext_id = f"external.{lib}.{_norm(callee_sym)}"
+                        if ext_id not in seen:
+                            seen.add(ext_id)
+                            nodes.append(FunctionNode(
+                                id=ext_id,
+                                name=_scip_name(callee_sym),
+                                file=f"<{lib}>",
+                                module=f"external.{lib}",
+                                type="function",
+                                signature=callee_sym[:400],
+                                body="",
+                                docstring="",
+                                body_hash=hashlib.sha256(callee_sym.encode()).hexdigest()[:16],
+                                is_external=True,
                             ))
+                        edges.append(CallEdge(
+                            caller_id=node_id,
+                            callee_name=ext_id,
+                            edge_type="reference",
+                            file=file_path,
+                        ))
 
         return nodes, edges
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _library_name(symbol: str) -> str:
+    """Extract the library/package name from a SCIP symbol string.
+
+    SCIP symbols follow: scip-{lang} {lang} {package} {version} {path}:{descriptor}
+    The package name is the third space-separated token.
+    """
+    parts = symbol.split(" ")
+    if len(parts) >= 3:
+        return parts[2] or "external"
+    return "external"
+
 
 def _scip_name(symbol: str) -> str:
     """Extract the bare identifier from a SCIP symbol string.

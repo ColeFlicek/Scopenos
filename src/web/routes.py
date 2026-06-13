@@ -36,8 +36,8 @@ def register_routes(mcp, get_services) -> None:
 
         try:
             svcs = await get_services()
-            db = svcs["db"]
-            embeddings = svcs["embeddings"]
+            db = svcs.db
+            embeddings = svcs.embeddings
 
             # ── Call graph ─────────────────────────────────────────────────
             async with db._db.execute("SELECT COUNT(*) FROM nodes") as cur:
@@ -120,8 +120,8 @@ def register_routes(mcp, get_services) -> None:
         result: dict = {}
         try:
             svcs = await get_services()
-            db = svcs["db"]
-            embeddings = svcs["embeddings"]
+            db = svcs.db
+            embeddings = svcs.embeddings
 
             try:
                 async with db._db.execute("SELECT COUNT(*) FROM nodes") as cur:

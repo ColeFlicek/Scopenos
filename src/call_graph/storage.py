@@ -8,6 +8,7 @@ from typing import Any
 
 import aiosqlite
 
+from .models import GraphData
 from .parser import CallEdge, FunctionNode
 
 # DDL for fresh installs — uses multi-project schema from the start.
@@ -133,6 +134,17 @@ CREATE TABLE IF NOT EXISTS project_home_snapshots (
     hashes       TEXT NOT NULL DEFAULT '{}',
     captured_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS dependency_fingerprints (
+    id               TEXT PRIMARY KEY,
+    project_id       TEXT NOT NULL,
+    captured_at      TEXT NOT NULL,
+    fingerprint_hash TEXT NOT NULL,
+    snapshot_json    TEXT NOT NULL,
+    diff_json        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_depfp_project ON dependency_fingerprints(project_id, captured_at);
 """
 
 
@@ -173,6 +185,11 @@ class CallGraphDB:
         if "embedding_model" not in cols:
             await self._db.execute(
                 "ALTER TABLE nodes ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''"
+            )
+            await self._db.commit()
+        if "is_external" not in cols:
+            await self._db.execute(
+                "ALTER TABLE nodes ADD COLUMN is_external INTEGER NOT NULL DEFAULT 0"
             )
             await self._db.commit()
 
@@ -307,6 +324,44 @@ class CallGraphDB:
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
+    async def delete_project(self, project_id: str) -> dict:
+        """Delete all data for a project: nodes, edges, decisions, snapshots, violations."""
+        import json
+        async with self._db.execute(
+            "SELECT COUNT(*) FROM nodes WHERE project_id = ?", (project_id,)
+        ) as cur:
+            node_count = (await cur.fetchone())[0]
+        async with self._db.execute(
+            "SELECT COUNT(*) FROM edges WHERE project_id = ?", (project_id,)
+        ) as cur:
+            edge_count = (await cur.fetchone())[0]
+
+        await self._db.execute("DELETE FROM nodes WHERE project_id = ?", (project_id,))
+        await self._db.execute("DELETE FROM edges WHERE project_id = ?", (project_id,))
+        await self._db.execute("DELETE FROM decisions WHERE project_id = ?", (project_id,))
+        await self._db.execute("DELETE FROM contract_violations WHERE project_id = ?", (project_id,))
+        await self._db.execute("DELETE FROM agent_improvements WHERE project_id = ?", (project_id,))
+        await self._db.execute("DELETE FROM project_home_snapshots WHERE project_id = ?", (project_id,))
+
+        # Remove project_id from any contracts that reference it.
+        async with self._db.execute(
+            "SELECT id, project_ids FROM contracts", ()
+        ) as cur:
+            contracts = await cur.fetchall()
+        for row in contracts:
+            cid, pids_json = row
+            pids = json.loads(pids_json or "[]")
+            if project_id in pids:
+                pids.remove(project_id)
+                await self._db.execute(
+                    "UPDATE contracts SET project_ids = ? WHERE id = ?",
+                    (json.dumps(pids), cid),
+                )
+
+        await self._db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        await self._db.commit()
+        return {"project_id": project_id, "nodes_deleted": node_count, "edges_deleted": edge_count}
+
     # ── Nodes ──────────────────────────────────────────────────────────────
 
     async def upsert_nodes(self, nodes: list[FunctionNode], project_id: str) -> None:
@@ -314,17 +369,18 @@ class CallGraphDB:
         import json
         rows = [
             (project_id, n.id, n.file, n.module, n.type, n.name,
-             n.signature, n.docstring, n.body_hash, json.dumps(n.decorators))
+             n.signature, n.docstring, n.body_hash, json.dumps(n.decorators),
+             1 if n.is_external else 0)
             for n in nodes
         ]
         await self._db.executemany(
-            """INSERT INTO nodes(project_id,id,file,module,type,name,signature,docstring,summary,body_hash,decorators)
-               VALUES(?,?,?,?,?,?,?,?,'',?,?)
+            """INSERT INTO nodes(project_id,id,file,module,type,name,signature,docstring,summary,body_hash,decorators,is_external)
+               VALUES(?,?,?,?,?,?,?,?,'',?,?,?)
                ON CONFLICT(project_id,id) DO UPDATE SET
                    file=excluded.file, module=excluded.module, type=excluded.type,
                    name=excluded.name, signature=excluded.signature,
                    docstring=excluded.docstring, body_hash=excluded.body_hash,
-                   decorators=excluded.decorators""",
+                   decorators=excluded.decorators, is_external=excluded.is_external""",
             rows,
         )
         await self._db.commit()
@@ -348,6 +404,44 @@ class CallGraphDB:
             [(s, nid, project_id) for nid, s in summaries.items()],
         )
         await self._db.commit()
+
+    async def commit(self) -> None:
+        """Commit the current transaction."""
+        await self._db.commit()
+
+    async def update_node_embedding_meta(
+        self, node_id: str, summary: str | None, model: str, project_id: str
+    ) -> None:
+        """Write embedding model (and optionally summary) back to a node row."""
+        if summary is not None:
+            await self._db.execute(
+                "UPDATE nodes SET summary = ?, embedding_model = ? WHERE id = ? AND project_id = ?",
+                (summary, model, node_id, project_id),
+            )
+        else:
+            await self._db.execute(
+                "UPDATE nodes SET embedding_model = ? WHERE id = ? AND project_id = ?",
+                (model, node_id, project_id),
+            )
+
+    async def get_nodes_needing_enrichment(
+        self, project_id: str, limit: int = 500
+    ) -> list[dict]:
+        """Return nodes still on the large-model fallback that need LLM enrichment."""
+        async with self._db.execute(
+            "SELECT id, name, signature, docstring, file FROM nodes "
+            "WHERE project_id = ? AND is_external = 0 AND embedding_model = 'text-embedding-3-large' LIMIT ?",
+            (project_id, limit),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def count_nodes_by_model(self, project_id: str, model: str) -> int:
+        """Count how many nodes in a project use a specific embedding model."""
+        async with self._db.execute(
+            "SELECT COUNT(*) FROM nodes WHERE project_id = ? AND embedding_model = ?",
+            (project_id, model),
+        ) as cur:
+            return (await cur.fetchone())[0]
 
     async def get_all_nodes(self, project_id: str) -> list[dict]:
         """Return all nodes for a project including summary and docstring fields."""
@@ -458,7 +552,7 @@ class CallGraphDB:
         for t in targets:
             async with self._db.execute(
                 f"""
-                SELECT n.id, n.name, n.file, n.module, n.signature, n.project_id, e.edge_type
+                SELECT n.id, n.name, n.file, n.module, n.signature, n.project_id, n.is_external, e.edge_type
                 FROM edges e
                 JOIN nodes n ON n.id = e.caller_id AND n.project_id = e.project_id
                 WHERE e.callee_id = ?{pid_clause}
@@ -485,7 +579,7 @@ class CallGraphDB:
         for t in targets:
             async with self._db.execute(
                 f"""
-                SELECT n.id, n.name, n.file, n.module, n.signature, n.project_id, e.edge_type
+                SELECT n.id, n.name, n.file, n.module, n.signature, n.project_id, n.is_external, e.edge_type
                 FROM edges e
                 JOIN nodes n ON n.id = e.callee_id AND n.project_id = e.project_id
                 WHERE e.caller_id = ?{pid_clause}
@@ -548,7 +642,7 @@ class CallGraphDB:
         return results
 
     async def get_all_node_ids(self, project_id: str | None = None) -> set[str]:
-        """Return the set of all node IDs for a project, or all projects if unscoped."""
+        """Return all node IDs (internal + external) for edge resolution."""
         if project_id:
             async with self._db.execute(
                 "SELECT id FROM nodes WHERE project_id=?", (project_id,)
@@ -556,6 +650,178 @@ class CallGraphDB:
                 return {row[0] for row in await cur.fetchall()}
         async with self._db.execute("SELECT id FROM nodes") as cur:
             return {row[0] for row in await cur.fetchall()}
+
+    async def get_internal_node_ids(self, project_id: str) -> set[str]:
+        """Return only project-owned node IDs — excludes external library nodes."""
+        async with self._db.execute(
+            "SELECT id FROM nodes WHERE project_id = ? AND is_external = 0", (project_id,)
+        ) as cur:
+            return {row[0] for row in await cur.fetchall()}
+
+    async def list_external_dependencies(self, project_id: str) -> list[dict]:
+        """
+        Return all external library nodes for a project, grouped by library.
+        Includes caller_count — how many internal functions reference each symbol.
+        """
+        async with self._db.execute(
+            """SELECT n.id, n.name, n.module, n.signature,
+                      COUNT(DISTINCT e.caller_id) AS caller_count
+               FROM nodes n
+               LEFT JOIN edges e ON e.callee_id = n.id AND e.project_id = n.project_id
+               WHERE n.project_id = ? AND n.is_external = 1
+               GROUP BY n.id
+               ORDER BY n.module, caller_count DESC""",
+            (project_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+
+        from collections import defaultdict
+        grouped: dict[str, list] = defaultdict(list)
+        for row in rows:
+            node_id, name, module, signature, caller_count = row
+            library = module.replace("external.", "", 1).split(".")[0]
+            grouped[library].append({
+                "id": node_id,
+                "name": name,
+                "signature": signature[:120],
+                "caller_count": caller_count,
+            })
+
+        return [
+            {"library": lib, "symbol_count": len(syms),
+             "symbols": sorted(syms, key=lambda s: -s["caller_count"])}
+            for lib, syms in sorted(grouped.items())
+        ]
+
+    async def save_dependency_fingerprint(
+        self,
+        project_id: str,
+        fp_id: str,
+        captured_at: str,
+        fingerprint_hash: str,
+        snapshot_json: str,
+        diff_json: str | None,
+    ) -> None:
+        await self._db.execute(
+            """INSERT INTO dependency_fingerprints
+               (id, project_id, captured_at, fingerprint_hash, snapshot_json, diff_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (fp_id, project_id, captured_at, fingerprint_hash, snapshot_json, diff_json),
+        )
+        await self._db.commit()
+
+    async def get_latest_dependency_fingerprint(
+        self, project_id: str
+    ) -> dict | None:
+        async with self._db.execute(
+            """SELECT id, project_id, captured_at, fingerprint_hash, snapshot_json, diff_json
+               FROM dependency_fingerprints
+               WHERE project_id = ?
+               ORDER BY captured_at DESC
+               LIMIT 1""",
+            (project_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list_dependency_fingerprint_history(
+        self, project_id: str, limit: int = 50
+    ) -> list[dict]:
+        """Summary rows — no snapshot_json to keep response size small."""
+        async with self._db.execute(
+            """SELECT id, captured_at, fingerprint_hash,
+                      json_extract(diff_json, '$.removed_symbols')  AS removed_json,
+                      json_extract(diff_json, '$.added_symbols')    AS added_json,
+                      json_extract(diff_json, '$.changed_symbols')  AS changed_json,
+                      json_extract(diff_json, '$.version_changes')  AS version_json
+               FROM dependency_fingerprints
+               WHERE project_id = ?
+               ORDER BY captured_at DESC
+               LIMIT ?""",
+            (project_id, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+
+        import json as _json
+        result = []
+        for row in rows:
+            removed  = _json.loads(row["removed_json"]  or "[]")
+            added    = _json.loads(row["added_json"]    or "[]")
+            changed  = _json.loads(row["changed_json"]  or "[]")
+            versions = _json.loads(row["version_json"]  or "[]")
+            entry = {
+                "id": row["id"],
+                "captured_at": row["captured_at"],
+                "fingerprint_hash": row["fingerprint_hash"],
+                "removed_count": len(removed),
+                "added_count":   len(added),
+                "changed_count": len(changed),
+                "version_change_count": len(versions),
+            }
+            if removed:
+                entry["removed_symbols"] = [s["id"] for s in removed]
+            if changed:
+                entry["changed_symbols"] = [s["id"] for s in changed]
+            if versions:
+                entry["version_changes"] = versions
+            result.append(entry)
+        return result
+
+    async def get_dependency_fingerprint_by_id(
+        self, fingerprint_id: str
+    ) -> dict | None:
+        async with self._db.execute(
+            """SELECT id, project_id, captured_at, fingerprint_hash, snapshot_json, diff_json
+               FROM dependency_fingerprints WHERE id = ?""",
+            (fingerprint_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_nodes_missing_docstring(
+        self, project_id: str, exclude_names: set[str] | None = None
+    ) -> list[dict]:
+        """Return function nodes without a docstring, for PRESENCE-rule contract checking."""
+        async with self._db.execute(
+            """SELECT id, name FROM nodes
+               WHERE project_id = ?
+               AND is_external = 0
+               AND type NOT IN ('class', 'ClassDef')
+               AND (docstring = '' OR docstring IS NULL)""",
+            (project_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        if not exclude_names:
+            return [{"id": r[0], "name": r[1]} for r in rows]
+        return [
+            {"id": r[0], "name": r[1]} for r in rows
+            if r[1].split(".")[-1].lower() not in exclude_names
+        ]
+
+    async def get_all_caller_ids(self, project_id: str) -> list[str]:
+        """Return the distinct set of caller function IDs for a project."""
+        async with self._db.execute(
+            "SELECT DISTINCT caller_id FROM edges WHERE project_id = ?", (project_id,)
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
+
+    async def get_nodes_with_null_content(self, project_id: str) -> list[str]:
+        """
+        Return IDs of nodes that have been embedded but from empty content —
+        no summary and no docstring. Their vectors encode raw code tokens only,
+        not semantics. These are candidates for enrich_summaries.
+        """
+        async with self._db.execute(
+            """SELECT id FROM nodes
+               WHERE project_id = ?
+               AND is_external = 0
+               AND embedding_model != ''
+               AND summary = ''
+               AND docstring = ''
+               AND type NOT IN ('class', 'ClassDef')""",
+            (project_id,),
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
 
     # ── Decision helpers ───────────────────────────────────────────────────
 
@@ -866,31 +1132,17 @@ class CallGraphDB:
 
     # ── Project Home ───────────────────────────────────────────────────────
 
-    async def get_project_home_data(self, project_id: str) -> dict:
-        """
-        Compute a full architectural intelligence snapshot for one project.
-        All SQL — no LLM calls. Used by get_project_home MCP tool and web UI.
-        """
+    async def fetch_graph_data(self, project_id: str) -> GraphData:
+        """Fetch all raw graph data for one project — no analysis, pure SQL."""
         db = self._db
 
-        # ── Subsystems: group nodes by first two module segments ─────────
         async with db.execute(
-            "SELECT id, name, type, module, summary, docstring, body_hash FROM nodes WHERE project_id = ?",
+            """SELECT id, name, type, module, summary, docstring, body_hash, decorators
+               FROM nodes WHERE project_id = ? AND is_external = 0""",
             (project_id,),
         ) as cur:
-            all_nodes = [dict(r) for r in await cur.fetchall()]
+            nodes = [dict(r) for r in await cur.fetchall()]
 
-        def _subsystem(node_id: str) -> str:
-            """Group a node by the first two dot-segments of its ID."""
-            parts = node_id.split(".")
-            return ".".join(parts[:2]) if len(parts) >= 2 else parts[0]
-
-        subsystem_nodes: dict[str, list[dict]] = {}
-        for n in all_nodes:
-            s = _subsystem(n["id"])
-            subsystem_nodes.setdefault(s, []).append(n)
-
-        # ── Caller counts for all nodes (for chokepoints + risk) ─────────
         async with db.execute(
             """SELECT callee_id, COUNT(DISTINCT caller_id) AS cnt
                FROM edges WHERE project_id = ?
@@ -899,14 +1151,12 @@ class CallGraphDB:
         ) as cur:
             caller_counts: dict[str, int] = {r[0]: r[1] for r in await cur.fetchall()}
 
-        # ── All edges (for connections between subsystems) ────────────────
         async with db.execute(
             "SELECT caller_id, callee_id FROM edges WHERE project_id = ?",
             (project_id,),
         ) as cur:
-            all_edges = await cur.fetchall()
+            edges = list(await cur.fetchall())
 
-        # ── Churn: decision count per function ────────────────────────────
         async with db.execute(
             """SELECT df.function_id, COUNT(*) AS cnt
                FROM decision_functions df
@@ -917,163 +1167,6 @@ class CallGraphDB:
         ) as cur:
             churn: dict[str, int] = {r[0]: r[1] for r in await cur.fetchall()}
 
-        # ── Knowledge gaps: ranked by caller_count ────────────────────────
-        documented = set(churn.keys())
-        top_knowledge_gaps = sorted(
-            [
-                {
-                    "id": n["id"],
-                    "name": n["name"],
-                    "module": n["module"],
-                    "caller_count": caller_counts.get(n["id"], 0),
-                }
-                for n in all_nodes
-                if not n.get("summary") and not n.get("docstring")
-                and n["id"] not in documented
-                and n["type"] not in ("class", "ClassDef")
-            ],
-            key=lambda x: -x["caller_count"],
-        )[:10]
-
-        # ── Build subsystems list ─────────────────────────────────────────
-        subsystems = []
-        for s_name, nodes in sorted(subsystem_nodes.items(),
-                                     key=lambda x: len(x[1]), reverse=True):
-            # Pick anchor: class definition, or most-called function
-            anchor = next(
-                (n for n in nodes if n["type"] in ("class", "ClassDef")), None
-            )
-            if anchor is None:
-                anchor = max(nodes, key=lambda n: caller_counts.get(n["id"], 0))
-            subsystems.append({
-                "name": s_name,
-                "function_count": len(nodes),
-                "anchor": anchor["id"],
-                "anchor_summary": (anchor.get("summary") or "")[:120],
-            })
-
-        # ── Cross-subsystem connections ───────────────────────────────────
-        conn_counts: dict[tuple, int] = {}
-        for caller_id, callee_id in all_edges:
-            s_from = _subsystem(caller_id)
-            s_to = _subsystem(callee_id)
-            if s_from != s_to:
-                key = (s_from, s_to)
-                conn_counts[key] = conn_counts.get(key, 0) + 1
-
-        connections = [
-            {"from": k[0], "to": k[1], "edge_count": v}
-            for k, v in sorted(conn_counts.items(), key=lambda x: -x[1])
-            if v >= 2  # only meaningful connections
-        ]
-
-        # ── Chokepoints: top 5 by caller count ───────────────────────────
-        # Filter to nodes that exist in the project index — external library
-        # calls (sqlalchemy .query, fastapi Depends, etc.) appear in edges but
-        # were never resolved to a node, so they would otherwise dominate.
-        all_node_ids = {n["id"] for n in all_nodes}
-        chokepoints = sorted(
-            [
-                {"id": nid, "caller_count": cnt}
-                for nid, cnt in caller_counts.items()
-                if nid in all_node_ids
-            ],
-            key=lambda x: -x["caller_count"],
-        )[:5]
-
-        # ── Entry points: nodes with no callers ───────────────────────────
-        # Two kinds: static (nothing calls them) and http (framework-decorated
-        # route handlers that are invoked at runtime, not via static calls).
-        _HTTP_DEC_PATTERNS = (
-            "router.get", "router.post", "router.put", "router.patch",
-            "router.delete", "router.api_route", "router.head", "router.options",
-            "app.get", "app.post", "app.put", "app.patch", "app.delete",
-            "app.route", "app.api_route",
-            "blueprint.route", "bp.route",
-        )
-        callee_ids = {r[1] for r in all_edges}
-        entry_points = []
-        for n in all_nodes:
-            if n["type"] in ("class", "ClassDef"):
-                continue
-            decs = json.loads(n.get("decorators") or "[]")
-            http_kind = next(
-                (True for d in decs if any(p in d for p in _HTTP_DEC_PATTERNS)),
-                False,
-            )
-            if n["id"] not in callee_ids or http_kind:
-                entry_points.append({
-                    "id": n["id"],
-                    "name": n["name"],
-                    "kind": "http" if http_kind else "static",
-                    "decorators": decs,
-                })
-        # HTTP routes first, then static; cap at 20 total (more useful than 8)
-        entry_points.sort(key=lambda x: (0 if x["kind"] == "http" else 1, x["id"]))
-        entry_points = entry_points[:20]
-
-        # ── Risk surface: high churn AND high callers ─────────────────────
-        # Primary signal: functions with many decisions (churn) AND many callers.
-        # Fallback: when no decisions are logged yet, use pure structural signal
-        # (high caller_count among project nodes) so the field is never an
-        # ambiguous empty list. risk_detection_mode tells the caller which applies.
-        risk_surface = [
-            {
-                "id": fid,
-                "churn": ch,
-                "caller_count": caller_counts.get(fid, 0),
-            }
-            for fid, ch in churn.items()
-            if ch >= 3 and caller_counts.get(fid, 0) >= 3
-        ]
-        risk_surface.sort(key=lambda x: -(x["churn"] * x["caller_count"]))
-        risk_surface = risk_surface[:5]
-
-        if risk_surface:
-            risk_detection_mode = "churn_and_callers"
-        else:
-            # No churn data yet — fall back to structural heuristic.
-            structural = sorted(
-                [
-                    {"id": n["id"], "churn": 0, "caller_count": caller_counts.get(n["id"], 0)}
-                    for n in all_nodes
-                    if n["type"] not in ("class", "ClassDef")
-                    and caller_counts.get(n["id"], 0) >= 2
-                ],
-                key=lambda x: -x["caller_count"],
-            )[:5]
-            risk_surface = structural
-            risk_detection_mode = (
-                "structural_heuristic_no_decisions" if structural else "insufficient_data"
-            )
-
-        # ── Churn hotspots: top 5 most-patched ───────────────────────────
-        churn_hotspots = sorted(
-            [{"id": fid, "decision_count": cnt} for fid, cnt in churn.items()],
-            key=lambda x: -x["decision_count"],
-        )[:5]
-
-        # ── Active contracts + recent violations ──────────────────────────
-        async with db.execute(
-            "SELECT id, title, status, project_ids FROM contracts WHERE status = 'active'"
-        ) as cur:
-            all_contracts = [dict(r) for r in await cur.fetchall()]
-
-        active_contracts = [
-            c for c in all_contracts
-            if project_id in json.loads(c.get("project_ids") or "[]")
-        ]
-
-        async with db.execute(
-            """SELECT COUNT(*) FROM contract_violations cv
-               JOIN contracts c ON c.id = cv.contract_id
-               WHERE cv.project_id = ?
-               AND cv.detected_at > datetime('now', '-7 days')""",
-            (project_id,),
-        ) as cur:
-            recent_violation_count = (await cur.fetchone())[0]
-
-        # ── Recent decisions ──────────────────────────────────────────────
         async with db.execute(
             """SELECT d.id, d.type, d.description, d.created_at,
                       GROUP_CONCAT(df.function_id) AS function_ids
@@ -1091,70 +1184,68 @@ class CallGraphDB:
                 rd["description"] = rd["description"][:120]
                 recent_decisions.append(rd)
 
-        # ── Cross-session diff ────────────────────────────────────────────
-        # Compare current function hashes against the previous snapshot to surface
-        # what changed since the last get_project_home call (different session or agent).
-        now_iso = datetime.now(timezone.utc).isoformat()
-        current_hashes = {n["id"]: n.get("body_hash", "") for n in all_nodes}
-        prev_snapshot = await self._load_project_snapshot(project_id)
-        since_last_session = None
+        async with db.execute(
+            "SELECT id, title, status, project_ids FROM contracts WHERE status = 'active'"
+        ) as cur:
+            all_contracts = [dict(r) for r in await cur.fetchall()]
+        contracts = [
+            c for c in all_contracts
+            if project_id in json.loads(c.get("project_ids") or "[]")
+        ]
 
+        async with db.execute(
+            """SELECT COUNT(*) FROM contract_violations cv
+               JOIN contracts c ON c.id = cv.contract_id
+               WHERE cv.project_id = ?
+               AND cv.detected_at > datetime('now', '-7 days')""",
+            (project_id,),
+        ) as cur:
+            recent_violation_count: int = (await cur.fetchone())[0]
+
+        prev_snapshot = await self._load_project_snapshot(project_id)
+        current_hashes = {n["id"]: n.get("body_hash", "") for n in nodes}
+
+        decisions_since: list[dict] = []
         if prev_snapshot:
-            prev_hashes: dict[str, str] = prev_snapshot.get("hashes", {})
-            prev_time: str = prev_snapshot.get("captured_at", "")
-            node_map = {n["id"]: n for n in all_nodes}
-            new_ids = set(current_hashes) - set(prev_hashes)
-            removed_ids = set(prev_hashes) - set(current_hashes)
-            modified_ids = {
-                nid for nid in current_hashes
-                if nid in prev_hashes and current_hashes[nid] != prev_hashes[nid]
-            }
+            prev_time = prev_snapshot.get("captured_at", "")
             async with db.execute(
                 """SELECT id, type, description, created_at FROM decisions
                    WHERE project_id = ? AND created_at > ?
                    ORDER BY created_at DESC LIMIT 20""",
                 (project_id, prev_time),
             ) as cur:
-                decisions_since = []
                 for r in await cur.fetchall():
                     d = dict(r)
                     d["description"] = d["description"][:120]
                     decisions_since.append(d)
-            since_last_session = {
-                "since": prev_time,
-                "functions_added": [
-                    {"id": nid, "name": node_map[nid]["name"], "module": node_map[nid]["module"]}
-                    for nid in sorted(new_ids) if nid in node_map
-                ],
-                "functions_modified": [
-                    {"id": nid, "name": node_map[nid]["name"], "module": node_map[nid]["module"]}
-                    for nid in sorted(modified_ids) if nid in node_map
-                ],
-                "functions_removed": sorted(removed_ids),
-                "decisions_since": decisions_since,
-            }
 
-        await self._save_project_snapshot(project_id, current_hashes, now_iso)
+        return GraphData(
+            project_id=project_id,
+            nodes=nodes,
+            edges=edges,
+            caller_counts=caller_counts,
+            churn=churn,
+            contracts=contracts,
+            recent_violation_count=recent_violation_count,
+            recent_decisions=recent_decisions,
+            prev_snapshot=prev_snapshot,
+            current_hashes=current_hashes,
+            decisions_since=decisions_since,
+        )
 
-        return {
-            "project_id": project_id,
-            "function_count": len(all_nodes),
-            "subsystems": subsystems,
-            "connections": connections,
-            "chokepoints": chokepoints,
-            "entry_points": entry_points,
-            "risk_surface": risk_surface,
-            "health": {
-                "top_knowledge_gaps": top_knowledge_gaps,
-                "churn_hotspots": churn_hotspots,
-                "active_contract_count": len(active_contracts),
-                "active_contracts": [{"id": c["id"], "title": c["title"]} for c in active_contracts],
-                "recent_violation_count": recent_violation_count,
-                "risk_detection_mode": risk_detection_mode,
-            },
-            "recent_decisions": recent_decisions,
-            "since_last_session": since_last_session,
-        }
+    async def get_project_home_data(self, project_id: str) -> dict:
+        """
+        Compute a full architectural intelligence snapshot for one project.
+        All SQL — no LLM calls. Used by get_project_home MCP tool and web UI.
+        """
+        import dataclasses
+        from ..analysis import ArchitectureAnalyzer
+
+        data = await self.fetch_graph_data(project_id)
+        snapshot = ArchitectureAnalyzer().snapshot(data)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await self._save_project_snapshot(project_id, data.current_hashes, now_iso)
+        return dataclasses.asdict(snapshot)
 
 
 def _resolve_callee(callee_name: str, all_ids: set[str]) -> str:

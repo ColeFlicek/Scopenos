@@ -68,6 +68,7 @@ class FunctionNode:
     leading_comment: str = ""  # leading # comment block before first real statement
     body_hash: str = ""  # sha256[:16] of full function text — used to skip re-embedding unchanged functions
     decorators: list = field(default_factory=list)  # decorator call names, e.g. ["router.get", "login_required"]
+    is_external: bool = False  # True for nodes from external libraries (SCIP reference targets)
 
 
 @dataclass

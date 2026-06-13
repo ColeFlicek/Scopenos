@@ -1,19 +1,24 @@
 from __future__ import annotations
 import asyncio
-
+import json
 import os
+import uuid
 from pathlib import Path
 
 from .call_graph.parser import TreeSitterParser
 from .call_graph.storage import CallGraphDB
+from .dependency_fingerprint import DependencyFingerprint, DependencyFingerprinter
 from .embeddings.chunker import extract_chunks
-from .embeddings.embedder import EmbeddingStore
+from .embeddings.pipeline import EmbeddingPipeline
+from .index_delta import IndexDelta, reconcile
+from .index_coverage import IndexCoverage
 from .lsif_import import LsifImporter
 from .scip_import import ScipImporter
 
 _SUPPORTED_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
 
 _parser = TreeSitterParser()
+_fingerprinter = DependencyFingerprinter()
 
 
 def _derive_project_id(path: str) -> str:
@@ -22,10 +27,9 @@ def _derive_project_id(path: str) -> str:
 
 
 class Indexer:
-    def __init__(self, db: CallGraphDB, embeddings: EmbeddingStore) -> None:
-        """Store references to the call-graph database and embedding store."""
+    def __init__(self, db: CallGraphDB, pipeline: EmbeddingPipeline) -> None:
         self._db = db
-        self._embeddings = embeddings
+        self._pipeline = pipeline
 
     async def index_project(self, path: str, project_id: str = "") -> dict:
         """
@@ -58,32 +62,40 @@ class Indexer:
         all_nodes = []
         all_edges = []
         contents: dict[str, str] = {}
-        scip_used = False
 
-        # Try SCIP indexer first (compiler-accurate, fault-tolerant, cross-repo).
-        # Falls back to tree-sitter if no SCIP indexer is installed for this language.
+        # Phase 1: Tree-sitter always runs — source of truth for internal nodes,
+        # body text, and content-based hashes.
+        print(f"[indexer] index_project: project={project_id!r} {len(source_files)} files under {path!r}")
+        for fp in source_files:
+            try:
+                content = Path(fp).read_text(encoding="utf-8", errors="replace")
+                nodes, edges = _parser.parse_file(fp, content, project_root=path)
+                all_nodes.extend(nodes)
+                all_edges.extend(edges)
+                contents[fp] = content
+                print(f"[indexer]   parsed {fp}: {len(nodes)} nodes, {len(edges)} edges")
+            except Exception as exc:
+                print(f"[indexer]   skipping {fp}: {exc}")
+
+        # Phase 2: SCIP augments with external dependency nodes and reference edges.
+        # External nodes (is_external=True) are reference anchors in the call graph —
+        # they enable get_callers("openai.X") and get_impact_radius across package boundaries.
+        # Internal SCIP nodes are ignored — tree-sitter already handled them with full fidelity.
+        scip_external_count = 0
+        scip_ref_edge_count = 0
         primary_lang = _detect_primary_language(source_files)
         if primary_lang:
-            print(f"[indexer] index_project: trying SCIP for {primary_lang!r}")
+            print(f"[indexer] augmenting with SCIP for {primary_lang!r}")
             scip_result = await _try_scip_index(path, project_id, primary_lang)
             if scip_result is not None:
-                all_nodes, all_edges = scip_result
-                scip_used = True
-                print(f"[indexer] SCIP succeeded: {len(all_nodes)} nodes, {len(all_edges)} edges")
-
-        if not scip_used:
-            # Tree-sitter fallback: grammar-level parsing for all supported languages.
-            print(f"[indexer] index_project: project={project_id!r} {len(source_files)} files under {path!r}")
-            for fp in source_files:
-                try:
-                    content = Path(fp).read_text(encoding="utf-8", errors="replace")
-                    nodes, edges = _parser.parse_file(fp, content, project_root=path)
-                    all_nodes.extend(nodes)
-                    all_edges.extend(edges)
-                    contents[fp] = content
-                    print(f"[indexer]   parsed {fp}: {len(nodes)} nodes, {len(edges)} edges")
-                except Exception as exc:
-                    print(f"[indexer]   skipping {fp}: {exc}")
+                scip_nodes, scip_edges = scip_result
+                external_nodes = [n for n in scip_nodes if n.is_external]
+                all_nodes.extend(external_nodes)
+                all_edges.extend(scip_edges)
+                scip_external_count = len(external_nodes)
+                scip_ref_edge_count = len(scip_edges)
+                print(f"[indexer] SCIP: +{scip_external_count} external nodes, "
+                      f"+{scip_ref_edge_count} reference edges")
 
         # Snapshot existing summaries and body hashes before deletion.
         existing_summaries: dict[str, str] = {}
@@ -94,11 +106,10 @@ class Indexer:
                     existing_summaries[node["id"]] = node["summary"]
                 old_hashes[node["id"]] = node.get("body_hash", "")
 
-        # Diff: only invalidate embeddings for functions whose body changed or were removed.
+        # Reconcile: diff old DB state against freshly parsed nodes.
         new_hashes = {n.id: n.body_hash for n in all_nodes}
-        changed_ids = {nid for nid, h in new_hashes.items() if old_hashes.get(nid) != h}
-        deleted_ids = set(old_hashes.keys()) - set(new_hashes.keys())
-        await self._embeddings.delete_by_ids(list(changed_ids | deleted_ids), project_id)
+        delta = reconcile(old_hashes, new_hashes)
+        await self._pipeline.delete_by_ids(list(delta.to_delete), project_id)
 
         # Wipe and rewrite call graph for all parsed files (edges change at file granularity).
         for fp in contents:
@@ -114,14 +125,16 @@ class Indexer:
         chunks = [
             c for fp, content in contents.items()
             for c in extract_chunks(fp, content, project_root=path)
-            if c.id in changed_ids
+            if c.id in delta.to_embed
         ]
-        print(f"[indexer] {len(changed_ids)} changed, {len(deleted_ids)} removed, "
-              f"{len(all_nodes) - len(changed_ids)} unchanged (skipping embed)")
+        print(f"[indexer] +{len(delta.functions_added)} new, "
+              f"~{len(delta.functions_changed)} changed, "
+              f"-{len(delta.functions_removed)} removed, "
+              f"{len(delta.unchanged)} unchanged (skipping embed)")
         embed_stats = {"docs": 0, "fallback": 0}
         if chunks:
             print(f"[indexer] starting embedding for {len(chunks)} chunks")
-            embed_stats = await self._embeddings.upsert_chunks(
+            embed_stats = await self._pipeline.upsert_chunks(
                 chunks,
                 project_id=project_id,
                 existing_summaries=existing_summaries if existing_summaries else None,
@@ -130,12 +143,19 @@ class Indexer:
         # Register / update project record.
         await self._db.upsert_project(project_id, project_id, path)
 
+        internal_count = sum(1 for n in all_nodes if not n.is_external)
         result = {
             "status": "ok",
             "project_id": project_id,
-            "structural_layer": "scip" if scip_used else "tree-sitter",
+            "structural_layer": "tree-sitter" + ("+scip" if scip_external_count else ""),
             "files_indexed": len(contents),
-            "functions_indexed": len(all_nodes),
+            "functions_indexed": internal_count,
+            "external_nodes": scip_external_count,
+            "scip_reference_edges": scip_ref_edge_count,
+            "functions_new": len(delta.functions_added),
+            "functions_changed": len(delta.functions_changed),
+            "functions_removed": len(delta.functions_removed),
+            "functions_unchanged": len(delta.unchanged),
             "functions_reembedded": len(chunks),
             "edges_indexed": len(all_edges),
             "embedded_with_docs": embed_stats["docs"],
@@ -146,9 +166,66 @@ class Indexer:
                 f"{embed_stats['fallback']} functions had no docstring or leading comment and were "
                 f"embedded with text-embedding-3-large. Call enrich_summaries('{project_id}') to "
                 f"generate LLM summaries and re-embed them with {{}}, which will improve semantic search quality."
-            ).format(self._embeddings._model)
+            ).format(self._pipeline.model)
+        coverage = await self._verify_coverage(project_id)
+        result["coverage"] = coverage.as_dict()
+        if coverage.status != "ok":
+            result["status"] = coverage.status
+            print(f"[indexer] coverage check: {coverage.status} — {coverage.recommendation}")
+
+        # Capture dependency fingerprint — snapshot external symbols, diff against previous.
+        deps = await self._db.list_external_dependencies(project_id)
+        prev_row = await self._db.get_latest_dependency_fingerprint(project_id)
+        prev_fp = (
+            DependencyFingerprint.from_dict(json.loads(prev_row["snapshot_json"]))
+            if prev_row else None
+        )
+        fp = _fingerprinter.compute(project_id, deps, project_path=path)
+        diff = _fingerprinter.diff(prev_fp, fp) if prev_fp else None
+        await self._db.save_dependency_fingerprint(
+            project_id, uuid.uuid4().hex, fp.captured_at, fp.fingerprint_hash,
+            json.dumps(fp.to_dict()),
+            json.dumps(diff.to_dict()) if diff else None,
+        )
+        result["dependency_fingerprint"] = {
+            "hash": fp.fingerprint_hash,
+            "libraries": fp.total_libraries,
+            "symbols": fp.total_external_symbols,
+        }
+        if diff and (diff.removed_symbols or diff.changed_symbols):
+            result["dependency_fingerprint"]["warning"] = (
+                f"{len(diff.removed_symbols)} symbols removed, "
+                f"{len(diff.changed_symbols)} signatures changed since last index"
+            )
+
         print(f"[indexer] index_project complete: {result}")
         return result
+
+    async def _verify_coverage(self, project_id: str) -> IndexCoverage:
+        """
+        Post-commit audit: compare all call graph nodes against all embedding vectors.
+        Runs after every index_project to surface gaps before the caller sees the result.
+        Three SQL queries — negligible cost relative to parsing and embedding.
+        """
+        all_node_ids = await self._db.get_all_node_ids(project_id)
+        embedded_ids = await self._pipeline.get_embedded_ids(project_id)
+
+        missing = sorted(all_node_ids - embedded_ids)
+        actual = len(embedded_ids & all_node_ids)
+
+        degraded = await self._db.get_nodes_with_null_content(project_id)
+        large_model = await self._db.count_nodes_by_model(
+            project_id, "text-embedding-3-large"
+        )
+
+        return IndexCoverage(
+            project_id=project_id,
+            expected=len(all_node_ids),
+            actual=actual,
+            missing_vectors=missing,
+            degraded_count=len(degraded),
+            on_large_model=large_model,
+        )
 
     async def index_changes(
         self,
@@ -183,14 +260,14 @@ class Indexer:
 
             if content is None:
                 # Deleted file — wipe all its embeddings (while nodes still exist for ID lookup).
-                await self._embeddings.delete_by_file(fp, project_id)
+                await self._pipeline.delete_by_file(fp, project_id)
                 await self._db.delete_file_data(fp, project_id)
                 print(f"[indexer]   {fp}: deleted (purged from index)")
                 continue
 
             ext = Path(fp).suffix.lower()
             if ext not in _SUPPORTED_EXTENSIONS:
-                await self._embeddings.delete_by_file(fp, project_id)
+                await self._pipeline.delete_by_file(fp, project_id)
                 await self._db.delete_file_data(fp, project_id)
                 print(f"[indexer]   {fp}: skipped (unsupported extension {ext!r})")
                 continue
@@ -198,25 +275,24 @@ class Indexer:
             nodes, edges = _parser.parse_file(fp, content, project_root=project_root)
             new_hashes = {n.id: n.body_hash for n in nodes}
 
-            # Functions whose body changed or are brand-new need a fresh embedding.
-            file_changed = {nid for nid, h in new_hashes.items() if old_hashes.get(nid) != h}
-            existing_file_ids = {
-                n["id"] for n in await self._db.get_nodes_by_file(fp, project_id)
+            # Reconcile this file's old DB state against freshly parsed nodes.
+            file_old_hashes = {
+                n["id"]: n.get("body_hash", "")
+                for n in await self._db.get_nodes_by_file(fp, project_id)
             }
-            file_deleted = {
-                nid for nid in old_hashes
-                if nid in existing_file_ids and nid not in new_hashes
-            }
-            await self._embeddings.delete_by_ids(list(file_changed | file_deleted), project_id)
+            file_delta = reconcile(file_old_hashes, new_hashes)
+            await self._pipeline.delete_by_ids(list(file_delta.to_delete), project_id)
 
             # Refresh call graph for the whole file — edges can change in any function.
             await self._db.delete_file_data(fp, project_id)
             updated_nodes.extend(nodes)
             updated_edges.extend(edges)
-            changed_ids |= file_changed
+            changed_ids |= file_delta.to_embed
             print(f"[indexer]   {fp}: {len(nodes)} nodes, "
-                  f"{len(file_changed)} to embed, {len(file_deleted)} removed, "
-                  f"{len(nodes) - len(file_changed)} unchanged")
+                  f"+{len(file_delta.functions_added)} new, "
+                  f"~{len(file_delta.functions_changed)} changed, "
+                  f"-{len(file_delta.functions_removed)} removed, "
+                  f"{len(file_delta.unchanged)} unchanged")
 
         if updated_nodes:
             print(f"[indexer] call graph: {len(updated_nodes)} nodes, {len(updated_edges)} edges — writing to db")
@@ -236,7 +312,7 @@ class Indexer:
         ]
         if updated_chunks:
             print(f"[indexer] starting embedding for {len(updated_chunks)} chunks")
-            await self._embeddings.upsert_chunks(
+            await self._pipeline.upsert_chunks(
                 updated_chunks,
                 project_id=project_id,
                 existing_summaries=existing_summaries if existing_summaries else None,
@@ -253,6 +329,24 @@ class Indexer:
             "functions_updated": len(updated_nodes),
             "functions_reembedded": len(updated_chunks),
         }
+
+        # Capture fingerprint if external nodes changed (new import added or removed).
+        if updated_nodes:
+            deps = await self._db.list_external_dependencies(project_id)
+            prev_row = await self._db.get_latest_dependency_fingerprint(project_id)
+            prev_fp = (
+                DependencyFingerprint.from_dict(json.loads(prev_row["snapshot_json"]))
+                if prev_row else None
+            )
+            fp = _fingerprinter.compute(project_id, deps, project_path=project_root)
+            if prev_fp is None or fp.fingerprint_hash != prev_fp.fingerprint_hash:
+                diff = _fingerprinter.diff(prev_fp, fp) if prev_fp else None
+                await self._db.save_dependency_fingerprint(
+                    project_id, uuid.uuid4().hex, fp.captured_at, fp.fingerprint_hash,
+                    json.dumps(fp.to_dict()),
+                    json.dumps(diff.to_dict()) if diff else None,
+                )
+
         print(f"[indexer] index_changes complete: {result}")
         return result
 
@@ -282,7 +376,7 @@ class Indexer:
         for fp in file_paths:
             content = file_contents.get(fp)
             if content is None:
-                await self._embeddings.delete_by_file(fp, project_id)
+                await self._pipeline.delete_by_file(fp, project_id)
             await self._db.delete_file_data(fp, project_id)
             if content is None:
                 continue
@@ -293,12 +387,11 @@ class Indexer:
             updated_nodes.extend(nodes)
             updated_edges.extend(edges)
 
-        new_node_ids = {n.id for n in updated_nodes}
-
-        if existing_node_ids:
-            orphaned = [nid for nid in existing_node_ids if nid not in new_node_ids]
-            if orphaned:
-                await self._embeddings.delete_by_ids(orphaned, project_id)
+        existing_hashes = {nid: "" for nid in existing_node_ids}
+        new_hashes = {n.id: "" for n in updated_nodes}
+        cg_delta = reconcile(existing_hashes, new_hashes)
+        if cg_delta.functions_removed:
+            await self._pipeline.delete_by_ids(list(cg_delta.functions_removed), project_id)
 
         if updated_nodes:
             await self._db.upsert_nodes(updated_nodes, project_id)
@@ -333,7 +426,7 @@ class Indexer:
 
         for fp in file_paths:
             content = file_contents.get(fp)
-            await self._embeddings.delete_by_file(fp, project_id)
+            await self._pipeline.delete_by_file(fp, project_id)
             if content is None:
                 continue
             ext = Path(fp).suffix.lower()
@@ -342,10 +435,10 @@ class Indexer:
             updated_chunks.extend(extract_chunks(fp, content, project_root=project_root))
 
         if updated_chunks:
-            existing = {} if force_summaries else await self._embeddings.get_summaries(
+            existing = {} if force_summaries else await self._pipeline.get_summaries(
                 [c.id for c in updated_chunks], project_id
             )
-            await self._embeddings.upsert_chunks(
+            await self._pipeline.upsert_chunks(
                 updated_chunks,
                 project_id=project_id,
                 existing_summaries=existing,
@@ -374,7 +467,7 @@ class Indexer:
             return {"status": "error", "message": f"Project root not found for '{project_id}'. Re-index with index_project first."}
 
         # Wipe existing embeddings — every function will be re-embedded fresh.
-        await self._embeddings.delete_by_ids([n["id"] for n in all_nodes], project_id)
+        await self._pipeline.delete_by_ids([n["id"] for n in all_nodes], project_id)
 
         # Preserve any LLM-generated summaries from prior enrich_summaries runs.
         existing_summaries = {n["id"]: n["summary"] for n in all_nodes if n.get("summary")}
@@ -414,7 +507,7 @@ class Indexer:
                 ))
 
         print(f"[indexer] reembed_project: re-embedding {len(chunks)} functions for '{project_id}'")
-        embed_stats = await self._embeddings.upsert_chunks(
+        embed_stats = await self._pipeline.upsert_chunks(
             chunks, project_id=project_id,
             existing_summaries=existing_summaries or None,
         )
@@ -474,7 +567,7 @@ class Indexer:
             ))
         embed_stats = {"docs": 0, "fallback": 0}
         if chunks:
-            embed_stats = await self._embeddings.upsert_chunks(chunks, project_id=project_id)
+            embed_stats = await self._pipeline.upsert_chunks(chunks, project_id=project_id)
 
         return {
             "status": "ok",
@@ -525,7 +618,7 @@ class Indexer:
             ))
         embed_stats = {"docs": 0, "fallback": 0}
         if chunks:
-            embed_stats = await self._embeddings.upsert_chunks(chunks, project_id=project_id)
+            embed_stats = await self._pipeline.upsert_chunks(chunks, project_id=project_id)
 
         return {
             "status": "ok",

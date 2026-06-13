@@ -10,7 +10,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
 
 from fastmcp import FastMCP
 from starlette.requests import Request
@@ -21,31 +21,44 @@ from .client_setup import generate_setup_script, _default_claude_home
 from .contracts.manager import ContractManager
 from .decision_memory.memory import DecisionMemory
 from .embeddings.embedder import EmbeddingStore
+from .embeddings.pipeline import EmbeddingPipeline
 from .indexer import Indexer, _derive_project_id
 from .web.routes import register_routes
 
 # ── Service container ──────────────────────────────────────────────────────────
 
-_services: dict[str, Any] = {}
+@dataclass
+class Services:
+    db: CallGraphDB
+    embeddings: EmbeddingStore
+    pipeline: EmbeddingPipeline
+    decisions: DecisionMemory
+    indexer: Indexer
+    contracts: ContractManager
+
+
+_services: Services | None = None
 _services_lock = asyncio.Lock()
 
 
-async def _get_services() -> dict[str, Any]:
+async def _get_services() -> Services:
     """Return the shared service container, initializing it on first call."""
-    if _services:
+    global _services
+    if _services is not None:
         return _services
     async with _services_lock:
-        if _services:
+        if _services is not None:
             return _services
         sqlite_path = os.getenv("SQLITE_PATH", "/data/acip.db")
         db = await CallGraphDB.create(sqlite_path)
         embeddings = await EmbeddingStore.create(db)
+        pipeline = EmbeddingPipeline(db, embeddings)
         decisions = await DecisionMemory.create(db, embeddings)
-        indexer = Indexer(db, embeddings)
+        indexer = Indexer(db, pipeline)
         contracts = ContractManager(db, embeddings)
-        _services.update(
-            db=db, embeddings=embeddings, decisions=decisions,
-            indexer=indexer, contracts=contracts,
+        _services = Services(
+            db=db, embeddings=embeddings, pipeline=pipeline,
+            decisions=decisions, indexer=indexer, contracts=contracts,
         )
     return _services
 
@@ -55,15 +68,15 @@ async def lifespan(server: FastMCP):
     """FastMCP lifespan — initialize all services on startup and close DB on shutdown."""
     from .file_watcher import start_file_watcher
     svcs = await _get_services()
-    watcher_task = await start_file_watcher(svcs["db"], svcs["indexer"])
+    watcher_task = await start_file_watcher(svcs.db, svcs.indexer)
     yield
     watcher_task.cancel()
     try:
         await watcher_task
     except asyncio.CancelledError:
         pass
-    if _services.get("db"):
-        await _services["db"].close()
+    if _services is not None:
+        await _services.db.close()
 
 
 # ── FastMCP server ────────────────────────────────────────────────────────────
@@ -82,7 +95,7 @@ async def list_projects() -> str:
     before calling scoped query tools.
     """
     svcs = await _get_services()
-    result = await svcs["db"].list_projects()
+    result = await svcs.db.list_projects()
     return json.dumps(result)
 
 
@@ -99,7 +112,7 @@ async def index_project(path: str, project_id: str = "") -> str:
     derived from the last path component.
     """
     svcs = await _get_services()
-    result = await svcs["indexer"].index_project(path, project_id=project_id)
+    result = await svcs.indexer.index_project(path, project_id=project_id)
     return json.dumps(result)
 
 
@@ -120,7 +133,7 @@ async def index_changes(
     derived from project_root's last component.
     """
     svcs = await _get_services()
-    result = await svcs["indexer"].index_changes(
+    result = await svcs.indexer.index_changes(
         file_paths, file_contents, project_root=project_root, project_id=project_id
     )
     return json.dumps(result)
@@ -145,7 +158,7 @@ async def reembed_project(project_id: str) -> str:
     enrich_summaries(project_id) to upgrade undocumented functions to LLM-quality embeddings.
     """
     svcs = await _get_services()
-    result = await svcs["indexer"].reembed_project(project_id)
+    result = await svcs.indexer.reembed_project(project_id)
     return json.dumps(result)
 
 
@@ -163,7 +176,7 @@ async def enrich_summaries(project_id: str, limit: int = 500) -> str:
     limit: max functions to process in this call. Call repeatedly to enrich all functions.
     """
     svcs = await _get_services()
-    result = await svcs["embeddings"].enrich_summaries(project_id, limit=limit)
+    result = await svcs.pipeline.enrich_summaries(project_id, limit=limit)
     return json.dumps(result)
 
 
@@ -178,7 +191,7 @@ async def get_callers(function_name: str, project_id: str = "") -> str:
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
     svcs = await _get_services()
-    results = await svcs["db"].get_callers(function_name, project_id or None)
+    results = await svcs.db.get_callers(function_name, project_id or None)
     return json.dumps(results)
 
 
@@ -192,7 +205,7 @@ async def get_callees(function_name: str, project_id: str = "") -> str:
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
     svcs = await _get_services()
-    results = await svcs["db"].get_callees(function_name, project_id or None)
+    results = await svcs.db.get_callees(function_name, project_id or None)
     return json.dumps(results)
 
 
@@ -210,8 +223,92 @@ async def get_impact_radius(
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
     svcs = await _get_services()
-    results = await svcs["db"].get_impact_radius(function_name, depth, project_id or None)
+    results = await svcs.db.get_impact_radius(function_name, depth, project_id or None)
     return json.dumps(results)
+
+
+@mcp.tool()
+async def list_external_dependencies(project_id: str) -> str:
+    """
+    [DISCOVERY TOOL — accepts a project_id]
+
+    Return all external library symbols called by this project, grouped by
+    library. Each entry includes the symbol name, its call signature, and
+    caller_count — how many internal functions reference it.
+
+    Useful for dependency audits, migration planning, and understanding which
+    parts of the codebase couple to a given library.
+    """
+    svcs = await _get_services()
+    results = await svcs.db.list_external_dependencies(project_id)
+    return json.dumps(results)
+
+
+@mcp.tool()
+async def get_dependency_fingerprint(project_id: str) -> str:
+    """
+    [DISCOVERY TOOL — accepts a project_id]
+
+    Return the latest dependency fingerprint for a project: all external library
+    symbols in use grouped by library, plus a diff from the previous fingerprint.
+
+    The diff is the failure-correlation signal:
+    - removed_symbols: symbols present before but gone now — most likely cause
+      of runtime ImportError or AttributeError after a dependency change.
+    - changed_symbols: signatures that shifted — potential breaking API changes.
+    - added_symbols: new external dependencies introduced since the last index.
+
+    The fingerprint is also written to <project>/.acip/dependency-fingerprint.json
+    on every index_project run, making dependency changes visible in git diff.
+    """
+    svcs = await _get_services()
+    row = await svcs.db.get_latest_dependency_fingerprint(project_id)
+    if not row:
+        return json.dumps({"status": "no fingerprint", "project_id": project_id,
+                           "hint": "Run index_project to capture the first fingerprint."})
+    result = json.loads(row["snapshot_json"])
+    result["diff_from_previous"] = json.loads(row["diff_json"]) if row["diff_json"] else None
+    return json.dumps(result)
+
+
+@mcp.tool()
+async def list_dependency_fingerprint_history(
+    project_id: str, limit: int = 50
+) -> str:
+    """
+    [DISCOVERY TOOL — accepts a project_id]
+
+    Return a summary of all dependency fingerprint snapshots for this project,
+    newest first. Each row shows the fingerprint hash, when it was captured, and
+    counts of removed / added / changed symbols versus the previous snapshot.
+
+    Removed symbols are listed by ID when present — they are the primary signal
+    for runtime failures caused by dependency changes. Use the fingerprint_id
+    from a row of interest with get_dependency_fingerprint_at() to retrieve the
+    full snapshot and diff for that point in time.
+    """
+    svcs = await _get_services()
+    results = await svcs.db.list_dependency_fingerprint_history(project_id, limit)
+    return json.dumps(results)
+
+
+@mcp.tool()
+async def get_dependency_fingerprint_at(fingerprint_id: str) -> str:
+    """
+    [DISCOVERY TOOL — accepts a fingerprint_id from list_dependency_fingerprint_history]
+
+    Return the full dependency snapshot and diff for a specific point in time.
+    Use this to investigate what the external dependency surface looked like at
+    the time of a past incident — compare against a known-good fingerprint to
+    identify which symbols were removed or changed between two index runs.
+    """
+    svcs = await _get_services()
+    row = await svcs.db.get_dependency_fingerprint_by_id(fingerprint_id)
+    if not row:
+        return json.dumps({"status": "not found", "fingerprint_id": fingerprint_id})
+    result = json.loads(row["snapshot_json"])
+    result["diff_from_previous"] = json.loads(row["diff_json"]) if row["diff_json"] else None
+    return json.dumps(result)
 
 
 # ── Semantic embedding tool ───────────────────────────────────────────────────
@@ -234,7 +331,7 @@ async def query_similar_functions(
     project_id: limit results to a specific project. If omitted, searches across all projects.
     """
     svcs = await _get_services()
-    results = await svcs["embeddings"].query_similar(snippet, top_k, project_id or None)
+    results = await svcs.embeddings.query_similar(snippet, top_k, project_id or None)
     return json.dumps(results)
 
 
@@ -262,7 +359,7 @@ async def log_decision(
     project_id: project this decision belongs to (default: "default")
     """
     svcs = await _get_services()
-    result = await svcs["decisions"].log_decision(
+    result = await svcs.decisions.log_decision(
         type=type,
         description=description,
         rejected_alternatives=rejected_alternatives,
@@ -286,7 +383,7 @@ async def get_decision_history(function_name: str, project_id: str = "") -> str:
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
     svcs = await _get_services()
-    results = await svcs["decisions"].get_decision_history(
+    results = await svcs.decisions.get_decision_history(
         function_name, project_id or None
     )
     return json.dumps(results)
@@ -307,7 +404,7 @@ async def query_decisions(
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
     svcs = await _get_services()
-    results = await svcs["decisions"].query_decisions(
+    results = await svcs.decisions.query_decisions(
         query_text, project_id=project_id or None
     )
     return json.dumps(results)
@@ -412,7 +509,7 @@ async def get_project_home(project_id: str) -> str:
     Read() only for exact implementation of the function you are about to modify.
     """
     svcs = await _get_services()
-    result = await svcs["db"].get_project_home_data(project_id)
+    result = await svcs.db.get_project_home_data(project_id)
     return json.dumps(result)
 
 
@@ -438,7 +535,7 @@ async def create_contract(
     project_ids: which projects this applies to. If omitted, requires explicit list.
     """
     svcs = await _get_services()
-    result = await svcs["contracts"].generate_draft(
+    result = await svcs.contracts.generate_draft(
         project_ids=project_ids or [],
         title=title,
         natural_language=natural_language,
@@ -463,7 +560,7 @@ async def approve_contract(contract_id: str) -> str:
     every call to check_contracts() and via the post-commit hook.
     """
     svcs = await _get_services()
-    result = await svcs["contracts"].approve(contract_id)
+    result = await svcs.contracts.approve(contract_id)
     return json.dumps(result)
 
 
@@ -476,7 +573,7 @@ async def list_contracts(project_id: str = "") -> str:
     returns all contracts across all projects.
     """
     svcs = await _get_services()
-    result = await svcs["contracts"].list_contracts(project_id or None)
+    result = await svcs.contracts.list_contracts(project_id or None)
     return json.dumps(result)
 
 
@@ -489,7 +586,7 @@ async def check_contracts(project_id: str) -> str:
     and semantic (embedding similarity against violation examples).
     """
     svcs = await _get_services()
-    result = await svcs["contracts"].check_project(project_id)
+    result = await svcs.contracts.check_project(project_id)
     return json.dumps(result)
 
 
@@ -536,7 +633,7 @@ async def file_improvement(
     import uuid
     svcs = await _get_services()
     improvement_id = str(uuid.uuid4())
-    result = await svcs["db"].create_improvement(
+    result = await svcs.db.create_improvement(
         improvement_id=improvement_id,
         project_id=project_id,
         title=title,
@@ -567,7 +664,7 @@ async def list_improvements(
     suggested_fix, reproduction_steps, filed_at.
     """
     svcs = await _get_services()
-    result = await svcs["db"].list_improvements(
+    result = await svcs.db.list_improvements(
         project_id=project_id or None,
         status=status or None,
     )
@@ -595,7 +692,7 @@ async def resolve_improvement(
     status: "done" | "wont_fix" (default: "done")
     """
     svcs = await _get_services()
-    result = await svcs["db"].resolve_improvement(
+    result = await svcs.db.resolve_improvement(
         improvement_id=improvement_id,
         resolution_notes=resolution_notes,
         status=status,
@@ -619,7 +716,7 @@ async def http_get_functions_for_files(request: Request) -> JSONResponse:
         if not files:
             return JSONResponse({"function_ids": []})
         svcs = await _get_services()
-        db = svcs["db"]
+        db = svcs.db
         ids: list[str] = []
         for fp in files:
             nodes = await db.get_nodes_by_file(fp, project_id)
@@ -646,7 +743,7 @@ async def http_search(request: Request) -> JSONResponse:
         if not snippet:
             return JSONResponse({"results": []})
         svcs = await _get_services()
-        results = await svcs["embeddings"].query_similar(snippet, top_k, project_id)
+        results = await svcs.embeddings.query_similar(snippet, top_k, project_id)
         return JSONResponse({"results": results})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -659,7 +756,7 @@ async def http_list_projects(request: Request) -> JSONResponse:
     """GET /api/projects — returns all registered projects with stats."""
     try:
         svcs = await _get_services()
-        projects = await svcs["db"].list_projects()
+        projects = await svcs.db.list_projects()
         return JSONResponse({"projects": projects})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -686,7 +783,7 @@ async def http_index_bulk(request: Request) -> JSONResponse:
         if not files:
             return JSONResponse({"status": "error", "detail": "no files provided"}, status_code=400)
         svcs = await _get_services()
-        result = await svcs["indexer"].index_changes(
+        result = await svcs.indexer.index_changes(
             list(files.keys()), files, project_root=project_root, project_id=project_id
         )
         return JSONResponse(result)
@@ -722,7 +819,7 @@ async def git_hook_index(request: Request) -> JSONResponse:
                 pass  # deleted file — will be purged by index_changes
 
         svcs = await _get_services()
-        result = await svcs["indexer"].index_changes(
+        result = await svcs.indexer.index_changes(
             changed_files, file_contents, project_root=project_root, project_id=project_id
         )
         return JSONResponse(result)
@@ -752,7 +849,7 @@ async def http_log_decision(request: Request) -> JSONResponse:
             return JSONResponse({"status": "error", "detail": "description required"}, status_code=400)
         project_id = data.get("project_id") or "default"
         svcs = await _get_services()
-        result = await svcs["decisions"].log_decision(
+        result = await svcs.decisions.log_decision(
             type=data.get("type", "Patch"),
             description=description,
             rejected_alternatives=data.get("rejected_alternatives", ""),
@@ -773,7 +870,7 @@ async def http_list_contracts(request: Request) -> JSONResponse:
     try:
         project_id = request.query_params.get("project_id") or None
         svcs = await _get_services()
-        result = await svcs["contracts"].list_contracts(project_id)
+        result = await svcs.contracts.list_contracts(project_id)
         return JSONResponse({"contracts": result})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -785,7 +882,7 @@ async def http_create_contract(request: Request) -> JSONResponse:
     try:
         data = await request.json()
         svcs = await _get_services()
-        result = await svcs["contracts"].generate_draft(
+        result = await svcs.contracts.generate_draft(
             project_ids=data.get("project_ids", []),
             title=data.get("title", ""),
             natural_language=data.get("natural_language", ""),
@@ -802,7 +899,7 @@ async def http_update_contract(request: Request) -> JSONResponse:
         contract_id = request.path_params["contract_id"]
         data = await request.json()
         svcs = await _get_services()
-        result = await svcs["contracts"].update_examples(
+        result = await svcs.contracts.update_examples(
             contract_id,
             data.get("violation_examples", []),
             data.get("compliance_examples", []),
@@ -818,8 +915,21 @@ async def http_approve_contract(request: Request) -> JSONResponse:
     try:
         contract_id = request.path_params["contract_id"]
         svcs = await _get_services()
-        result = await svcs["contracts"].approve(contract_id)
+        result = await svcs.contracts.approve(contract_id)
         return JSONResponse(result)
+    except Exception as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
+@mcp.custom_route("/api/projects/{project_id}", methods=["DELETE"])
+async def http_delete_project(request: Request) -> JSONResponse:
+    """DELETE /api/projects/{project_id} — remove all data for a project"""
+    try:
+        project_id = request.path_params["project_id"]
+        svcs = await _get_services()
+        result = await svcs.db.delete_project(project_id)
+        await svcs.embeddings.delete_project_embeddings(project_id)
+        return JSONResponse({"status": "deleted", **result})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -830,7 +940,7 @@ async def http_delete_contract(request: Request) -> JSONResponse:
     try:
         contract_id = request.path_params["contract_id"]
         svcs = await _get_services()
-        await svcs["contracts"].delete(contract_id)
+        await svcs.contracts.delete(contract_id)
         return JSONResponse({"status": "deleted"})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -842,7 +952,7 @@ async def http_deactivate_contract(request: Request) -> JSONResponse:
     try:
         contract_id = request.path_params["contract_id"]
         svcs = await _get_services()
-        await svcs["contracts"].deactivate(contract_id)
+        await svcs.contracts.deactivate(contract_id)
         return JSONResponse({"status": "ok"})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -862,9 +972,9 @@ async def http_check_contracts(request: Request) -> JSONResponse:
             return JSONResponse({"violations": []})
         svcs = await _get_services()
         if function_ids:
-            violations = await svcs["contracts"].check_functions(project_id, function_ids)
+            violations = await svcs.contracts.check_functions(project_id, function_ids)
         else:
-            violations = await svcs["contracts"].check_project(project_id)
+            violations = await svcs.contracts.check_project(project_id)
         return JSONResponse({"violations": violations})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -876,7 +986,7 @@ async def http_project_home(request: Request) -> JSONResponse:
     try:
         project_id = request.path_params["project_id"]
         svcs = await _get_services()
-        result = await svcs["db"].get_project_home_data(project_id)
+        result = await svcs.db.get_project_home_data(project_id)
         return JSONResponse(result)
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -888,7 +998,7 @@ async def http_list_violations(request: Request) -> JSONResponse:
     try:
         project_id = request.query_params.get("project_id") or None
         svcs = await _get_services()
-        violations = await svcs["db"].list_violations(project_id)
+        violations = await svcs.db.list_violations(project_id)
         return JSONResponse({"violations": violations})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -920,9 +1030,9 @@ async def get_function_context(
     """
     import asyncio as _asyncio
     svcs = await _get_services()
-    db = svcs["db"]
-    decisions = svcs["decisions"]
-    embeddings = svcs["embeddings"]
+    db = svcs.db
+    decisions = svcs.decisions
+    embeddings = svcs.embeddings
 
     pid = project_id or None
 
@@ -1026,7 +1136,7 @@ async def find_dependents(
     file location, and signature — ordered nearest-first.
     """
     svcs = await _get_services()
-    result = await svcs["db"].get_impact_radius(symbol, depth, project_id or None)
+    result = await svcs.db.get_impact_radius(symbol, depth, project_id or None)
     return json.dumps(result)
 
 
@@ -1051,7 +1161,7 @@ async def index_lsif(path: str, project_id: str = "") -> str:
     - Bootstrapping a project from an existing Sourcegraph or GitHub index export
     """
     svcs = await _get_services()
-    result = await svcs["indexer"].index_lsif(path, project_id=project_id)
+    result = await svcs.indexer.index_lsif(path, project_id=project_id)
     return json.dumps(result)
 
 
@@ -1072,7 +1182,7 @@ async def index_scip(path: str, project_id: str = "") -> str:
     project_id: namespace for the indexed symbols (defaults to the filename stem).
     """
     svcs = await _get_services()
-    result = await svcs["indexer"].index_scip(path, project_id=project_id)
+    result = await svcs.indexer.index_scip(path, project_id=project_id)
     return json.dumps(result)
 
 
@@ -1102,7 +1212,7 @@ async def lsp_get_definition(
     )
     from pathlib import Path as _Path
     svcs = await _get_services()
-    project_root = await svcs["db"].get_project_root(project_id) if project_id else ""
+    project_root = await svcs.db.get_project_root(project_id) if project_id else ""
 
     ext = _Path(file_path).suffix.lower()
     if ext == ".py":
@@ -1138,7 +1248,7 @@ async def lsp_find_references(
     )
     from pathlib import Path as _Path
     svcs = await _get_services()
-    project_root = await svcs["db"].get_project_root(project_id) if project_id else ""
+    project_root = await svcs.db.get_project_root(project_id) if project_id else ""
 
     ext = _Path(file_path).suffix.lower()
     if ext == ".py":
@@ -1170,7 +1280,7 @@ async def lsp_get_diagnostics(
     """
     from .lsp_manager import python_get_diagnostics
     svcs = await _get_services()
-    project_root = await svcs["db"].get_project_root(project_id) if project_id else ""
+    project_root = await svcs.db.get_project_root(project_id) if project_id else ""
     result = await python_get_diagnostics(file_path, project_root)
     return json.dumps(result)
 
@@ -1181,7 +1291,7 @@ async def http_reembed_project(request: Request) -> JSONResponse:
     try:
         project_id = request.path_params["project_id"]
         svcs = await _get_services()
-        result = await svcs["indexer"].reembed_project(project_id)
+        result = await svcs.indexer.reembed_project(project_id)
         return JSONResponse(result)
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
