@@ -94,7 +94,8 @@ class _QueryContext:
     async def __aenter__(self) -> _Cursor:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(self._sql, *self._params)
-        return _Cursor(rows)
+        description = [(k,) for k in rows[0].keys()] if rows else []
+        return _Cursor(rows, description)
 
     async def __aexit__(self, *_):
         pass
