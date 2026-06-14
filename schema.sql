@@ -1,8 +1,7 @@
 -- ACIP Postgres schema
 -- Run once per database: psql -d acip -f schema.sql
--- Requires pgvector extension already enabled by a superuser:
---   psql -U postgres -d acip -c "CREATE EXTENSION IF NOT EXISTS vector;"
--- In Docker/K8s, use an init script run before this file (see k8s/postgres.yaml).
+-- pgvector extension is created here; requires superuser (POSTGRES_USER is superuser in Docker/K8s).
+CREATE EXTENSION IF NOT EXISTS vector;
 -- In local dev, run: scripts/setup_db.sh
 
 CREATE TABLE IF NOT EXISTS projects (
