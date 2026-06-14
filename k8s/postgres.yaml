@@ -24,7 +24,7 @@ spec:
   ports:
     - port: 5432
       targetPort: 5432
-  clusterIP: None  # headless — direct pod DNS
+  type: ClusterIP
 ---
 apiVersion: apps/v1
 kind: StatefulSet

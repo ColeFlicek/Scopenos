@@ -45,17 +45,15 @@ jobs:
           cache: pip
 
       - name: Install system dependencies
-        run: sudo apt-get install -y libpq-dev
+        run: sudo apt-get install -y libpq-dev postgresql-client
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt pytest pytest-asyncio
 
-      - name: Setup database (enable pgvector, apply schema)
+      - name: Setup database
         run: |
-          sudo -u postgres psql -c "CREATE USER acip WITH PASSWORD 'acip';" || true
-          sudo -u postgres psql -c "CREATE DATABASE acip_test OWNER acip;" || true
-          sudo -u postgres psql -d acip_test -c "CREATE EXTENSION IF NOT EXISTS vector;" || true
-          sudo -u postgres psql -d acip_test -c "GRANT ALL ON SCHEMA public TO acip;"
+          PGPASSWORD=acip psql -U acip -h localhost -d acip_test \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
           PGPASSWORD=acip psql -U acip -h localhost -d acip_test -f schema.sql
 
       - name: Run tests
@@ -109,21 +107,69 @@ jobs:
           echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
           chmod 600 ~/.kube/config
 
-      - name: Update image tags in manifests
-        run: |
-          sed -i "s|:latest|:${{ github.sha }}|g" k8s/api-deployment.yaml k8s/worker-deployment.yaml
+      # ── Namespace first ────────────────────────────────────────────────────
+      - name: Create namespace
+        run: kubectl apply -f k8s/namespace.yaml
 
-      - name: Apply manifests
+      # ── ConfigMaps ─────────────────────────────────────────────────────────
+      - name: Apply ConfigMaps
         run: |
-          kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/configmap.yaml
-          kubectl apply -f k8s/postgres.yaml
-          kubectl apply -f k8s/redis.yaml
+          kubectl create configmap postgres-schema \
+            --from-file=00-init.sql=k8s/postgres-init.sql \
+            --from-file=01-schema.sql=schema.sql \
+            -n acip --dry-run=client -o yaml | kubectl apply -f -
+
+      # ── Secrets from GitHub Actions secrets ───────────────────────────────
+      # Required secrets (set in repo Settings → Secrets → Actions):
+      #   KUBECONFIG          - base64-encoded kubeconfig for your home server
+      #   POSTGRES_PASSWORD   - password for the in-cluster Postgres
+      #   OPENAI_API_KEY      - for embeddings
+      #   ANTHROPIC_API_KEY   - for LLM enrichment
+      #   RESEND_API_KEY      - for email (optional, leave blank to disable)
+      #
+      # DATABASE_URL and REDIS_URL are derived from in-cluster service names:
+      #   postgresql://acip:<POSTGRES_PASSWORD>@postgres-svc.acip.svc.cluster.local/acip
+      #   redis://redis-svc.acip.svc.cluster.local:6379
+      - name: Apply secrets
+        run: |
+          kubectl create secret generic acip-secrets \
+            --from-literal=DATABASE_URL="postgresql://acip:${{ secrets.POSTGRES_PASSWORD }}@postgres-svc.acip.svc.cluster.local/acip" \
+            --from-literal=REDIS_URL="redis://redis-svc.acip.svc.cluster.local:6379" \
+            --from-literal=POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
+            --from-literal=OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+            --from-literal=ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}" \
+            --from-literal=RESEND_API_KEY="${{ secrets.RESEND_API_KEY }}" \
+            -n acip --dry-run=client -o yaml | kubectl apply -f -
+
+      # ── Postgres (StatefulSet — wait for ready before API starts) ─────────
+      - name: Deploy Postgres
+        run: kubectl apply -f k8s/postgres.yaml
+
+      - name: Wait for Postgres
+        run: kubectl rollout status statefulset/postgres -n acip --timeout=3m
+
+      # ── Redis ──────────────────────────────────────────────────────────────
+      - name: Deploy Redis
+        run: kubectl apply -f k8s/redis.yaml
+
+      # ── API + Worker (pinned to the commit SHA image) ──────────────────────
+      - name: Deploy API and Worker
+        run: |
+          IMAGE="ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          sed -i "s|ghcr.io/${{ env.IMAGE_NAME }}:latest|${IMAGE}|g" \
+            k8s/api-deployment.yaml k8s/worker-deployment.yaml
           kubectl apply -f k8s/api-deployment.yaml
           kubectl apply -f k8s/worker-deployment.yaml
+
+      # ── Ingress + autoscalers ──────────────────────────────────────────────
+      - name: Apply Ingress and HPAs
+        run: |
           kubectl apply -f k8s/ingress.yaml
           kubectl apply -f k8s/hpa-api.yaml
+          kubectl apply -f k8s/hpa-worker.yaml
 
+      # ── Wait for both deployments to become healthy ────────────────────────
       - name: Wait for rollout
         run: |
           kubectl rollout status deployment/acip-api -n acip --timeout=5m

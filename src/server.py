@@ -61,8 +61,7 @@ async def _get_services() -> Services:
     async with _services_lock:
         if _services is not None:
             return _services
-        sqlite_path = os.getenv("SQLITE_PATH", "/data/acip.db")
-        db = await CallGraphDB.create(sqlite_path)
+        db = await CallGraphDB.create()
         embeddings = await EmbeddingStore.create(db)
         pipeline = EmbeddingPipeline(db, embeddings)
         decisions = await DecisionMemory.create(db, embeddings)

@@ -43,4 +43,17 @@ spec:
               mountPath: /data
       volumes:
         - name: redis-data
-          emptyDir: {}  # swap for PVC if queue durability across pod restarts matters
+          persistentVolumeClaim:
+            claimName: redis-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  namespace: acip
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
