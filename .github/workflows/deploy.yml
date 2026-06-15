@@ -3,6 +3,12 @@ name: Build and Deploy
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: "Skip tests (faster deploy)"
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -10,6 +16,7 @@ env:
 
 jobs:
   test:
+    if: ${{ !inputs.skip_tests }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -63,7 +70,8 @@ jobs:
           REDIS_URL: redis://localhost:6379/1
 
   build-and-push:
-    needs: test
+    needs: [test]
+    if: ${{ always() && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -101,6 +109,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ── Preflight: fail immediately if required secrets are missing ────────
+      - name: Validate required secrets
+        run: |
+          missing=""
+          [ -z "$DATABASE_URL" ]        && missing="$missing DATABASE_URL"
+          [ -z "$OPENAI_API_KEY" ]      && missing="$missing OPENAI_API_KEY"
+          [ -z "$ANTHROPIC_API_KEY" ]   && missing="$missing ANTHROPIC_API_KEY"
+          [ -z "$TS_OAUTH_CLIENT_ID" ]  && missing="$missing TS_OAUTH_CLIENT_ID"
+          [ -z "$TS_OAUTH_SECRET" ]     && missing="$missing TS_OAUTH_SECRET"
+          if [ -n "$missing" ]; then
+            echo "ERROR: Missing required secrets:$missing"
+            echo "Set them in Settings → Secrets → Actions before deploying."
+            exit 1
+          fi
+          echo "All required secrets present."
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+
       - name: Set up kubectl
         uses: azure/setup-kubectl@v3
 
@@ -121,16 +151,16 @@ jobs:
       - name: Create namespace
         run: kubectl apply -f k8s/namespace.yaml
 
-      # ── CoreDNS — patch to use reliable upstream (K3s default uses /etc/resolv.conf
-      #    which is broken inside K3d containers; 8.8.8.8 is always reachable) ──
+      # ── CoreDNS — patch to use reliable upstream ───────────────────────────
       - name: Patch CoreDNS upstream
         run: |
           kubectl -n kube-system get configmap coredns -o json \
             | python3 -c "
           import sys, json
           d = json.load(sys.stdin)
-          d['data']['Corefile'] = d['data']['Corefile'].replace(
-              'forward . /etc/resolv.conf', 'forward . 8.8.8.8 8.8.4.4')
+          current = d['data']['Corefile']
+          patched = current.replace('forward . /etc/resolv.conf', 'forward . 8.8.8.8 8.8.4.4')
+          d['data']['Corefile'] = patched
           print(json.dumps(d))" \
             | kubectl apply -f -
           kubectl rollout restart deployment/coredns -n kube-system
@@ -140,18 +170,15 @@ jobs:
       - name: Apply ConfigMaps
         run: kubectl apply -f k8s/configmap.yaml
 
-      # ── Secrets from GitHub Actions secrets ───────────────────────────────
+      # ── Secrets ───────────────────────────────────────────────────────────
       # Required secrets (set in repo Settings → Secrets → Actions):
-      #   KUBECONFIG          - base64-encoded kubeconfig for your cluster
       #   DATABASE_URL        - full postgres DSN (external DB, not in-cluster)
-      #                         TheHive:    postgresql://acip:<pw>@172.21.0.1/acip
-      #                         Production: postgresql://acip:<pw>@<managed-host>/acip
+      #                         TheHive: postgresql://acip:<pw>@<docker-bridge-gw>/acip
+      #                         % in passwords must be encoded as %25 in the URL
       #   OPENAI_API_KEY      - for embeddings
       #   ANTHROPIC_API_KEY   - for LLM enrichment
-      #   RESEND_API_KEY      - for email (optional, leave blank to disable)
-      #
-      # Redis stays in-cluster (stateless cache, cheap to lose):
-      #   redis://redis-svc.acip.svc.cluster.local:6379
+      #   RESEND_API_KEY      - for email (optional)
+      #   KUBECONFIG          - base64-encoded kubeconfig for the cluster
       - name: Apply secrets
         run: |
           kubectl create secret generic acip-secrets \
@@ -162,11 +189,11 @@ jobs:
             --from-literal=RESEND_API_KEY="${{ secrets.RESEND_API_KEY }}" \
             -n acip --dry-run=client -o yaml | kubectl apply -f -
 
-      # ── Redis (in-cluster — stateless cache, survives empty on restart) ───
+      # ── Redis ─────────────────────────────────────────────────────────────
       - name: Deploy Redis
         run: kubectl apply -f k8s/redis.yaml
 
-      # ── API + Worker (pinned to the commit SHA image) ──────────────────────
+      # ── API + Worker ───────────────────────────────────────────────────────
       - name: Deploy API and Worker
         run: |
           IMAGE="ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}"
@@ -180,10 +207,24 @@ jobs:
         run: |
           kubectl apply -f k8s/ingress.yaml
           kubectl apply -f k8s/hpa-api.yaml
-          # hpa-worker.yaml requires KEDA — install separately if needed
 
-      # ── Wait for both deployments to become healthy ────────────────────────
+      # ── Wait for rollout — dump logs on failure so you can see WHY ─────────
       - name: Wait for rollout
         run: |
           kubectl rollout status deployment/acip-api -n acip --timeout=5m
           kubectl rollout status deployment/acip-worker -n acip --timeout=5m
+
+      - name: Dump pod logs on failure
+        if: failure()
+        run: |
+          echo "=== Pod status ==="
+          kubectl get pods -n acip -o wide
+          echo ""
+          echo "=== API pod logs (last 100 lines) ==="
+          kubectl logs -l app=acip-api -n acip --tail=100 --prefix || true
+          echo ""
+          echo "=== Worker pod logs (last 50 lines) ==="
+          kubectl logs -l app=acip-worker -n acip --tail=50 --prefix || true
+          echo ""
+          echo "=== Events (last 20) ==="
+          kubectl get events -n acip --sort-by='.lastTimestamp' | tail -20
