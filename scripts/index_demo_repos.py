@@ -1,182 +1,227 @@
 #!/usr/bin/env python3
 """
-Index Phronosis demo repos and register them in the demo_projects table.
+Index demo repos and mark them as available to all authenticated users.
 
-Run once (or when adding new demo repos). Requires:
-  - DATABASE_URL env var pointing at the target Postgres DB
-  - OPENAI_API_KEY for embeddings
-  - ANTHROPIC_API_KEY for enrich_summaries
+Run from the project root on a machine where DATABASE_URL, OPENAI_API_KEY,
+and ANTHROPIC_API_KEY are set (e.g. on TheHive with the K8s env exported):
 
-Usage:
-    python scripts/index_demo_repos.py [--dry-run] [--skip-enrich]
+    python scripts/index_demo_repos.py
+    python scripts/index_demo_repos.py --skip-enrich   # index only, no LLM summaries
+    python scripts/index_demo_repos.py --repos requests flask  # subset by slug
 
---dry-run:     Clone and check repos but don't index or register
---skip-enrich: Skip enrich_summaries (faster, lower quality)
+Phronosis itself is handled specially: it's already indexed, so the script
+just marks it as a demo project without re-indexing.
+
+Record your OpenAI and Anthropic dashboard totals BEFORE running, then again
+AFTER, to compute per-repo cost for pricing projections.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-DEMO_REPOS = [
-    {
-        "project_id": "requests",
-        "display_name": "requests",
-        "description": "The most popular Python HTTP library. Clean, focused, ~8K lines.",
-        "repo_url": "https://github.com/psf/requests",
-        "clone_url": "https://github.com/psf/requests.git",
-    },
-    {
-        "project_id": "zod",
-        "display_name": "zod",
-        "description": "TypeScript-first schema validation with static type inference. ~15K lines.",
-        "repo_url": "https://github.com/colinhacks/zod",
-        "clone_url": "https://github.com/colinhacks/zod.git",
-    },
-    {
-        "project_id": "pytest",
-        "display_name": "pytest",
-        "description": "The Python testing framework. Medium-sized, excellent docs coverage. ~40K lines.",
-        "repo_url": "https://github.com/pytest-dev/pytest",
-        "clone_url": "https://github.com/pytest-dev/pytest.git",
-    },
+
+# ── Demo repo manifest ─────────────────────────────────────────────────────────
+
+@dataclass
+class DemoRepo:
+    slug: str
+    display_name: str
+    repo_url: str
+    description: str
+    already_indexed: bool = False  # skip clone+index, just mark as demo
+
+
+DEMO_REPOS: list[DemoRepo] = [
+    DemoRepo(
+        slug="phronosis",
+        display_name="Phronosis",
+        repo_url="https://github.com/ColeFlicek/Phronosis",
+        description="Phronosis itself — call graph, semantic embeddings, and decision memory for codebases.",
+        already_indexed=True,
+    ),
+    DemoRepo(
+        slug="requests",
+        display_name="psf/requests",
+        repo_url="https://github.com/psf/requests",
+        description="The iconic Python HTTP library. Small, clean, and well-documented.",
+    ),
+    DemoRepo(
+        slug="flask",
+        display_name="pallets/flask",
+        repo_url="https://github.com/pallets/flask",
+        description="Lightweight Python web framework. Classic microframework design.",
+    ),
+    DemoRepo(
+        slug="pytest",
+        display_name="pytest-dev/pytest",
+        repo_url="https://github.com/pytest-dev/pytest",
+        description="Python testing framework. Medium-sized, plugin-heavy architecture.",
+    ),
+    DemoRepo(
+        slug="gin",
+        display_name="gin-gonic/gin",
+        repo_url="https://github.com/gin-gonic/gin",
+        description="High-performance Go HTTP framework. Demonstrates multi-language indexing.",
+    ),
 ]
 
 
-@dataclass
-class IndexResult:
-    project_id: str
-    functions_indexed: int
-    functions_embedded: int
-    functions_enriched: int
-    elapsed_seconds: float
-    error: str | None = None
+# ── Services (same pattern as src/jobs.py) ────────────────────────────────────
+
+def _dsn() -> str:
+    return os.getenv("DATABASE_URL", "postgresql://phronosis:phronosis@localhost/phronosis")
 
 
-async def index_one(
-    repo: dict,
-    clone_dir: str,
-    dry_run: bool,
-    skip_enrich: bool,
-) -> IndexResult:
+async def _make_services():
     from src.call_graph.storage import CallGraphDB
     from src.embeddings.embedder import EmbeddingStore
     from src.embeddings.pipeline import EmbeddingPipeline
     from src.indexer import Indexer
 
-    pid = repo["project_id"]
-    print(f"\n{'='*60}")
-    print(f"  {pid}  ({repo['repo_url']})")
-    print(f"{'='*60}")
-
-    if dry_run:
-        print(f"  [dry-run] would clone and index {pid}")
-        return IndexResult(pid, 0, 0, 0, 0.0)
-
-    t0 = time.monotonic()
-
-    print(f"  Cloning…")
-    repo_path = os.path.join(clone_dir, pid)
-    subprocess.run(
-        ["git", "clone", "--depth=1", "--quiet", repo["clone_url"], repo_path],
-        check=True,
-    )
-    print(f"  Cloned to {repo_path}")
-
-    dsn = os.getenv("DATABASE_URL", "postgresql://phronosis:phronosis@localhost/phronosis")
-    db = await CallGraphDB.create(dsn)
+    db = await CallGraphDB.create(_dsn())
     embeddings = await EmbeddingStore.create(db)
     pipeline = EmbeddingPipeline(db, embeddings)
     indexer = Indexer(db, pipeline)
+    return db, indexer, pipeline
 
-    print(f"  Indexing call graph + embeddings…")
-    result = await indexer.index_project(repo_path, project_id=pid)
-    fns = result.get("functions_indexed", 0)
-    embedded = result.get("functions_reembedded", 0)
-    print(f"  Indexed {fns} functions, embedded {embedded}")
 
-    enriched = 0
-    if not skip_enrich and result.get("embedded_large_fallback", 0) > 0:
-        print(f"  Running enrich_summaries ({result['embedded_large_fallback']} undocumented functions)…")
-        batch = 0
-        while True:
-            enrich_result = await pipeline.enrich_summaries(pid, limit=200)
-            done = enrich_result.get("enriched", 0)
-            enriched += done
-            batch += 1
-            print(f"    batch {batch}: enriched {done}")
-            if done == 0:
-                break
-        print(f"  Enriched {enriched} functions total")
-
-    # Register in demo_projects
-    from datetime import datetime, timezone
+async def _mark_as_demo(db, repo: DemoRepo) -> None:
     now = datetime.now(timezone.utc).isoformat()
     await db._db.execute(
-        """INSERT INTO demo_projects (project_id, display_name, description, repo_url, last_indexed, auto_update, added_at)
-           VALUES (?, ?, ?, ?, ?, 1, ?)
-           ON CONFLICT(project_id) DO UPDATE SET
-               display_name=excluded.display_name,
-               description=excluded.description,
-               repo_url=excluded.repo_url,
-               last_indexed=excluded.last_indexed""",
-        (pid, repo["display_name"], repo["description"], repo["repo_url"], now, now),
+        """INSERT INTO demo_projects
+               (project_id, display_name, description, repo_url, added_at, auto_update)
+           VALUES (?, ?, ?, ?, ?, 0)
+           ON CONFLICT (project_id) DO UPDATE SET
+               display_name = excluded.display_name,
+               description  = excluded.description,
+               repo_url     = excluded.repo_url""",
+        (repo.slug, repo.display_name, repo.description, repo.repo_url, now),
     )
-    print(f"  Registered in demo_projects ✓")
-
-    await db.close()
-    elapsed = time.monotonic() - t0
-    return IndexResult(pid, fns, embedded, enriched, elapsed)
+    await db._db.commit()
 
 
-async def main(dry_run: bool, skip_enrich: bool) -> None:
-    print("Phronosis Demo Repo Indexer")
-    print(f"Repos to index: {[r['project_id'] for r in DEMO_REPOS]}")
-    if dry_run:
-        print("DRY RUN — no data will be written or cloned")
-    if skip_enrich:
-        print("Skipping enrich_summaries (--skip-enrich)")
-    print()
+async def _process_repo(repo: DemoRepo, clone_dir: Path, skip_enrich: bool) -> dict:
+    db, indexer, pipeline = await _make_services()
+    result = {"slug": repo.slug, "index": None, "enrich": None, "demo_marked": False}
+    t0 = time.time()
 
-    with tempfile.TemporaryDirectory(prefix="phronosis-demo-") as clone_dir:
-        results = []
-        for repo in DEMO_REPOS:
-            try:
-                result = await index_one(repo, clone_dir, dry_run, skip_enrich)
-            except Exception as exc:
-                print(f"  ERROR: {exc}")
-                result = IndexResult(repo["project_id"], 0, 0, 0, 0.0, str(exc))
-            results.append(result)
+    try:
+        if repo.already_indexed:
+            projects = await db.list_projects()
+            existing_ids = {p["id"] for p in projects}
 
-    print(f"\n{'='*60}")
-    print("  Summary")
-    print(f"{'='*60}")
-    total_fns = 0
-    for r in results:
-        status = f"✓ {r.functions_indexed} fns, {r.elapsed_seconds:.0f}s" if not r.error else f"✗ {r.error}"
-        print(f"  {r.project_id:<15} {status}")
-        total_fns += r.functions_indexed
-    print(f"\n  Total functions indexed: {total_fns}")
-    print(f"\n  Demo repos are now accessible to all authenticated users (read-only).")
+            if repo.slug not in existing_ids and "ACIP" in existing_ids:
+                print(f"  renaming ACIP → {repo.slug}")
+                await db.rename_project("ACIP", repo.slug)
+            elif repo.slug not in existing_ids:
+                print(f"  WARNING: no indexed project found for {repo.slug}, skipping")
+                return result
+            else:
+                print(f"  found existing index for {repo.slug}")
+        else:
+            repo_path = clone_dir / repo.slug
+            if not repo_path.exists():
+                print(f"  cloning {repo.repo_url} …")
+                subprocess.run(
+                    ["git", "clone", "--depth=1", repo.repo_url, str(repo_path)],
+                    check=True, capture_output=True,
+                )
+            else:
+                print(f"  {repo_path} exists, skipping clone")
+
+            print(f"  indexing …")
+            result["index"] = await indexer.index_project(str(repo_path), project_id=repo.slug)
+            print(f"  indexed {result['index'].get('nodes_written', '?')} nodes in {time.time() - t0:.1f}s")
+
+            if not skip_enrich:
+                t1 = time.time()
+                print(f"  enriching summaries …")
+                result["enrich"] = await pipeline.enrich_summaries(repo.slug, limit=2000)
+                enriched = result["enrich"].get("enriched", "?") if result["enrich"] else "?"
+                print(f"  enriched {enriched} functions in {time.time() - t1:.1f}s")
+
+        await _mark_as_demo(db, repo)
+        result["demo_marked"] = True
+        print(f"  ✓ done in {time.time() - t0:.1f}s total")
+
+    finally:
+        await db.close()
+
+    return result
 
 
-def cli() -> None:
-    parser = argparse.ArgumentParser(description="Index Phronosis demo repos")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--skip-enrich", action="store_true")
+# ── Main ───────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--skip-enrich", action="store_true",
+        help="Skip LLM summary generation (saves API cost, lower search quality)",
+    )
+    parser.add_argument(
+        "--repos", nargs="+", metavar="SLUG",
+        help=f"Index only these slugs. Available: {[r.slug for r in DEMO_REPOS]}",
+    )
+    parser.add_argument(
+        "--clone-dir", default="/tmp/phronosis-demos",
+        help="Directory to clone repos into (default: /tmp/phronosis-demos)",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.dry_run, args.skip_enrich))
+
+    repos = DEMO_REPOS
+    if args.repos:
+        slugs = set(args.repos)
+        repos = [r for r in DEMO_REPOS if r.slug in slugs]
+        if not repos:
+            print(f"No matching slugs. Available: {[r.slug for r in DEMO_REPOS]}")
+            sys.exit(1)
+
+    clone_dir = Path(args.clone_dir)
+    clone_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\nPhronosis demo indexer")
+    print(f"Repos : {[r.slug for r in repos]}")
+    print(f"Enrich: {'no (--skip-enrich)' if args.skip_enrich else 'yes'}")
+    print(f"Clones: {clone_dir}")
+    print(f"\nRecord API costs NOW before proceeding.\n")
+
+    total_t0 = time.time()
+    results = []
+
+    for repo in repos:
+        print(f"── {repo.display_name} ──────────────────────────")
+        result = asyncio.run(_process_repo(repo, clone_dir, args.skip_enrich))
+        results.append(result)
+        print()
+
+    elapsed = time.time() - total_t0
+    succeeded = [r for r in results if r["demo_marked"]]
+    failed = [r for r in results if not r["demo_marked"]]
+
+    print(f"{'─' * 48}")
+    print(f"Finished in {elapsed:.1f}s")
+    print(f"Succeeded : {[r['slug'] for r in succeeded]}")
+    if failed:
+        print(f"Failed    : {[r['slug'] for r in failed]}")
+
+    print(f"\nRecord API costs NOW and subtract from before to get per-run cost.")
+    print(f"Divide by {len(succeeded)} repos for average cost per repo.\n")
+
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    cli()
+    main()
