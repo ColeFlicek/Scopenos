@@ -3,19 +3,22 @@
 #   1. Install cert-manager
 #   2. Uncomment the tls section and cert-manager annotation
 #   3. Add the ClusterIssuer back (see git history)
+#
+# ingressClassName must match what is installed on the cluster.
+# K3s ships with Traefik; switch to nginx if you install NGINX Ingress instead.
+#
+# No host rule: Traefik on port 3004 forwards all traffic to ACIP regardless
+# of Host header. The MCP client connects via Tailscale IP, not a DNS hostname,
+# so host-based routing would block it.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: acip-ingress
   namespace: acip
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   rules:
-    - host: api.acip.dev
-      http:
+    - http:
         paths:
           - path: /
             pathType: Prefix
