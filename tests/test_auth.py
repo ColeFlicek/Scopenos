@@ -176,11 +176,41 @@ async def test_non_owner_raises_403(db, alice):
 
 # ── AuthMiddleware ─────────────────────────────────────────────────────────────
 
+from fastmcp.server.http import _current_http_request
+from fastmcp.server.middleware import MiddlewareContext
 from src.auth import AuthMiddleware, get_current_user, set_auth_db
 
 
+class _AuthMiddlewareAsgiAdapter:
+    """Bridges FastMCP AuthMiddleware into a bare Starlette ASGI app for tests.
+
+    Sets _current_http_request (the ContextVar that get_http_request() reads) then
+    calls AuthMiddleware.on_message with the ASGI app as call_next — the exact
+    same code path as production, just without a full FastMCP server.
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self._mw = AuthMiddleware()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
+        http_token = _current_http_request.set(request)
+        try:
+            async def call_next(ctx):
+                await self.app(scope, receive, send)
+
+            await self._mw.on_message(MiddlewareContext(message=None), call_next)
+        finally:
+            _current_http_request.reset(http_token)
+
+
 def make_test_app(db):
-    """Minimal Starlette app with AuthMiddleware that echoes the current user."""
+    """Minimal Starlette app with AuthMiddleware (via adapter) that echoes the current user."""
     set_auth_db(db)
 
     async def whoami(request: Request) -> JSONResponse:
@@ -190,7 +220,7 @@ def make_test_app(db):
         return JSONResponse({"user": user["email"]}, status_code=200)
 
     app = Starlette(routes=[Route("/whoami", whoami)])
-    app.add_middleware(AuthMiddleware)
+    app.add_middleware(_AuthMiddlewareAsgiAdapter)
     return app
 
 
