@@ -62,7 +62,7 @@ psql $DATABASE_URL -f schema.sql
 # Create with correct port mapping — port 3004 on host → Traefik HTTP inside cluster
 k3d cluster create acip \
   --port 3004:80@loadbalancer \
-  --k3s-arg "--tls-san=100.71.88.106@server:0"
+  --k3s-arg "--tls-san=<your-server-ip>@server:0"
 
 # Export kubeconfig (base64-encode for GitHub secret)
 k3d kubeconfig get acip > ~/.kube/acip-config.yaml

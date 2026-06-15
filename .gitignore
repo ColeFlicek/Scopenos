@@ -1,6 +1,10 @@
 # Secrets
 .env
 
+# Internal docs (not for public repo)
+BUSINESS.md
+WHITEPAPER.md
+
 # Deploy script (local use only — contains server IP)
 deploy.sh
 

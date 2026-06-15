@@ -1,6 +1,6 @@
 # ACIP — Session Workflow
 
-AI Code Intelligence Platform provides structured, queryable knowledge of a codebase via call graph, semantic embeddings, and decision memory. Follow this workflow in every session.
+Agentic Coding Intelligence Platform provides structured, queryable knowledge of a codebase via call graph, semantic embeddings, and decision memory. Follow this workflow in every session.
 
 ## Step 0 — Session start: build the map before anything else
 

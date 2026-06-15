@@ -1,5 +1,5 @@
 """
-ACIP — AI Code Intelligence Platform
+ACIP — Agentic Coding Intelligence Platform
 FastMCP server exposing call graph, semantic embeddings,
 and decision memory tools to Claude Code.
 """

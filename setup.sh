@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# ACIP — AI Code Intelligence Platform — first-run setup
+# ACIP — Agentic Coding Intelligence Platform — first-run setup
 # Prompts for credentials, writes .env, and starts the server.
 
 set -euo pipefail
 
 echo ""
 echo "╔════════════════════════════════════════════════╗"
-echo "║   AI Code Intelligence Platform — Setup        ║"
+echo "║   Agentic Coding Intelligence Platform — Setup  ║"
 echo "╚════════════════════════════════════════════════╝"
 echo ""
 

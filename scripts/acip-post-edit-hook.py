@@ -19,7 +19,7 @@ import re
 import subprocess
 import sys
 
-ACIP_URL = os.environ.get("ACIP_URL", "http://100.71.88.106:3004")
+ACIP_URL = os.environ.get("ACIP_URL", "http://localhost:3004")
 
 # Files that, when edited, may require updating embedded content in client_setup.py.
 # key = path suffix to match, value = which constant / section is affected

@@ -7,7 +7,7 @@ Reads every commit in the current repo and POSTs it to the ACIP
 with the commit hash as its trigger.
 
 Usage:
-    ACIP_URL=http://100.71.88.106:3004 python3 scripts/backfill_decisions.py
+    ACIP_URL=http://localhost:3004 python3 scripts/backfill_decisions.py
     python3 scripts/backfill_decisions.py --dry-run
     python3 scripts/backfill_decisions.py --since 2024-01-01
     python3 scripts/backfill_decisions.py --limit 50

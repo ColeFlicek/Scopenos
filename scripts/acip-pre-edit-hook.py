@@ -25,7 +25,7 @@ import sys
 import time
 import urllib.request
 
-ACIP_URL = os.environ.get("ACIP_URL", "http://100.71.88.106:3004")
+ACIP_URL = os.environ.get("ACIP_URL", "http://localhost:3004")
 TIMEOUT = 3
 GATE_TTL = 1800  # 30 minutes
 _GATE_DIR = os.path.expanduser("~/.claude/acip_gates")
