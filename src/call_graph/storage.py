@@ -202,12 +202,10 @@ class CallGraphDB:
         async with self._db.execute(
             """
             SELECT p.id, p.name, p.root, p.last_indexed, pa.role,
-                   COUNT(DISTINCT n.id) AS node_count
+                   (SELECT COUNT(*) FROM nodes n WHERE n.project_id = p.id) AS node_count
             FROM project_access pa
             JOIN projects p ON p.id = pa.project_id
-            LEFT JOIN nodes n ON n.project_id = p.id
             WHERE pa.user_id = ?
-            GROUP BY p.id, pa.role
             ORDER BY p.last_indexed DESC
             """,
             (user_id,),
@@ -217,11 +215,9 @@ class CallGraphDB:
         async with self._db.execute(
             """
             SELECT p.id, p.name, '' AS root, p.last_indexed, 'viewer' AS role,
-                   COUNT(DISTINCT n.id) AS node_count
+                   (SELECT COUNT(*) FROM nodes n WHERE n.project_id = p.id) AS node_count
             FROM demo_projects dp
             JOIN projects p ON p.id = dp.project_id
-            LEFT JOIN nodes n ON n.project_id = p.id
-            GROUP BY p.id
             ORDER BY p.last_indexed DESC
             """,
         ) as cur:
