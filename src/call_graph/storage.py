@@ -1091,7 +1091,7 @@ class CallGraphDB:
             """SELECT COUNT(*) FROM contract_violations cv
                JOIN contracts c ON c.id = cv.contract_id
                WHERE cv.project_id = ?
-               AND cv.detected_at > NOW() - INTERVAL '7 days'""",
+               AND cv.detected_at::TIMESTAMPTZ > NOW() - INTERVAL '7 days'""",
             (project_id,),
         ) as cur:
             recent_violation_count: int = (await cur.fetchone())[0]
