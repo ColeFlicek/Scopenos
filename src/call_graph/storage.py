@@ -183,6 +183,47 @@ class CallGraphDB:
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
+    async def rename_project(self, project_id: str, new_name: str) -> bool:
+        """Update the display name of a project. Returns False if project not found."""
+        async with self._db.execute(
+            "UPDATE projects SET name = ? WHERE id = ? RETURNING id",
+            (new_name, project_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return row is not None
+
+    async def list_user_projects(self, user_id: str) -> list[dict]:
+        """Return all projects accessible to user_id, including demo projects."""
+        async with self._db.execute(
+            """
+            SELECT p.id, p.name, p.root, p.last_indexed, pa.role,
+                   COUNT(DISTINCT n.id) AS node_count
+            FROM project_access pa
+            JOIN projects p ON p.id = pa.project_id
+            LEFT JOIN nodes n ON n.project_id = p.id
+            WHERE pa.user_id = ?
+            GROUP BY p.id, pa.role
+            ORDER BY p.last_indexed DESC
+            """,
+            (user_id,),
+        ) as cur:
+            private = [dict(r) for r in await cur.fetchall()]
+
+        async with self._db.execute(
+            """
+            SELECT p.id, p.name, '' AS root, p.last_indexed, 'viewer' AS role,
+                   COUNT(DISTINCT n.id) AS node_count
+            FROM demo_projects dp
+            JOIN projects p ON p.id = dp.project_id
+            LEFT JOIN nodes n ON n.project_id = p.id
+            GROUP BY p.id
+            ORDER BY p.last_indexed DESC
+            """,
+        ) as cur:
+            demos = [dict(r) for r in await cur.fetchall()]
+
+        return private + demos
+
     async def delete_project(self, project_id: str) -> dict:
         """Delete all data for a project: nodes, edges, decisions, snapshots, violations."""
         import json
