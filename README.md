@@ -1,4 +1,4 @@
-# Agentic Coding Intelligence Platform (ACIP)
+# Phronosis
 
 A self-hosted codebase intelligence server that gives Claude Code and other MCP-compatible agents structured, queryable knowledge of any project — replacing blind file traversal with targeted retrieval.
 
@@ -28,12 +28,12 @@ Three layers work together: a **call graph** for structural relationships, a **s
 ## Install
 
 ```bash
-git clone https://github.com/ColeFlicek/ACIP.git
-cd ACIP
+git clone https://github.com/ColeFlicek/Phronosis.git
+cd Phronosis
 ./setup.sh
 ```
 
-The setup script asks for your credentials and starts the full stack (Postgres + Redis + ACIP server) via Docker Compose. No manual config editing required.
+The setup script asks for your credentials and starts the full stack (Postgres + Redis + Phronosis server) via Docker Compose. No manual config editing required.
 
 ---
 
@@ -58,7 +58,7 @@ Add to your Claude Code MCP settings:
 ```json
 {
   "mcpServers": {
-    "acip": {
+    "phronosis": {
       "url": "http://localhost:3004/mcp"
     }
   }
@@ -126,7 +126,7 @@ list_improvements(project_id, status)          — open items across all agent s
 resolve_improvement(improvement_id, notes)     — close an improvement
 
 // Setup
-setup_acip_client(project_path, project_id)    — generate setup script for a new machine/project
+setup_phronosis_client(project_path, project_id)    — generate setup script for a new machine/project
 ```
 
 ---
@@ -162,12 +162,12 @@ Switch providers at any time from the **Settings** tab in the dashboard, or by e
 For authoritative re-indexing on every commit, install the post-commit hook in any project you want tracked:
 
 ```bash
-cp /path/to/ACIP/scripts/post-commit.sh /your/project/.git/hooks/post-commit
+cp /path/to/Phronosis/scripts/post-commit.sh /your/project/.git/hooks/post-commit
 chmod +x /your/project/.git/hooks/post-commit
-export ACIP_URL=http://localhost:3004
+export PHRONOSIS_URL=http://localhost:3004
 ```
 
-The hook POSTs changed file paths to ACIP after each commit.
+The hook POSTs changed file paths to Phronosis after each commit.
 
 ---
 

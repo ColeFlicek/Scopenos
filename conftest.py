@@ -7,7 +7,7 @@ import pytest_asyncio
 # Make `src` importable as a top-level package from the project root.
 sys.path.insert(0, str(Path(__file__).parent))
 
-TEST_DSN = os.getenv("DATABASE_URL", "postgresql://acip:acip@localhost/acip_test")
+TEST_DSN = os.getenv("DATABASE_URL", "postgresql://phronosis:phronosis@localhost/phronosis_test")
 
 _TRUNCATE_TABLES = [
     "decision_functions", "decisions",

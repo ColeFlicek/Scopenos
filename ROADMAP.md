@@ -1,6 +1,6 @@
-# ACIP Roadmap
+# Phronosis Roadmap
 
-> **Vision:** ACIP becomes the organizational substrate for a software development organization that runs without a standing engineering team. Humans define goals, constraints, and priorities. Agents handle implementation. ACIP is the shared nervous system — memory, coordination, governance, and project management in one queryable layer.
+> **Vision:** Phronosis becomes the organizational substrate for a software development organization that runs without a standing engineering team. Humans define goals, constraints, and priorities. Agents handle implementation. Phronosis is the shared nervous system — memory, coordination, governance, and project management in one queryable layer.
 
 ---
 
@@ -22,9 +22,9 @@ Human attention becomes a finite resource allocated by evidence, not spent unifo
 ---
 
 ### Multi-Agent Coordination
-ACIP as shared semantic state for multiple concurrent agents on the same codebase.
+Phronosis as shared semantic state for multiple concurrent agents on the same codebase.
 
-When agent A changes an API contract, it doesn't send a message to agent B — it updates ACIP. Agent B, before implementing anything that touches that contract, queries ACIP and discovers the change. Coordination through semantic state, not message passing. Requires multi-agent runtime infrastructure and a subscription/notification model on function-level changes.
+When agent A changes an API contract, it doesn't send a message to agent B — it updates Phronosis. Agent B, before implementing anything that touches that contract, queries Phronosis and discovers the change. Coordination through semantic state, not message passing. Requires multi-agent runtime infrastructure and a subscription/notification model on function-level changes.
 
 ---
 
@@ -58,11 +58,11 @@ Measure whether tests cover the *behaviors* functions implement, not just the li
 | Parallel LLM summarization | 2026-06-09 | asyncio.gather + Semaphore(10) |
 | Similarity score normalization | 2026-06-09 | L2 → [0,1] match percentage |
 | Web UI project selector + search panel | 2026-06-09 | |
-| `/acip-import` slash command | 2026-06-08 | Three-step onboarding in one command |
+| `/phronosis-import` slash command | 2026-06-08 | Three-step onboarding in one command |
 | ~~Project Management Interface~~ | — | Skipped — markdown files + function ID references serve the same purpose without a dedicated tracker |
 | Invariant Contracts | 2026-06-09 | LLM-generated violation/compliance examples, structural + semantic enforcement, MCP tools, web UI, post-commit hook. Destructive ops (delete/update) web-UI-only to prevent agent bypass. |
 | Project Home (`get_project_home`) | 2026-06-09 | Single MCP call returns subsystems, wiring, chokepoints, risk surface, health. Replaces file reads for architectural understanding. |
-| `setup_acip_client` one-call onboarding | 2026-06-09 | Generates setup script: hooks, settings.json, CLAUDE.md, memory files, git hook. |
-| PreToolUse hooks (Bash/Read/Edit) | 2026-06-09 | Risk-signal check on Edit; ACIP nudge on grep/Read. |
+| `setup_phronosis_client` one-call onboarding | 2026-06-09 | Generates setup script: hooks, settings.json, CLAUDE.md, memory files, git hook. |
+| PreToolUse hooks (Bash/Read/Edit) | 2026-06-09 | Risk-signal check on Edit; Phronosis nudge on grep/Read. |
 | PostToolUse/Edit hook | 2026-06-09 | Auto-indexes edited file in background; warns when client_setup.py template sources are modified. |
 | Agent Improvement Filing (`file_improvement` / `list_improvements` / `resolve_improvement`) | 2026-06-09 | Cross-session agent crosstalk: agents file structured bug/enhancement reports mid-session; a later session reads open items and implements them. SQLite-backed, no external dependency. |

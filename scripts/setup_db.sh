@@ -1,6 +1,6 @@
 #!/bin/bash
 # One-time database setup — run as postgres superuser.
-# Creates the acip user, database, and enables pgvector.
+# Creates the phronosis user, database, and enables pgvector.
 #
 # Usage (local dev):
 #   sudo -u postgres bash scripts/setup_db.sh
@@ -10,10 +10,10 @@
 
 set -e
 
-DB=${DB:-acip}
-TEST_DB=${TEST_DB:-acip_test}
-DB_USER=${DB_USER:-acip}
-DB_PASS=${DB_PASS:-acip}
+DB=${DB:-phronosis}
+TEST_DB=${TEST_DB:-phronosis_test}
+DB_USER=${DB_USER:-phronosis}
+DB_PASS=${DB_PASS:-phronosis}
 
 psql -v ON_ERROR_STOP=1 <<-EOSQL
     DO \$\$ BEGIN

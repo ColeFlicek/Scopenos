@@ -2,13 +2,13 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_USER: acip
-      POSTGRES_PASSWORD: acip
-      POSTGRES_DB: acip
+      POSTGRES_USER: phronosis
+      POSTGRES_PASSWORD: phronosis
+      POSTGRES_DB: phronosis
     ports:
       - "5432:5432"
     volumes:
-      - acip_pgdata:/var/lib/postgresql/data
+      - phronosis_pgdata:/var/lib/postgresql/data
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
     restart: unless-stopped
 
@@ -18,14 +18,14 @@ services:
       - "6379:6379"
     restart: unless-stopped
 
-  acip:
+  phronosis:
     build: .
     ports:
       - "3004:3004"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      DATABASE_URL: postgresql://acip:acip@postgres/acip
+      DATABASE_URL: postgresql://phronosis:phronosis@postgres/phronosis
       REDIS_URL: redis://redis:6379
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
@@ -37,13 +37,13 @@ services:
       - redis
     restart: unless-stopped
 
-  acip-worker:
+  phronosis-worker:
     build: .
     command: python -m src.worker
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      DATABASE_URL: postgresql://acip:acip@postgres/acip
+      DATABASE_URL: postgresql://phronosis:phronosis@postgres/phronosis
       REDIS_URL: redis://redis:6379
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
@@ -54,4 +54,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  acip_pgdata:
+  phronosis_pgdata:

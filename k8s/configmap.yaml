@@ -1,8 +1,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: acip-config
-  namespace: acip
+  name: phronosis-config
+  namespace: phronosis
 data:
   EMBEDDING_PROVIDER: "openai"
   EMBEDDING_MODEL: ""

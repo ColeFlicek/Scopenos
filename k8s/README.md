@@ -1,4 +1,4 @@
-# ACIP Kubernetes Deployment
+# Phronosis Kubernetes Deployment
 
 Postgres runs **outside** the cluster so indexed data survives cluster recreation.
 Redis stays in-cluster (stateless cache — cheap to lose).
@@ -12,22 +12,22 @@ Redis stays in-cluster (stateless cache — cheap to lose).
 # Named volume survives container recreation; -p binds to all host interfaces
 # so K3d pods can reach it via the Docker bridge gateway (172.21.0.1).
 docker run -d \
-  --name acip-postgres \
+  --name phronosis-postgres \
   --restart unless-stopped \
-  -e POSTGRES_USER=acip \
+  -e POSTGRES_USER=phronosis \
   -e POSTGRES_PASSWORD=<password> \
-  -e POSTGRES_DB=acip \
+  -e POSTGRES_DB=phronosis \
   -p 5432:5432 \
-  -v acip-pgdata:/var/lib/postgresql/data \
+  -v phronosis-pgdata:/var/lib/postgresql/data \
   pgvector/pgvector:pg17
 
 # Apply schema (one-time)
-docker exec acip-postgres psql -U acip acip \
+docker exec phronosis-postgres psql -U phronosis phronosis \
   -c "CREATE EXTENSION IF NOT EXISTS vector;"
-cat schema.sql | docker exec -i acip-postgres psql -U acip acip
+cat schema.sql | docker exec -i phronosis-postgres psql -U phronosis phronosis
 
 # DATABASE_URL for GitHub Actions secret:
-#   postgresql://acip:<password>@172.21.0.1/acip
+#   postgresql://phronosis:<password>@172.21.0.1/phronosis
 ```
 
 K3d cluster can be deleted and recreated freely — data is in the Docker volume.
@@ -41,7 +41,7 @@ psql $DATABASE_URL -c "CREATE EXTENSION IF NOT EXISTS vector;"
 psql $DATABASE_URL -f schema.sql
 
 # DATABASE_URL for GitHub Actions secret:
-#   postgresql://acip:<password>@<managed-host>:5432/acip
+#   postgresql://phronosis:<password>@<managed-host>:5432/phronosis
 ```
 
 ## GitHub Actions secrets
@@ -60,13 +60,13 @@ psql $DATABASE_URL -f schema.sql
 
 ```bash
 # Create with correct port mapping — port 3004 on host → Traefik HTTP inside cluster
-k3d cluster create acip \
+k3d cluster create phronosis \
   --port 3004:80@loadbalancer \
   --k3s-arg "--tls-san=<your-server-ip>@server:0"
 
 # Export kubeconfig (base64-encode for GitHub secret)
-k3d kubeconfig get acip > ~/.kube/acip-config.yaml
-base64 -w0 ~/.kube/acip-config.yaml  # paste this as KUBECONFIG secret
+k3d kubeconfig get phronosis > ~/.kube/phronosis-config.yaml
+base64 -w0 ~/.kube/phronosis-config.yaml  # paste this as KUBECONFIG secret
 ```
 
 ## First deploy
@@ -78,12 +78,12 @@ kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/configmap.yaml
 
 # Secrets — set DATABASE_URL to your external Postgres DSN
-kubectl create secret generic acip-secrets \
-  --from-literal=DATABASE_URL="postgresql://acip:<pw>@172.21.0.1/acip" \
-  --from-literal=REDIS_URL="redis://redis-svc.acip.svc.cluster.local:6379" \
+kubectl create secret generic phronosis-secrets \
+  --from-literal=DATABASE_URL="postgresql://phronosis:<pw>@172.21.0.1/phronosis" \
+  --from-literal=REDIS_URL="redis://redis-svc.phronosis.svc.cluster.local:6379" \
   --from-literal=OPENAI_API_KEY="sk-..." \
   --from-literal=ANTHROPIC_API_KEY="sk-ant-..." \
-  -n acip --dry-run=client -o yaml | kubectl apply -f -
+  -n phronosis --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl apply -f k8s/redis.yaml
 kubectl apply -f k8s/api-deployment.yaml
@@ -98,32 +98,32 @@ kubectl apply -f k8s/hpa-api.yaml
 
 ```bash
 # Check pod status
-kubectl get pods -n acip
+kubectl get pods -n phronosis
 
 # Tail API logs
-kubectl logs -l app=acip-api -n acip -f
+kubectl logs -l app=phronosis-api -n phronosis -f
 
 # Tail worker logs
-kubectl logs -l app=acip-worker -n acip -f
+kubectl logs -l app=phronosis-worker -n phronosis -f
 
 # Check queue depth
-kubectl exec -it deployment/redis -n acip -- redis-cli llen rq:queue:acip-indexing
+kubectl exec -it deployment/redis -n phronosis -- redis-cli llen rq:queue:phronosis-indexing
 
 # Force rollout (after pushing new image)
-kubectl rollout restart deployment/acip-api deployment/acip-worker -n acip
+kubectl rollout restart deployment/phronosis-api deployment/phronosis-worker -n phronosis
 
 # Backup external Postgres
-docker exec acip-postgres pg_dump -U acip --no-owner acip > acip-backup.sql
+docker exec phronosis-postgres pg_dump -U phronosis --no-owner phronosis > phronosis-backup.sql
 
 # Restore
-docker exec -i acip-postgres psql -U acip acip < acip-backup.sql
+docker exec -i phronosis-postgres psql -U phronosis phronosis < phronosis-backup.sql
 ```
 
 ## Scaling workers
 
 ```bash
 # Manual
-kubectl scale deployment acip-worker --replicas=3 -n acip
+kubectl scale deployment phronosis-worker --replicas=3 -n phronosis
 
 # Automatic (requires KEDA)
 kubectl apply -f k8s/hpa-worker.yaml

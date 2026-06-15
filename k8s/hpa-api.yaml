@@ -1,13 +1,13 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: acip-api-hpa
-  namespace: acip
+  name: phronosis-api-hpa
+  namespace: phronosis
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: acip-api
+    name: phronosis-api
   minReplicas: 1
   maxReplicas: 3
   metrics:

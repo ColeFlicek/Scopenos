@@ -1,8 +1,8 @@
 """
-ACIP client setup — generates the self-contained Python script that configures
-a user's machine and project to work with ACIP.
+Phronosis client setup — generates the self-contained Python script that configures
+a user's machine and project to work with Phronosis.
 
-Called by the setup_acip_client MCP tool. The returned script writes all
+Called by the setup_phronosis_client MCP tool. The returned script writes all
 required files (hook, settings.json merge, CLAUDE.md, memory files, git hook)
 and requires no manual steps beyond running it.
 """
@@ -11,18 +11,18 @@ from __future__ import annotations
 import os
 
 # ── Template: Claude Code pre-edit hook ───────────────────────────────────────
-# Installed to ~/.claude/hooks/acip-suggest.py
+# Installed to ~/.claude/hooks/phronosis-suggest.py
 _HOOK_SCRIPT = r'''#!/usr/bin/env python3
-"""ACIP PreToolUse hook — gate on Read, risk-check on Edit, nudge on Bash."""
+"""Phronosis PreToolUse hook — gate on Read, risk-check on Edit, nudge on Bash."""
 import json, os, re, sys, time, urllib.request
 
-ACIP_URL = os.environ.get("ACIP_URL", "{acip_url}")
+PHRONOSIS_URL = os.environ.get("PHRONOSIS_URL", "{phronosis_url}")
 TIMEOUT = 3
 GATE_TTL = 1800
-_GATE_DIR = os.path.expanduser("~/.claude/acip_gates")
+_GATE_DIR = os.path.expanduser("~/.claude/phronosis_gates")
 
 def _project_id():
-    pid = os.environ.get("ACIP_PROJECT", "")
+    pid = os.environ.get("PHRONOSIS_PROJECT", "")
     if pid: return pid
     try:
         import subprocess
@@ -39,7 +39,7 @@ def _project_id():
 
 def _project_home(pid):
     try:
-        url = f"{ACIP_URL}/api/project-home/{urllib.request.quote(pid,safe='')}"
+        url = f"{PHRONOSIS_URL}/api/project-home/{urllib.request.quote(pid,safe='')}"
         with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
             return json.loads(r.read())
     except Exception: return {}
@@ -73,7 +73,7 @@ try:
         cmd = inp.get("command","")
         if (re.search(r"\bgrep\b",cmd) and re.search(r"\.(py|ts|tsx|js|jsx)",cmd)
                 and not re.search(r"\b(git|pytest|rtk|ruff|mypy|test)\b",cmd)):
-            print("[ACIP] grep on source — MCP is faster:\n"
+            print("[Phronosis] grep on source — MCP is faster:\n"
                   "  get_callers(fn) · get_callees(fn) · query_similar_functions(snippet)")
 
     elif tool == "Read":
@@ -85,10 +85,10 @@ try:
         if _gate_valid(pid): sys.exit(0)
         home = _project_home(pid)
         if not home:
-            print("[ACIP] Reading source — if exploring structure, MCP is faster:\n"
+            print("[Phronosis] Reading source — if exploring structure, MCP is faster:\n"
                   "  get_impact_radius(fn) · get_decision_history(fn) · get_callers(fn)")
             sys.exit(0)
-        print(f"[ACIP] Architectural context — {pid} ({home.get('function_count','?')} functions)")
+        print(f"[Phronosis] Architectural context — {pid} ({home.get('function_count','?')} functions)")
         print(f"  Chokepoints : {_fmt(home.get('chokepoints',[]))}")
         print(f"  Risk surface: {_fmt(home.get('risk_surface',[]))}")
         print(f"  Entry points: {_fmt(home.get('entry_points',[]))}")
@@ -99,7 +99,7 @@ try:
         gaps = home.get("health",{}).get("top_knowledge_gaps",[])
         if gaps:
             print(f"  Top knowledge gap: {gaps[0].get('id','').split('.')[-1]} ({gaps[0].get('caller_count',0)} callers)")
-        print(f"\n[ACIP] Context loaded. Retry your Read — gate valid for {GATE_TTL//60} min.")
+        print(f"\n[Phronosis] Context loaded. Retry your Read — gate valid for {GATE_TTL//60} min.")
         _write_gate(pid)
         sys.exit(2)
 
@@ -122,35 +122,35 @@ try:
             if mod and (mod in fid or fid.startswith(mod)):
                 warnings.append(f"  RISK SURFACE  {'.'.join(fid.split('.')[-2:])}  ({rs['churn']} patches · {rs['caller_count']} callers)")
         if warnings:
-            print(f"[ACIP] High-risk edit in {os.path.basename(path)}:")
+            print(f"[Phronosis] High-risk edit in {os.path.basename(path)}:")
             for w in warnings: print(w)
             print("  1. get_impact_radius(fn, depth=2)     — what breaks?")
             print("  2. get_decision_history(fn)           — why was this designed this way?")
             print("  3. query_similar_functions(snippet)   — what is the existing pattern?")
         else:
             fn = mod.split(".")[-1] if mod else "fn"
-            print(f"[ACIP] Pre-edit: get_impact_radius({fn}) · get_decision_history({fn}) · query_similar_functions(snippet)")
+            print(f"[Phronosis] Pre-edit: get_impact_radius({fn}) · get_decision_history({fn}) · query_similar_functions(snippet)")
 except Exception: pass
 sys.exit(0)
 '''
 
 # ── Template: Claude Code post-edit hook ─────────────────────────────────────
-# Installed to ~/.claude/hooks/acip-post-edit.py
+# Installed to ~/.claude/hooks/phronosis-post-edit.py
 _POST_EDIT_HOOK = r'''#!/usr/bin/env python3
-"""ACIP PostToolUse hook — auto-indexes edited files and warns on template staleness."""
+"""Phronosis PostToolUse hook — auto-indexes edited files and warns on template staleness."""
 import json, os, re, subprocess, sys, urllib.request
 
-ACIP_URL = os.environ.get("ACIP_URL", "{acip_url}")
+PHRONOSIS_URL = os.environ.get("PHRONOSIS_URL", "{phronosis_url}")
 TIMEOUT  = 3
 
 TEMPLATE_SOURCES = {
-    "scripts/acip-pre-edit-hook.py":  "_HOOK_SCRIPT in client_setup.py",
+    "scripts/phronosis-pre-edit-hook.py":  "_HOOK_SCRIPT in client_setup.py",
     "scripts/post-commit.sh":         "post-commit template (verify structure unchanged)",
     "CLAUDE.md":                      "_CLIENT_CLAUDE_MD template in client_setup.py",
 }
 
 def _project_id():
-    pid = os.environ.get("ACIP_PROJECT", "")
+    pid = os.environ.get("PHRONOSIS_PROJECT", "")
     if pid: return pid
     try:
         remote = subprocess.check_output(["git","remote","get-url","origin"],
@@ -175,14 +175,14 @@ def _bg_index(file_path, root, pid):
     cmd = f"""
 import json,urllib.request
 payload=json.dumps({{"project_root":{repr(root)},"project_id":{repr(pid)},"files":{{{repr(file_path)}:open({repr(file_path)},encoding="utf-8",errors="replace").read()}}}}).encode()
-req=urllib.request.Request({repr(ACIP_URL+"/api/index-bulk")},data=payload,headers={{"Content-Type":"application/json"}},method="POST")
+req=urllib.request.Request({repr(PHRONOSIS_URL+"/api/index-bulk")},data=payload,headers={{"Content-Type":"application/json"}},method="POST")
 try:
     with urllib.request.urlopen(req,timeout=60) as r:
         d=json.loads(r.read())
     import os
-    print(f"[ACIP] indexed {os.path.basename({repr(file_path)})}: {{d.get('functions_updated',0)}} fns updated")
+    print(f"[Phronosis] indexed {os.path.basename({repr(file_path)})}: {{d.get('functions_updated',0)}} fns updated")
 except Exception as e:
-    print(f"[ACIP] index failed: {{e}}")
+    print(f"[Phronosis] index failed: {{e}}")
 """
     subprocess.Popen(["python3","-c",cmd],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
@@ -200,13 +200,13 @@ try:
         if pid and root:
             _bg_index(path, root, pid)
             rel = path.replace(root+"/","") if root else path
-            print(f"[ACIP] Indexing {rel} in background...")
+            print(f"[Phronosis] Indexing {rel} in background...")
 
     for suffix, warning in TEMPLATE_SOURCES.items():
         if path.endswith(suffix):
-            print(f"[ACIP] Template source edited: {suffix}")
+            print(f"[Phronosis] Template source edited: {suffix}")
             print(f"  → Review {warning}")
-            print(f"  → Update the embedded constant so setup_acip_client() distributes the latest version.")
+            print(f"  → Update the embedded constant so setup_phronosis_client() distributes the latest version.")
             break
 except Exception: pass
 sys.exit(0)
@@ -215,9 +215,9 @@ sys.exit(0)
 # ── Template: project CLAUDE.md ───────────────────────────────────────────────
 # Written to <project_root>/CLAUDE.md (appended if file exists)
 _CLIENT_CLAUDE_MD = """\
-# ACIP Workflow
+# Phronosis Workflow
 
-This project is indexed in ACIP at `{acip_url}` (project: `{project_id}`).
+This project is indexed in Phronosis at `{phronosis_url}` (project: `{project_id}`).
 Follow this three-tier retrieval ladder every session.
 
 ## Session start — build the map first
@@ -267,11 +267,11 @@ Concurrent agents read this before touching the same code.
 """
 
 # ── Template: memory feedback file ───────────────────────────────────────────
-# Written to ~/.claude/projects/<project>/memory/feedback_acip_workflow.md
+# Written to ~/.claude/projects/<project>/memory/feedback_phronosis_workflow.md
 _MEMORY_FEEDBACK = """\
 ---
-name: feedback-acip-workflow
-description: "ACIP workflow rules for {project_id}: three-tier retrieval, pre-edit gate, immediate decision logging."
+name: feedback-phronosis-workflow
+description: "Phronosis workflow rules for {project_id}: three-tier retrieval, pre-edit gate, immediate decision logging."
 metadata:
   type: feedback
 ---
@@ -287,26 +287,26 @@ log_decision() immediately after significant choices (not just at session end).
 Concurrent agents read it before touching the same code.
 
 **Why:** file reads for architectural understanding waste tokens and miss cross-file context.
-ACIP queries are more information-dense. [[feedback-acip-comprehension]]
+Phronosis queries are more information-dense. [[feedback-phronosis-comprehension]]
 """
 
 _MEMORY_INDEX = """\
-# ACIP Memory Index
+# Phronosis Memory Index
 
-- [ACIP workflow](feedback_acip_workflow.md) — three-tier retrieval, pre-edit gate, immediate decision logging
+- [Phronosis workflow](feedback_phronosis_workflow.md) — three-tier retrieval, pre-edit gate, immediate decision logging
 """
 
-# ── Skill: acip-workflow ──────────────────────────────────────────────────────
-# Installed to ~/.claude/skills/acip-workflow/SKILL.md
+# ── Skill: phronosis-workflow ──────────────────────────────────────────────────────
+# Installed to ~/.claude/skills/phronosis-workflow/SKILL.md
 # Frontmatter is always loaded in Claude's system prompt (first level of
 # progressive disclosure). Body loads when Claude judges the skill is relevant.
-_ACIP_SKILL = """\
+_Phronosis_SKILL = """\
 ---
-name: acip-workflow
-description: "ACIP code intelligence for indexed codebases. Mandatory workflow: call get_project_home(project_id) FIRST every session before any source file read. Tier order: (1) get_project_home — architecture snapshot; (2) query_similar_functions / get_impact_radius / get_decision_history — function context; (3) Read — only for the exact lines you are about to modify. Never read files to understand structure; use ACIP tools instead. Use on any ACIP-indexed project."
+name: phronosis-workflow
+description: "Phronosis code intelligence for indexed codebases. Mandatory workflow: call get_project_home(project_id) FIRST every session before any source file read. Tier order: (1) get_project_home — architecture snapshot; (2) query_similar_functions / get_impact_radius / get_decision_history — function context; (3) Read — only for the exact lines you are about to modify. Never read files to understand structure; use Phronosis tools instead. Use on any Phronosis-indexed project."
 ---
 
-# ACIP Workflow
+# Phronosis Workflow
 
 ## Session Start — Three-Tier Retrieval Ladder
 
@@ -396,7 +396,7 @@ The post-commit git hook handles commit-level decisions automatically.
 
 def generate_setup_script(
     project_root: str,
-    acip_url: str,
+    phronosis_url: str,
     project_id: str,
     claude_home: str,
     install_git_hook: bool,
@@ -404,23 +404,23 @@ def generate_setup_script(
 ) -> str:
     """
     Generate a self-contained Python script that configures a machine and project
-    to work with ACIP. The caller executes this script via Bash.
+    to work with Phronosis. The caller executes this script via Bash.
     """
-    hook_content = _HOOK_SCRIPT.replace("{acip_url}", acip_url)
-    post_edit_content = _POST_EDIT_HOOK.replace("{acip_url}", acip_url)
-    claude_md = _CLIENT_CLAUDE_MD.replace("{acip_url}", acip_url).replace("{project_id}", project_id)
+    hook_content = _HOOK_SCRIPT.replace("{phronosis_url}", phronosis_url)
+    post_edit_content = _POST_EDIT_HOOK.replace("{phronosis_url}", phronosis_url)
+    claude_md = _CLIENT_CLAUDE_MD.replace("{phronosis_url}", phronosis_url).replace("{project_id}", project_id)
     mem_feedback = _MEMORY_FEEDBACK.replace("{project_id}", project_id)
-    skill_content = _ACIP_SKILL
+    skill_content = _Phronosis_SKILL
 
     mem_path_key = project_root.replace("/", "-").lstrip("-")
 
     pre_hook_entries = [
-        {"matcher": "Bash", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/acip-suggest.py"}]},
-        {"matcher": "Read", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/acip-suggest.py"}]},
-        {"matcher": "Edit", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/acip-suggest.py"}]},
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/phronosis-suggest.py"}]},
+        {"matcher": "Read", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/phronosis-suggest.py"}]},
+        {"matcher": "Edit", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/phronosis-suggest.py"}]},
     ]
     post_hook_entries = [
-        {"matcher": "Edit", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/acip-post-edit.py"}]},
+        {"matcher": "Edit", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/phronosis-post-edit.py"}]},
     ]
 
     import json as _json
@@ -443,11 +443,11 @@ else:
 """
 
     script = f'''#!/usr/bin/env python3
-"""ACIP client setup — generated by setup_acip_client().  Run once per machine/project."""
+"""Phronosis client setup — generated by setup_phronosis_client().  Run once per machine/project."""
 import json, os, pathlib, re, stat, sys
 
 PROJECT_ROOT = "{project_root}"
-ACIP_URL     = "{acip_url}"
+PHRONOSIS_URL     = "{phronosis_url}"
 PROJECT_ID   = "{project_id}"
 CLAUDE_HOME  = "{claude_home}"
 MEM_KEY      = "{mem_path_key}"
@@ -457,12 +457,12 @@ results = []
 # ── Pre-edit and post-edit hooks ──────────────────────────────────
 hooks_dir = pathlib.Path(CLAUDE_HOME) / "hooks"
 hooks_dir.mkdir(parents=True, exist_ok=True)
-for fname, content in [("acip-suggest.py", {repr(hook_content)}),
-                        ("acip-post-edit.py", {repr(post_edit_content)})]:
+for fname, content in [("phronosis-suggest.py", {repr(hook_content)}),
+                        ("phronosis-post-edit.py", {repr(post_edit_content)})]:
     p = hooks_dir / fname
     p.write_text(content)
     p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-results.append(f"  hooks        {{hooks_dir}}/acip-suggest.py + acip-post-edit.py")
+results.append(f"  hooks        {{hooks_dir}}/phronosis-suggest.py + phronosis-post-edit.py")
 
 # ── settings.json — merge PreToolUse and PostToolUse entries ──────
 settings_path = pathlib.Path(CLAUDE_HOME) / "settings.json"
@@ -490,29 +490,29 @@ results.append(f"  settings     {{settings_path}}")
 
 # ── Project CLAUDE.md ──────────────────────────────────────────────
 claude_md_path = pathlib.Path(PROJECT_ROOT) / "CLAUDE.md"
-acip_section = {repr(claude_md)}
+phronosis_section = {repr(claude_md)}
 if claude_md_path.exists():
     existing = claude_md_path.read_text()
-    if "# ACIP Workflow" not in existing:
-        claude_md_path.write_text(existing.rstrip() + "\\n\\n" + acip_section)
-        results.append(f"  CLAUDE.md    {{claude_md_path}} (ACIP section appended)")
+    if "# Phronosis Workflow" not in existing:
+        claude_md_path.write_text(existing.rstrip() + "\\n\\n" + phronosis_section)
+        results.append(f"  CLAUDE.md    {{claude_md_path}} (Phronosis section appended)")
     else:
-        results.append(f"  CLAUDE.md    {{claude_md_path}} (already has ACIP section, skipped)")
+        results.append(f"  CLAUDE.md    {{claude_md_path}} (already has Phronosis section, skipped)")
 else:
-    claude_md_path.write_text(acip_section)
+    claude_md_path.write_text(phronosis_section)
     results.append(f"  CLAUDE.md    {{claude_md_path}} (created)")
 
 # ── Memory files ───────────────────────────────────────────────────
 mem_dir = pathlib.Path(CLAUDE_HOME) / "projects" / MEM_KEY / "memory"
 mem_dir.mkdir(parents=True, exist_ok=True)
-(mem_dir / "feedback_acip_workflow.md").write_text({repr(mem_feedback)})
+(mem_dir / "feedback_phronosis_workflow.md").write_text({repr(mem_feedback)})
 mem_index = mem_dir / "MEMORY.md"
 if not mem_index.exists():
     mem_index.write_text({repr(_MEMORY_INDEX)})
 results.append(f"  memory       {{mem_dir}}")
 
-# ── Skill: acip-workflow ───────────────────────────────────────────
-skill_dir = pathlib.Path(CLAUDE_HOME) / "skills" / "acip-workflow"
+# ── Skill: phronosis-workflow ───────────────────────────────────────────
+skill_dir = pathlib.Path(CLAUDE_HOME) / "skills" / "phronosis-workflow"
 skill_dir.mkdir(parents=True, exist_ok=True)
 (skill_dir / "SKILL.md").write_text({repr(skill_content)})
 results.append(f"  skill        {{skill_dir / 'SKILL.md'}}")
@@ -520,8 +520,8 @@ results.append(f"  skill        {{skill_dir / 'SKILL.md'}}")
 {git_hook_block}
 
 # ── Done ───────────────────────────────────────────────────────────
-print("\\nACIP setup complete for project:", PROJECT_ID)
-print("Server:", ACIP_URL)
+print("\\nPhronosis setup complete for project:", PROJECT_ID)
+print("Server:", PHRONOSIS_URL)
 print("\\nFiles written:")
 for r in results: print(r)
 print("\\nNext: restart Claude Code to activate the hooks.")

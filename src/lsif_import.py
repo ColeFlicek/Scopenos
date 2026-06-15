@@ -1,10 +1,10 @@
 """
-LSIF (Language Server Index Format) ingestion for ACIP.
+LSIF (Language Server Index Format) ingestion for Phronosis.
 
 LSIF is an NDJSON format where each line is a JSON vertex or edge produced
 by tools like lsif-py, lsif-tsc, lsif-java, rust-analyzer, etc.  We build
 an in-memory graph from the LSIF objects, then extract function/class
-definitions with their hover documentation and import them into ACIP's
+definitions with their hover documentation and import them into Phronosis's
 call-graph + embedding pipeline.
 
 Call-edge resolution is deferred to v2 — the LSIF reference graph does not

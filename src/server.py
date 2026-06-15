@@ -1,5 +1,5 @@
 """
-ACIP — Agentic Coding Intelligence Platform
+Phronosis — Phronosis
 FastMCP server exposing call graph, semantic embeddings,
 and decision memory tools to Claude Code.
 """
@@ -94,7 +94,7 @@ async def lifespan(server: FastMCP):
 
 # ── FastMCP server ────────────────────────────────────────────────────────────
 
-mcp = FastMCP("acip", lifespan=lifespan)
+mcp = FastMCP("phronosis", lifespan=lifespan)
 mcp.add_middleware(AuthMiddleware())
 register_routes(mcp, _get_services, email_sender=get_email_sender())
 
@@ -130,7 +130,7 @@ async def index_project(path: str, project_id: str = "") -> str:
     await check_permission(get_current_user(), pid, "write", svcs.db)
     user = get_current_user()
     user_id = user["id"] if user else "anon"
-    rate_key = f"acip:user_job:{user_id}"
+    rate_key = f"phronosis:user_job:{user_id}"
     q = _queue_mod.get_queue()
     existing_job_id = q.connection.get(rate_key)
     if existing_job_id:
@@ -304,7 +304,7 @@ async def get_dependency_fingerprint(project_id: str) -> str:
     - changed_symbols: signatures that shifted — potential breaking API changes.
     - added_symbols: new external dependencies introduced since the last index.
 
-    The fingerprint is also written to <project>/.acip/dependency-fingerprint.json
+    The fingerprint is also written to <project>/.phronosis/dependency-fingerprint.json
     on every index_project run, making dependency changes visible in git diff.
     """
     svcs = await _get_services()
@@ -418,7 +418,7 @@ async def check_dependency(library_name: str, project_id: str) -> str:
 
     Full dependency health check for a single library. Returns in one call:
     - version: installed version from the latest fingerprint (or "unknown")
-    - symbols: all external symbols ACIP has seen from this library
+    - symbols: all external symbols Phronosis has seen from this library
     - dependents: internal functions that call into this library, with call_count
     - recent_changes: version or symbol changes from the latest fingerprint diff
 
@@ -537,21 +537,21 @@ async def query_decisions(
 # ── Client setup tool ────────────────────────────────────────────────────────
 
 @mcp.tool()
-async def setup_acip_client(
+async def setup_phronosis_client(
     project_root: str,
     project_id: str = "",
     claude_home: str = "",
     install_git_hook: bool = True,
 ) -> str:
     """
-    First-time setup for a new ACIP-integrated project. Call this once after
+    First-time setup for a new Phronosis-integrated project. Call this once after
     connecting to the MCP server. Execute the returned script with Bash to
     complete setup — no other manual steps required.
 
     Installs on the client machine:
-    - Pre-edit hook (~/.claude/hooks/acip-suggest.py): fires before every Edit,
+    - Pre-edit hook (~/.claude/hooks/phronosis-suggest.py): fires before every Edit,
       warns when editing chokepoints or risk-surface functions, and nudges toward
-      ACIP tools on grep/Read.
+      Phronosis tools on grep/Read.
     - Claude Code settings.json: adds Bash/Read/Edit PreToolUse hook matchers.
     - Project CLAUDE.md: three-tier workflow, pre-edit gate, multi-agent context.
     - Memory files: behavioral guidance that persists across sessions.
@@ -563,7 +563,7 @@ async def setup_acip_client(
     install_git_hook: whether to install the post-commit git hook (default: true)
 
     Usage:
-        result = setup_acip_client("/Users/name/myproject")
+        result = setup_phronosis_client("/Users/name/myproject")
         # Then run: exec(result["setup_script"])  or  Bash(result["run_command"])
     """
     if not project_root:
@@ -571,7 +571,7 @@ async def setup_acip_client(
 
     pid = project_id or _derive_project_id(project_root)
     home = claude_home or _default_claude_home()
-    server_url = os.getenv("ACIP_URL", "http://localhost:3004")
+    server_url = os.getenv("PHRONOSIS_URL", "http://localhost:3004")
 
     # Load post-commit hook content from the scripts directory.
     scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
@@ -579,16 +579,16 @@ async def setup_acip_client(
     try:
         with open(post_commit_path) as f:
             post_commit = f.read().replace(
-                'ACIP_URL="${ACIP_URL:-http://localhost:3004}"',
-                f'ACIP_URL="${{ACIP_URL:-{server_url}}}"',
+                'PHRONOSIS_URL="${PHRONOSIS_URL:-http://localhost:3004}"',
+                f'PHRONOSIS_URL="${{PHRONOSIS_URL:-{server_url}}}"',
             )
     except FileNotFoundError:
-        post_commit = f'#!/usr/bin/env bash\n# post-commit hook\nexport ACIP_URL="{server_url}"\n'
+        post_commit = f'#!/usr/bin/env bash\n# post-commit hook\nexport PHRONOSIS_URL="{server_url}"\n'
         install_git_hook = False
 
     script = generate_setup_script(
         project_root=project_root,
-        acip_url=server_url,
+        phronosis_url=server_url,
         project_id=pid,
         claude_home=home,
         install_git_hook=install_git_hook,
@@ -598,8 +598,8 @@ async def setup_acip_client(
     return json.dumps({
         "status": "ready",
         "project_id": pid,
-        "acip_url": server_url,
-        "run_command": "python3 << 'ACIP_SETUP'\n" + script + "\nACIP_SETUP",
+        "phronosis_url": server_url,
+        "run_command": "python3 << 'Phronosis_SETUP'\n" + script + "\nPhronosis_SETUP",
         "setup_script": script,
         "instructions": (
             "Execute run_command with Bash to complete setup. "
@@ -734,7 +734,7 @@ async def file_improvement(
     reproduction_steps: str = "",
 ) -> str:
     """
-    File a structured improvement report for ACIP so another agent session can
+    File a structured improvement report for Phronosis so another agent session can
     implement it. Use this when you observe a bug, limitation, or enhancement
     opportunity during a session that you cannot or should not fix yourself.
 
@@ -744,7 +744,7 @@ async def file_improvement(
       you have (call paths observed, data shapes, error messages). Be specific —
       vague descriptions slow implementation.
     - severity: "low" | "medium" | "high" | "critical"
-    - project_id: the ACIP project_id this applies to (empty = ACIP itself)
+    - project_id: the Phronosis project_id this applies to (empty = Phronosis itself)
     - affected_functions: list of fully-qualified function IDs from the call graph
       (e.g. ["src.contracts.manager.ContractManager.check_project"]). Use
       query_similar_functions() first to find exact IDs.
@@ -778,7 +778,7 @@ async def list_improvements(
     """
     List agent-filed improvement reports.
 
-    Call this at session start on any ACIP project to see what prior agent
+    Call this at session start on any Phronosis project to see what prior agent
     sessions flagged as needing work. Improvements are ordered newest-first.
 
     project_id: filter to a specific project (empty = all projects)
@@ -886,7 +886,7 @@ async def http_list_projects(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
-# ── Bulk index HTTP endpoint (used by acip-import slash command) ──────────────
+# ── Bulk index HTTP endpoint (used by phronosis-import slash command) ──────────────
 
 @mcp.custom_route("/api/index-bulk", methods=["POST"])
 async def http_index_bulk(request: Request) -> JSONResponse:
@@ -896,7 +896,7 @@ async def http_index_bulk(request: Request) -> JSONResponse:
            "files": {"abs/path/file.py": "<content>", ...}}
     Indexes a full project from file contents supplied by the caller — no server-side
     file I/O required. Used when the project lives on a different machine than the
-    ACIP server (e.g. the Claude Code workspace vs TheHive).
+    Phronosis server (e.g. the Claude Code workspace vs TheHive).
     project_id is derived from project_root's basename if not provided.
     """
     try:
@@ -1269,14 +1269,14 @@ async def find_dependents(
 @mcp.tool()
 async def index_lsif(path: str, project_id: str = "") -> str:
     """
-    Ingest a pre-built LSIF (Language Server Index Format) index file into ACIP.
+    Ingest a pre-built LSIF (Language Server Index Format) index file into Phronosis.
 
     LSIF files are produced by CI/CD indexers like lsif-py, lsif-tsc, lsif-java,
     rust-analyzer, and others. They provide symbol definitions with hover
     documentation and cross-reference data for any language without needing a
     live tree-sitter parser.
 
-    path: absolute path to the .lsif NDJSON file on the ACIP server filesystem.
+    path: absolute path to the .lsif NDJSON file on the Phronosis server filesystem.
     project_id: namespace for the indexed symbols (defaults to the lsif filename stem).
 
     Use this when:
@@ -1293,7 +1293,7 @@ async def index_lsif(path: str, project_id: str = "") -> str:
 async def index_scip(path: str, project_id: str = "") -> str:
     """
     Ingest a pre-built SCIP (Sourcegraph Code Intelligence Protocol) JSON index
-    into ACIP.
+    into Phronosis.
 
     SCIP is the successor to LSIF — produced by scip-python, scip-typescript,
     scip-java, rust-analyzer, and others. The JSON form is accepted here (produced
@@ -1302,7 +1302,7 @@ async def index_scip(path: str, project_id: str = "") -> str:
     SCIP provides explicit symbol documentation and relationship data, yielding
     both FunctionNode records and call edges from the relationships section.
 
-    path: absolute path to the .scip.json file on the ACIP server filesystem.
+    path: absolute path to the .scip.json file on the Phronosis server filesystem.
     project_id: namespace for the indexed symbols (defaults to the filename stem).
     """
     svcs = await _get_services()
@@ -1326,7 +1326,7 @@ async def lsp_get_definition(
     For TypeScript, Rust, Go, and other languages, spawns the appropriate
     language server if installed (typescript-language-server, rust-analyzer, gopls).
 
-    file_path: absolute path to the source file on the ACIP server.
+    file_path: absolute path to the source file on the Phronosis server.
     line: 1-based line number.
     column: 0-based column number.
     project_id: used to resolve the project root for LSP workspace initialisation.
@@ -1362,7 +1362,7 @@ async def lsp_find_references(
     Uses Jedi for Python; spawns the appropriate language server for other languages.
     Results include file path, line, and column for each reference site.
 
-    file_path: absolute path to the source file on the ACIP server.
+    file_path: absolute path to the source file on the Phronosis server.
     line: 1-based line number.
     column: 0-based column number.
     project_id: used to resolve the project root.
@@ -1399,7 +1399,7 @@ async def lsp_get_diagnostics(
     Useful for surfacing type errors in functions you are about to edit, or for
     validating that a change did not introduce new type violations.
 
-    file_path: absolute path to the source file on the ACIP server.
+    file_path: absolute path to the source file on the Phronosis server.
     project_id: used to resolve the project root for language-server context.
     """
     from .lsp_manager import python_get_diagnostics

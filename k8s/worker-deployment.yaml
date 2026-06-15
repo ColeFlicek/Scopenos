@@ -1,27 +1,27 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: acip-worker
-  namespace: acip
+  name: phronosis-worker
+  namespace: phronosis
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: acip-worker
+      app: phronosis-worker
   template:
     metadata:
       labels:
-        app: acip-worker
+        app: phronosis-worker
     spec:
       containers:
-        - name: acip-worker
-          image: ghcr.io/coleflicek/acip:latest  # same image as API
+        - name: phronosis-worker
+          image: ghcr.io/coleflicek/phronosis:latest  # same image as API
           command: ["python", "-m", "src.worker"]
           envFrom:
             - secretRef:
-                name: acip-secrets
+                name: phronosis-secrets
             - configMapRef:
-                name: acip-config
+                name: phronosis-config
           resources:
             requests:
               memory: "512Mi"   # indexing is memory-hungry

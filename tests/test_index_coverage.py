@@ -80,24 +80,24 @@ class TestRecommendation:
         assert c.recommendation is None
 
     def test_reembed_recommended_for_missing_vectors(self):
-        c = _coverage(project_id="ACIP", missing_vectors=["fn_a", "fn_b"])
-        assert "reembed_project('ACIP')" in c.recommendation
+        c = _coverage(project_id="Phronosis", missing_vectors=["fn_a", "fn_b"])
+        assert "reembed_project('Phronosis')" in c.recommendation
         assert "2" in c.recommendation
 
     def test_enrich_recommended_for_degraded(self):
-        c = _coverage(project_id="ACIP", degraded_count=15)
-        assert "enrich_summaries('ACIP')" in c.recommendation
+        c = _coverage(project_id="Phronosis", degraded_count=15)
+        assert "enrich_summaries('Phronosis')" in c.recommendation
         assert "15" in c.recommendation
 
     def test_enrich_recommended_for_large_model(self):
-        c = _coverage(project_id="ACIP", on_large_model=30)
-        assert "enrich_summaries('ACIP')" in c.recommendation
+        c = _coverage(project_id="Phronosis", on_large_model=30)
+        assert "enrich_summaries('Phronosis')" in c.recommendation
         assert "30" in c.recommendation
 
     def test_reembed_takes_priority_over_enrich(self):
         # If vectors are missing, recommend reembed first — more urgent than quality.
         c = _coverage(
-            project_id="ACIP",
+            project_id="Phronosis",
             missing_vectors=["fn_a"],
             degraded_count=10,
             on_large_model=50,
@@ -106,7 +106,7 @@ class TestRecommendation:
         assert "enrich_summaries" not in c.recommendation
 
     def test_degraded_takes_priority_over_large_model(self):
-        c = _coverage(project_id="ACIP", degraded_count=5, on_large_model=50)
+        c = _coverage(project_id="Phronosis", degraded_count=5, on_large_model=50)
         assert "enrich_summaries" in c.recommendation
         assert "5" in c.recommendation
 
@@ -167,7 +167,7 @@ class TestScenarios:
         """
         missing = [f"src.module.fn_{i}" for i in range(50)]
         c = _coverage(
-            project_id="ACIP",
+            project_id="Phronosis",
             expected=200,
             actual=150,
             missing_vectors=missing,
@@ -182,7 +182,7 @@ class TestScenarios:
         large-model fallback. Vectors exist but are low-quality semantic signal.
         """
         c = _coverage(
-            project_id="ACIP",
+            project_id="Phronosis",
             expected=100,
             actual=100,
             missing_vectors=[],
@@ -200,7 +200,7 @@ class TestScenarios:
         """
         missing = [f"fn_{i}" for i in range(20)]
         c = _coverage(
-            project_id="ACIP",
+            project_id="Phronosis",
             expected=100,
             actual=80,
             missing_vectors=missing,

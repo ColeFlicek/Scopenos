@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Create an ACIP user and issue an API key.
+Create an Phronosis user and issue an API key.
 
 Usage:
     python scripts/create_user.py <email> [--name KEY_NAME] [--plan free|paid]
 
 The raw API key is printed once and never stored — save it immediately.
-Reads SQLITE_PATH env var (default: /data/acip.db).
+Reads SQLITE_PATH env var (default: /data/phronosis.db).
 
 Examples:
     python scripts/create_user.py cole@example.com
@@ -25,7 +25,7 @@ from src.call_graph.storage import CallGraphDB
 
 
 async def main(email: str, key_name: str, plan: str) -> None:
-    db_path = os.getenv("SQLITE_PATH", "/data/acip.db")
+    db_path = os.getenv("SQLITE_PATH", "/data/phronosis.db")
     db = await CallGraphDB.create(db_path)
 
     try:
@@ -56,7 +56,7 @@ async def main(email: str, key_name: str, plan: str) -> None:
 
 
 def cli() -> None:
-    parser = argparse.ArgumentParser(description="Create an ACIP user and issue an API key.")
+    parser = argparse.ArgumentParser(description="Create an Phronosis user and issue an API key.")
     parser.add_argument("email", help="User's email address")
     parser.add_argument("--name", default="", help="Label for this key (e.g. 'dev laptop')")
     parser.add_argument("--plan", default="free", choices=["free", "paid"], help="User plan")

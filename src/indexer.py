@@ -48,7 +48,7 @@ class Indexer:
                 "path": path,
                 "project_id": project_id,
                 "detail": (
-                    f"'{path}' does not exist on the ACIP server's filesystem. "
+                    f"'{path}' does not exist on the Phronosis server's filesystem. "
                     "The server runs in Docker and cannot access paths on your local machine. "
                     "Use POST /api/index-bulk instead — it accepts file contents directly: "
                     '{"project_root": "...", "project_id": "...", "files": {"abs/path": "content"}}'
@@ -541,13 +541,13 @@ class Indexer:
 
 
     async def index_lsif(self, path: str, project_id: str = "") -> dict:
-        """Ingest an LSIF NDJSON index file into ACIP.
+        """Ingest an LSIF NDJSON index file into Phronosis.
 
         Extracts symbol definitions with their hover documentation and imports
         them as FunctionNode records into the call-graph + embedding pipeline.
         Call-edge resolution is deferred to a future version.
 
-        path: filesystem path to the .lsif file on the ACIP server.
+        path: filesystem path to the .lsif file on the Phronosis server.
         project_id: target project namespace (defaults to lsif filename stem).
         """
         if not project_id:
@@ -592,13 +592,13 @@ class Indexer:
         }
 
     async def index_scip(self, path: str, project_id: str = "") -> dict:
-        """Ingest a SCIP JSON index file into ACIP.
+        """Ingest a SCIP JSON index file into Phronosis.
 
         SCIP (Sourcegraph Code Intelligence Protocol) provides structured symbol
         information with explicit documentation and relationships.  Produces
         FunctionNode records and basic call edges from relationship data.
 
-        path: filesystem path to the .scip.json file on the ACIP server.
+        path: filesystem path to the .scip.json file on the Phronosis server.
         project_id: target project namespace (defaults to scip filename stem).
         """
         if not project_id:

@@ -5,7 +5,7 @@ import os
 from redis import Redis
 from rq import Queue
 
-QUEUE_NAME = "acip-indexing"
+QUEUE_NAME = "phronosis-indexing"
 
 
 def get_redis() -> Redis:
@@ -15,5 +15,5 @@ def get_redis() -> Redis:
 
 
 def get_queue() -> Queue:
-    """Return the ACIP indexing queue."""
+    """Return the Phronosis indexing queue."""
     return Queue(QUEUE_NAME, connection=get_redis())

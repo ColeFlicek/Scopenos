@@ -104,7 +104,7 @@ class _QueryContext:
 # Schema is in schema.sql — applied at init() via asyncpg.
 
 
-_DEFAULT_DSN = "postgresql://acip:acip@localhost/acip"
+_DEFAULT_DSN = "postgresql://phronosis:phronosis@localhost/phronosis"
 _SCHEMA_SQL = Path(__file__).parent.parent.parent / "schema.sql"
 
 

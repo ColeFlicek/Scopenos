@@ -2,7 +2,7 @@
 Autonomous agent runner for SWE-bench tasks.
 
 Path A: Claude with Read + Bash + Write tools only (realistic baseline).
-Path B: Claude with Read + Bash + Write + ACIP query tools.
+Path B: Claude with Read + Bash + Write + Phronosis query tools.
 
 The agent loop runs until Claude produces a patch or hits max_iterations.
 The patch is captured as the diff between the original and modified files.
@@ -59,11 +59,11 @@ def run_agent(
     task: BenchmarkTask,
     ctx: RepoContext,
     path: str,                   # "a" or "b"
-    acip_base_url: str = "",     # ACIP server URL for Path B
+    phronosis_base_url: str = "",     # Phronosis server URL for Path B
 ) -> AgentResult:
     """Run one autonomous agent session and return the produced patch."""
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    tools = _build_tools(path, ctx, acip_base_url)
+    tools = _build_tools(path, ctx, phronosis_base_url)
 
     initial_message = f"""Please fix the following bug:
 
@@ -174,19 +174,19 @@ def _execute_tool(name: str, args: dict, ctx: RepoContext) -> str:
         except Exception as exc:
             return f"Error: {exc}"
 
-    if name.startswith("acip_"):
-        return _call_acip_tool(name, args, ctx)
+    if name.startswith("phronosis_"):
+        return _call_phronosis_tool(name, args, ctx)
 
     return f"Unknown tool: {name}"
 
 
-def _call_acip_tool(name: str, args: dict, ctx: RepoContext) -> str:
-    """Call an ACIP MCP tool via HTTP."""
+def _call_phronosis_tool(name: str, args: dict, ctx: RepoContext) -> str:
+    """Call an Phronosis MCP tool via HTTP."""
     import json
     import urllib.request
 
-    base_url = os.getenv("ACIP_URL", "http://localhost:3004")
-    tool_name = name[len("acip_"):]  # strip prefix
+    base_url = os.getenv("PHRONOSIS_URL", "http://localhost:3004")
+    tool_name = name[len("phronosis_"):]  # strip prefix
     args_with_project = {**args, "project_id": ctx.project_id}
 
     payload = json.dumps({"tool": tool_name, "arguments": args_with_project}).encode()
@@ -199,7 +199,7 @@ def _call_acip_tool(name: str, args: dict, ctx: RepoContext) -> str:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.read().decode()
     except Exception as exc:
-        return f"ACIP tool error: {exc}"
+        return f"Phronosis tool error: {exc}"
 
 
 def _compute_patch(repo_path: str) -> str:
@@ -222,8 +222,8 @@ def _safe_path(path: str, repo_root: str) -> str:
     return str(resolved)
 
 
-def _build_tools(path: str, ctx: RepoContext, acip_base_url: str) -> list[dict]:
-    """Build the tool list for the given path (A = baseline, B = ACIP)."""
+def _build_tools(path: str, ctx: RepoContext, phronosis_base_url: str) -> list[dict]:
+    """Build the tool list for the given path (A = baseline, B = Phronosis)."""
     tools = [
         {
             "name": "read_file",
@@ -272,10 +272,10 @@ def _build_tools(path: str, ctx: RepoContext, acip_base_url: str) -> list[dict]:
         },
     ]
 
-    if path == "b" and ctx.acip_indexed:
+    if path == "b" and ctx.phronosis_indexed:
         tools += [
             {
-                "name": "acip_query_similar_functions",
+                "name": "phronosis_query_similar_functions",
                 "description": "Semantic search: find functions similar to a description or code snippet.",
                 "input_schema": {
                     "type": "object",
@@ -287,7 +287,7 @@ def _build_tools(path: str, ctx: RepoContext, acip_base_url: str) -> list[dict]:
                 },
             },
             {
-                "name": "acip_get_callers",
+                "name": "phronosis_get_callers",
                 "description": "Return all functions that call the given function name.",
                 "input_schema": {
                     "type": "object",
@@ -296,7 +296,7 @@ def _build_tools(path: str, ctx: RepoContext, acip_base_url: str) -> list[dict]:
                 },
             },
             {
-                "name": "acip_get_callees",
+                "name": "phronosis_get_callees",
                 "description": "Return all functions called by the given function.",
                 "input_schema": {
                     "type": "object",
@@ -305,7 +305,7 @@ def _build_tools(path: str, ctx: RepoContext, acip_base_url: str) -> list[dict]:
                 },
             },
             {
-                "name": "acip_get_impact_radius",
+                "name": "phronosis_get_impact_radius",
                 "description": "Return functions impacted by a change to the given function (BFS, 2 levels).",
                 "input_schema": {
                     "type": "object",

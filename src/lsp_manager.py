@@ -1,5 +1,5 @@
 """
-LSP manager for ACIP — compiler-accurate definition lookup, reference search,
+LSP manager for Phronosis — compiler-accurate definition lookup, reference search,
 and diagnostics.
 
 Python analysis uses Jedi (pure Python library, no subprocess).

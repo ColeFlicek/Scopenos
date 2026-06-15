@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Migrate an existing ACIP SQLite database to Postgres.
+Migrate an existing Phronosis SQLite database to Postgres.
 
 Usage:
     python scripts/migrate_sqlite_to_postgres.py \
-        --sqlite /data/acip.db \
-        --postgres postgresql://acip:acip@localhost/acip
+        --sqlite /data/phronosis.db \
+        --postgres postgresql://phronosis:phronosis@localhost/phronosis
 
 Migrates all tables except embedding vectors (those must be re-indexed via
 index_project / reembed_project since the binary format differs between
@@ -122,12 +122,12 @@ async def migrate(sqlite_path: str, pg_dsn: str, dry_run: bool = False) -> None:
 
 
 def cli() -> None:
-    parser = argparse.ArgumentParser(description="Migrate ACIP SQLite DB to Postgres.")
-    parser.add_argument("--sqlite", required=True, help="Path to existing acip.db SQLite file")
+    parser = argparse.ArgumentParser(description="Migrate Phronosis SQLite DB to Postgres.")
+    parser.add_argument("--sqlite", required=True, help="Path to existing phronosis.db SQLite file")
     parser.add_argument(
         "--postgres",
-        default="postgresql://acip:acip@localhost/acip",
-        help="Postgres DSN (default: postgresql://acip:acip@localhost/acip)",
+        default="postgresql://phronosis:phronosis@localhost/phronosis",
+        help="Postgres DSN (default: postgresql://phronosis:phronosis@localhost/phronosis)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print counts without writing")
     args = parser.parse_args()

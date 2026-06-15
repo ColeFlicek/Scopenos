@@ -7,14 +7,14 @@
 # ingressClassName must match what is installed on the cluster.
 # K3s ships with Traefik; switch to nginx if you install NGINX Ingress instead.
 #
-# No host rule: Traefik on port 3004 forwards all traffic to ACIP regardless
+# No host rule: Traefik on port 3004 forwards all traffic to Phronosis regardless
 # of Host header. The MCP client connects via Tailscale IP, not a DNS hostname,
 # so host-based routing would block it.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: acip-ingress
-  namespace: acip
+  name: phronosis-ingress
+  namespace: phronosis
 spec:
   ingressClassName: traefik
   rules:
@@ -24,6 +24,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: acip-api-svc
+                name: phronosis-api-svc
                 port:
                   number: 3004

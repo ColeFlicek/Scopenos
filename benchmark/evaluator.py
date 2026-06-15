@@ -53,7 +53,7 @@ def evaluate(
             error="Agent produced no patch (no files modified)",
         )
 
-    with tempfile.TemporaryDirectory(prefix="acip-eval-") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="phronosis-eval-") as tmpdir:
         # Copy the checkout into a fresh directory for evaluation
         eval_path = os.path.join(tmpdir, "repo")
         subprocess.run(["cp", "-r", repo_path, eval_path], check=True)

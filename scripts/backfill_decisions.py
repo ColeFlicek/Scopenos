@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Backfill ACIP decision memory from git history.
+Backfill Phronosis decision memory from git history.
 
-Reads every commit in the current repo and POSTs it to the ACIP
+Reads every commit in the current repo and POSTs it to the Phronosis
 /api/decisions endpoint. Each commit message becomes a decision record
 with the commit hash as its trigger.
 
 Usage:
-    ACIP_URL=http://localhost:3004 python3 scripts/backfill_decisions.py
+    PHRONOSIS_URL=http://localhost:3004 python3 scripts/backfill_decisions.py
     python3 scripts/backfill_decisions.py --dry-run
     python3 scripts/backfill_decisions.py --since 2024-01-01
     python3 scripts/backfill_decisions.py --limit 50
@@ -27,14 +27,14 @@ import os
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-ACIP_URL = os.environ.get("ACIP_URL", "http://localhost:3004")
+PHRONOSIS_URL = os.environ.get("PHRONOSIS_URL", "http://localhost:3004")
 DELAY_BETWEEN_CALLS = 0.5  # seconds — each call embeds via OpenAI/Ollama
 
 
 # ── Type classifier ────────────────────────────────────────────────────────────
 
 def classify(subject: str) -> str:
-    """Map a commit subject line to an ACIP decision type based on its leading verb."""
+    """Map a commit subject line to an Phronosis decision type based on its leading verb."""
     low = subject.lower()
     if low.startswith(("fix", "bug", "patch", "hotfix", "revert")):
         return "Patch"
@@ -109,10 +109,10 @@ def get_changed_files(hash_: str) -> list[str]:
 # ── API call ───────────────────────────────────────────────────────────────────
 
 def post_decision(payload: dict) -> dict:
-    """POST a decision record to the ACIP /api/decisions endpoint and return the response."""
+    """POST a decision record to the Phronosis /api/decisions endpoint and return the response."""
     data = json.dumps(payload).encode()
     req = Request(
-        f"{ACIP_URL}/api/decisions",
+        f"{PHRONOSIS_URL}/api/decisions",
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -122,36 +122,36 @@ def post_decision(payload: dict) -> dict:
 
 
 def check_server() -> bool:
-    """Verify the ACIP server is reachable and has decision memory operational."""
+    """Verify the Phronosis server is reachable and has decision memory operational."""
     try:
-        req = Request(f"{ACIP_URL}/api/health", method="GET")
+        req = Request(f"{PHRONOSIS_URL}/api/health", method="GET")
         with urlopen(req, timeout=5) as r:
             resp = json.loads(r.read())
         return resp.get("decision_memory", {}).get("status") == "ok"
     except Exception as e:
-        print(f"ERROR: cannot reach ACIP at {ACIP_URL}: {e}", file=sys.stderr)
+        print(f"ERROR: cannot reach Phronosis at {PHRONOSIS_URL}: {e}", file=sys.stderr)
         return False
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    """Parse CLI args and backfill git history as ACIP decision records."""
-    parser = argparse.ArgumentParser(description="Backfill ACIP decisions from git history")
+    """Parse CLI args and backfill git history as Phronosis decision records."""
+    parser = argparse.ArgumentParser(description="Backfill Phronosis decisions from git history")
     parser.add_argument("--dry-run", action="store_true", help="Print decisions without writing")
     parser.add_argument("--since", metavar="DATE", help="Only commits after DATE (e.g. 2024-01-01)")
     parser.add_argument("--limit", type=int, metavar="N", help="Maximum number of commits to process")
-    parser.add_argument("--acip-url", default=ACIP_URL, help=f"ACIP base URL (default: {ACIP_URL})")
+    parser.add_argument("--phronosis-url", default=PHRONOSIS_URL, help=f"Phronosis base URL (default: {PHRONOSIS_URL})")
     parser.add_argument(
         "--project", metavar="ID",
         help="Project ID to tag decisions with (default: derived from git remote or dirname)",
     )
     args = parser.parse_args()
 
-    if args.acip_url != ACIP_URL:
-        globals()["ACIP_URL"] = args.acip_url
+    if args.phronosis_url != PHRONOSIS_URL:
+        globals()["PHRONOSIS_URL"] = args.phronosis_url
 
-    project_id = args.project or os.environ.get("ACIP_PROJECT") or derive_project_id()
+    project_id = args.project or os.environ.get("PHRONOSIS_PROJECT") or derive_project_id()
     print(f"Project ID: {project_id}")
 
     if not args.dry_run and not check_server():

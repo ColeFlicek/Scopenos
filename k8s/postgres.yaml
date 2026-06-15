@@ -5,7 +5,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres-pvc
-  namespace: acip
+  namespace: phronosis
 spec:
   accessModes:
     - ReadWriteOnce
@@ -17,7 +17,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgres-svc
-  namespace: acip
+  namespace: phronosis
 spec:
   selector:
     app: postgres
@@ -30,7 +30,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
-  namespace: acip
+  namespace: phronosis
 spec:
   serviceName: postgres-svc
   replicas: 1
@@ -47,15 +47,15 @@ spec:
           image: pgvector/pgvector:pg17
           env:
             - name: POSTGRES_USER
-              value: acip
+              value: phronosis
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: acip-secrets
+                  name: phronosis-secrets
                   key: POSTGRES_PASSWORD
                   optional: true
             - name: POSTGRES_DB
-              value: acip
+              value: phronosis
           ports:
             - containerPort: 5432
           volumeMounts:
@@ -79,15 +79,15 @@ spec:
             name: postgres-schema
 ---
 # Mount schema.sql as a ConfigMap so Postgres initialises it on first start.
-# Apply after running: kubectl create configmap postgres-schema --from-file=schema.sql -n acip
+# Apply after running: kubectl create configmap postgres-schema --from-file=schema.sql -n phronosis
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-schema
-  namespace: acip
+  namespace: phronosis
 # data is populated by k8s/README.md setup command:
 #   kubectl create configmap postgres-schema \
 #     --from-file=00-init.sql=k8s/postgres-init.sql \
 #     --from-file=01-schema.sql=schema.sql \
-#     -n acip --dry-run=client -o yaml | kubectl apply -f -
+#     -n phronosis --dry-run=client -o yaml | kubectl apply -f -
 # Files are applied alphabetically — 00-init.sql runs before 01-schema.sql.

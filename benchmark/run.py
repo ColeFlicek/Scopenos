@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run the ACIP SWE-bench benchmark.
+Run the Phronosis SWE-bench benchmark.
 
 Usage:
     # Dry run — show tasks without running agents
@@ -9,7 +9,7 @@ Usage:
     # Run Path A (baseline) only
     python -m benchmark.run --path a
 
-    # Run Path B (ACIP) only
+    # Run Path B (Phronosis) only
     python -m benchmark.run --path b
 
     # Run both paths (full benchmark)
@@ -21,8 +21,8 @@ Usage:
 Options:
     --repo REPO        SWE-bench repo to benchmark (default: pytest-dev/pytest)
     --results-dir DIR  Output directory for results (default: results/)
-    --acip-url URL     ACIP server URL for Path B (default: $ACIP_URL or http://localhost:3004)
-    --acip-dsn DSN     Postgres DSN for ACIP indexing (default: $DATABASE_URL)
+    --phronosis-url URL     Phronosis server URL for Path B (default: $PHRONOSIS_URL or http://localhost:3004)
+    --phronosis-dsn DSN     Postgres DSN for Phronosis indexing (default: $DATABASE_URL)
     --keep-repos       Don't delete cloned repos after each task (useful for debugging)
 """
 from __future__ import annotations
@@ -43,13 +43,13 @@ from benchmark.report import write_task_results, write_summary, print_summary
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ACIP SWE-bench benchmark")
+    parser = argparse.ArgumentParser(description="Phronosis SWE-bench benchmark")
     parser.add_argument("--repo", default="pytest-dev/pytest")
     parser.add_argument("--path", choices=["a", "b", "both"], default="both")
     parser.add_argument("--limit", type=int, default=0, help="Max tasks to run (0 = all)")
     parser.add_argument("--results-dir", default="results")
-    parser.add_argument("--acip-url", default=os.getenv("ACIP_URL", "http://localhost:3004"))
-    parser.add_argument("--acip-dsn", default=os.getenv("DATABASE_URL", ""))
+    parser.add_argument("--phronosis-url", default=os.getenv("PHRONOSIS_URL", "http://localhost:3004"))
+    parser.add_argument("--phronosis-dsn", default=os.getenv("DATABASE_URL", ""))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep-repos", action="store_true")
     args = parser.parse_args()
@@ -69,13 +69,13 @@ def main() -> None:
         return
 
     Path(args.results_dir).mkdir(exist_ok=True)
-    workdir = tempfile.mkdtemp(prefix="acip-bench-repos-")
+    workdir = tempfile.mkdtemp(prefix="phronosis-bench-repos-")
 
     for i, task in enumerate(tasks, 1):
         print(f"\n[{i}/{len(tasks)}] {task.instance_id}")
 
-        # --- Path A setup (no ACIP index needed) ---
-        ctx_a = setup_repo(task, acip_index=False, workdir=workdir)
+        # --- Path A setup (no Phronosis index needed) ---
+        ctx_a = setup_repo(task, phronosis_index=False, workdir=workdir)
 
         agent_a = None
         eval_a = None
@@ -86,18 +86,18 @@ def main() -> None:
             eval_a = evaluate(task, agent_a, ctx_a.repo_path)
             print(f"  Path A resolved: {eval_a.resolved}")
 
-        # --- Path B setup (with ACIP index) ---
+        # --- Path B setup (with Phronosis index) ---
         agent_b = None
         eval_b = None
         if run_b:
             ctx_b = setup_repo(
                 task,
-                acip_index=True,
-                acip_dsn=args.acip_dsn,
+                phronosis_index=True,
+                phronosis_dsn=args.phronosis_dsn,
                 workdir=workdir,
             )
-            print("  Running Path B (ACIP)…")
-            agent_b = run_agent(task, ctx_b, path="b", acip_base_url=args.acip_url)
+            print("  Running Path B (Phronosis)…")
+            agent_b = run_agent(task, ctx_b, path="b", phronosis_base_url=args.phronosis_url)
             print(f"  Path B: {len(agent_b.tool_calls)} tool calls, submitted={agent_b.submitted}")
             eval_b = evaluate(task, agent_b, ctx_b.repo_path)
             print(f"  Path B resolved: {eval_b.resolved}")

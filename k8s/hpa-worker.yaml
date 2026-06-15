@@ -6,16 +6,16 @@
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: acip-worker-scaledobject
-  namespace: acip
+  name: phronosis-worker-scaledobject
+  namespace: phronosis
 spec:
   scaleTargetRef:
-    name: acip-worker
+    name: phronosis-worker
   minReplicaCount: 1
   maxReplicaCount: 8
   triggers:
     - type: redis
       metadata:
-        address: redis-svc.acip.svc.cluster.local:6379
-        listName: "rq:queue:acip-indexing"
+        address: redis-svc.phronosis.svc.cluster.local:6379
+        listName: "rq:queue:phronosis-indexing"
         listLength: "5"   # one extra worker per 5 queued jobs

@@ -1,6 +1,6 @@
-# ACIP — Session Workflow
+# Phronosis — Session Workflow
 
-Agentic Coding Intelligence Platform provides structured, queryable knowledge of a codebase via call graph, semantic embeddings, and decision memory. Follow this workflow in every session.
+Phronosis provides structured, queryable knowledge of a codebase via call graph, semantic embeddings, and decision memory. Follow this workflow in every session.
 
 ## Step 0 — Session start: build the map before anything else
 
@@ -74,7 +74,7 @@ Add to your Claude Code MCP settings:
 ```json
 {
   "mcpServers": {
-    "acip": {
+    "phronosis": {
       "url": "http://localhost:3004/mcp"
     }
   }
@@ -86,25 +86,25 @@ Replace `localhost` with your server's IP or hostname if running remotely.
 ## Git hook installation (per project)
 
 ```bash
-cp /path/to/ACIP/scripts/post-commit.sh .git/hooks/post-commit
+cp /path/to/Phronosis/scripts/post-commit.sh .git/hooks/post-commit
 chmod +x .git/hooks/post-commit
-export ACIP_URL=http://localhost:3004
+export PHRONOSIS_URL=http://localhost:3004
 ```
 
 ## Claude Code pre-edit hook (per machine, install once)
 
-Fires before every Edit call on source files. Silently passes if ACIP is unreachable.
+Fires before every Edit call on source files. Silently passes if Phronosis is unreachable.
 Prints specific warnings when editing chokepoints or risk-surface functions.
 
 ```bash
-cp /path/to/ACIP/scripts/acip-pre-edit-hook.py ~/.claude/hooks/acip-suggest.py
+cp /path/to/Phronosis/scripts/phronosis-pre-edit-hook.py ~/.claude/hooks/phronosis-suggest.py
 ```
 
 Add to `~/.claude/settings.json` under `hooks.PreToolUse`:
 ```json
 {
   "matcher": "Edit",
-  "hooks": [{ "type": "command", "command": "python3 ~/.claude/hooks/acip-suggest.py" }]
+  "hooks": [{ "type": "command", "command": "python3 ~/.claude/hooks/phronosis-suggest.py" }]
 }
 ```
 

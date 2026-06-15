@@ -1,5 +1,5 @@
--- ACIP Postgres schema
--- Run once per database: psql -d acip -f schema.sql
+-- Phronosis Postgres schema
+-- Run once per database: psql -d phronosis -f schema.sql
 -- pgvector extension is created here; requires superuser (POSTGRES_USER is superuser in Docker/K8s).
 CREATE EXTENSION IF NOT EXISTS vector;
 -- In local dev, run: scripts/setup_db.sh

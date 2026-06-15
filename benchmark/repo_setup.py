@@ -1,5 +1,5 @@
 """
-Clone a repo at a specific commit and optionally ACIP-index it for Path B runs.
+Clone a repo at a specific commit and optionally Phronosis-index it for Path B runs.
 
 Each call creates a fresh isolated directory — safe for parallel task runs.
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .loader import BenchmarkTask
 
-# Cache of indexed commits: base_commit → ACIP project_id
+# Cache of indexed commits: base_commit → Phronosis project_id
 # Avoids re-indexing the same commit if multiple tasks share it.
 _indexed_commits: dict[str, str] = {}
 
@@ -22,25 +22,25 @@ _indexed_commits: dict[str, str] = {}
 class RepoContext:
     task: BenchmarkTask
     repo_path: str           # absolute path to checked-out repo
-    project_id: str          # ACIP project_id (Path B only)
-    acip_indexed: bool       # True if ACIP index was built
+    project_id: str          # Phronosis project_id (Path B only)
+    phronosis_indexed: bool       # True if Phronosis index was built
 
 
 def setup_repo(
     task: BenchmarkTask,
     *,
-    acip_index: bool = False,
-    acip_dsn: str = "",
+    phronosis_index: bool = False,
+    phronosis_dsn: str = "",
     workdir: str | None = None,
 ) -> RepoContext:
     """
     Clone the repo at base_commit into a temp directory.
 
-    acip_index: if True, index the checkout with ACIP for Path B.
-    acip_dsn:   Postgres DSN for ACIP (falls back to DATABASE_URL env var).
+    phronosis_index: if True, index the checkout with Phronosis for Path B.
+    phronosis_dsn:   Postgres DSN for Phronosis (falls back to DATABASE_URL env var).
     workdir:    parent directory for the checkout; uses a new temp dir if None.
     """
-    parent = workdir or tempfile.mkdtemp(prefix="acip-bench-")
+    parent = workdir or tempfile.mkdtemp(prefix="phronosis-bench-")
     repo_path = os.path.join(parent, task.instance_id)
 
     org, name = task.repo.split("/")
@@ -60,28 +60,28 @@ def setup_repo(
     project_id = ""
     indexed = False
 
-    if acip_index:
-        project_id = _ensure_indexed(task, repo_path, acip_dsn)
+    if phronosis_index:
+        project_id = _ensure_indexed(task, repo_path, phronosis_dsn)
         indexed = True
 
     return RepoContext(
         task=task,
         repo_path=repo_path,
         project_id=project_id,
-        acip_indexed=indexed,
+        phronosis_indexed=indexed,
     )
 
 
 def _ensure_indexed(task: BenchmarkTask, repo_path: str, dsn: str) -> str:
-    """Index the repo with ACIP; reuse if same commit was already indexed."""
+    """Index the repo with Phronosis; reuse if same commit was already indexed."""
     import asyncio
     commit = task.base_commit
     if commit in _indexed_commits:
-        print(f"[setup] reusing ACIP index for {commit[:8]}")
+        print(f"[setup] reusing Phronosis index for {commit[:8]}")
         return _indexed_commits[commit]
 
     project_id = f"bench-{task.instance_id}"
-    print(f"[setup] ACIP indexing {repo_path} as project '{project_id}'")
+    print(f"[setup] Phronosis indexing {repo_path} as project '{project_id}'")
 
     async def _index():
         import sys
@@ -91,7 +91,7 @@ def _ensure_indexed(task: BenchmarkTask, repo_path: str, dsn: str) -> str:
         from src.embeddings.pipeline import EmbeddingPipeline
         from src.indexer import Indexer
 
-        resolved_dsn = dsn or os.getenv("DATABASE_URL", "postgresql://acip:acip@localhost/acip")
+        resolved_dsn = dsn or os.getenv("DATABASE_URL", "postgresql://phronosis:phronosis@localhost/phronosis")
         db = await CallGraphDB.create(resolved_dsn)
         embeddings = await EmbeddingStore.create(db)
         pipeline = EmbeddingPipeline(db, embeddings)

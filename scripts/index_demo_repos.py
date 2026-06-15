@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Index ACIP demo repos and register them in the demo_projects table.
+Index Phronosis demo repos and register them in the demo_projects table.
 
 Run once (or when adding new demo repos). Requires:
   - DATABASE_URL env var pointing at the target Postgres DB
@@ -93,7 +93,7 @@ async def index_one(
     )
     print(f"  Cloned to {repo_path}")
 
-    dsn = os.getenv("DATABASE_URL", "postgresql://acip:acip@localhost/acip")
+    dsn = os.getenv("DATABASE_URL", "postgresql://phronosis:phronosis@localhost/phronosis")
     db = await CallGraphDB.create(dsn)
     embeddings = await EmbeddingStore.create(db)
     pipeline = EmbeddingPipeline(db, embeddings)
@@ -140,7 +140,7 @@ async def index_one(
 
 
 async def main(dry_run: bool, skip_enrich: bool) -> None:
-    print("ACIP Demo Repo Indexer")
+    print("Phronosis Demo Repo Indexer")
     print(f"Repos to index: {[r['project_id'] for r in DEMO_REPOS]}")
     if dry_run:
         print("DRY RUN — no data will be written or cloned")
@@ -148,7 +148,7 @@ async def main(dry_run: bool, skip_enrich: bool) -> None:
         print("Skipping enrich_summaries (--skip-enrich)")
     print()
 
-    with tempfile.TemporaryDirectory(prefix="acip-demo-") as clone_dir:
+    with tempfile.TemporaryDirectory(prefix="phronosis-demo-") as clone_dir:
         results = []
         for repo in DEMO_REPOS:
             try:
@@ -171,7 +171,7 @@ async def main(dry_run: bool, skip_enrich: bool) -> None:
 
 
 def cli() -> None:
-    parser = argparse.ArgumentParser(description="Index ACIP demo repos")
+    parser = argparse.ArgumentParser(description="Index Phronosis demo repos")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-enrich", action="store_true")
     args = parser.parse_args()

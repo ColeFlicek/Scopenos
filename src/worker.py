@@ -1,11 +1,11 @@
 """
-ACIP background worker — processes indexing jobs from the Redis queue.
+Phronosis background worker — processes indexing jobs from the Redis queue.
 
 Run with:
     python -m src.worker
 
 Or in Docker:
-    docker compose run acip-worker
+    docker compose run phronosis-worker
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def main() -> None:
     queues = [QUEUE_NAME]
     print(f"[worker] Starting RQ worker — queues: {queues}")
     print(f"[worker] Redis: {os.getenv('REDIS_URL', 'redis://localhost:6379')}")
-    print(f"[worker] Database: {os.getenv('DATABASE_URL', 'postgresql://acip:acip@localhost/acip')}")
+    print(f"[worker] Database: {os.getenv('DATABASE_URL', 'postgresql://phronosis:phronosis@localhost/phronosis')}")
     worker = Worker(queues, connection=redis)
     worker.work(with_scheduler=True)
 

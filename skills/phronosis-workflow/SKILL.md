@@ -1,9 +1,9 @@
 ---
-name: acip-workflow
-description: "ACIP code intelligence for indexed codebases. Mandatory workflow: call get_project_home(project_id) FIRST every session before any source file read. Tier order: (1) get_project_home — architecture snapshot; (2) query_similar_functions / get_impact_radius / get_decision_history — function context; (3) Read — only for the exact lines you are about to modify. Never read files to understand structure; use ACIP tools instead. Use on any ACIP-indexed project."
+name: phronosis-workflow
+description: "Phronosis code intelligence for indexed codebases. Mandatory workflow: call get_project_home(project_id) FIRST every session before any source file read. Tier order: (1) get_project_home — architecture snapshot; (2) query_similar_functions / get_impact_radius / get_decision_history — function context; (3) Read — only for the exact lines you are about to modify. Never read files to understand structure; use Phronosis tools instead. Use on any Phronosis-indexed project."
 ---
 
-# ACIP Workflow
+# Phronosis Workflow
 
 ## Session Start — Three-Tier Retrieval Ladder
 

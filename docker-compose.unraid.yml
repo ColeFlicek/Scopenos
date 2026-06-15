@@ -1,4 +1,4 @@
-# Unraid override — stores persistent data in /mnt/user/appdata/acip/
+# Unraid override — stores persistent data in /mnt/user/appdata/phronosis/
 # so it survives array stops and shows up in the Unraid Docker UI.
 #
 # Applied automatically by deploy.sh.
@@ -6,9 +6,9 @@
 #   docker compose -f docker-compose.yml -f docker-compose.unraid.yml up -d
 
 services:
-  acip:
+  phronosis:
     volumes:
-      - /mnt/user/appdata/acip:/data
+      - /mnt/user/appdata/phronosis:/data
     # Allows the container to reach Ollama running on the Unraid host
     extra_hosts:
       - "host.docker.internal:host-gateway"

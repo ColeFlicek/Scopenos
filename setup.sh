@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# ACIP — Agentic Coding Intelligence Platform — first-run setup
+# Phronosis — Phronosis — first-run setup
 # Prompts for credentials, writes .env, and starts the server.
 
 set -euo pipefail
 
 echo ""
 echo "╔════════════════════════════════════════════════╗"
-echo "║   Agentic Coding Intelligence Platform — Setup  ║"
+echo "║   Phronosis — Setup  ║"
 echo "╚════════════════════════════════════════════════╝"
 echo ""
 
@@ -97,13 +97,13 @@ if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
   echo ""
   docker compose up -d
   echo ""
-  echo "✓ ACIP is running."
+  echo "✓ Phronosis is running."
   echo ""
   echo "  Dashboard:     http://localhost:3004/ui"
   echo "  MCP endpoint:  http://localhost:3004/mcp"
   echo ""
   echo "Add to Claude Code MCP settings:"
-  echo '  { "mcpServers": { "acip": { "url": "http://localhost:3004/mcp" } } }'
+  echo '  { "mcpServers": { "phronosis": { "url": "http://localhost:3004/mcp" } } }'
   echo ""
   echo "Then run index_project(\"/path/to/your/project\") to build the first index."
 else

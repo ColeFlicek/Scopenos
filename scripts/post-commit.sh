@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Post-commit git hook — re-indexes changed files and logs the decision to ACIP.
+# Post-commit git hook — re-indexes changed files and logs the decision to Phronosis.
 # Install: cp scripts/post-commit.sh .git/hooks/post-commit && chmod +x .git/hooks/post-commit
 
 set -euo pipefail
 
-ACIP_URL="${ACIP_URL:-http://localhost:3004}"
+PHRONOSIS_URL="${PHRONOSIS_URL:-http://localhost:3004}"
 
 CHANGED=$(git diff-tree --no-commit-id -r --name-only HEAD 2>/dev/null || true)
 
@@ -14,9 +14,9 @@ fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
-# Derive project_id: prefer ACIP_PROJECT env var, then git remote basename, then dirname.
-if [ -n "${ACIP_PROJECT:-}" ]; then
-  PROJECT_ID="$ACIP_PROJECT"
+# Derive project_id: prefer PHRONOSIS_PROJECT env var, then git remote basename, then dirname.
+if [ -n "${PHRONOSIS_PROJECT:-}" ]; then
+  PROJECT_ID="$PHRONOSIS_PROJECT"
 else
   REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
   if [ -n "$REMOTE_URL" ]; then
@@ -34,12 +34,12 @@ FILES_JSON=$(echo "$CHANGED" | while IFS= read -r f; do
 done | paste -sd ',' - | sed 's/^/[/' | sed 's/$/]/')
 
 curl --silent --show-error --max-time 30 \
-  -X POST "${ACIP_URL}/index" \
+  -X POST "${PHRONOSIS_URL}/index" \
   -H "Content-Type: application/json" \
   -d "{\"changed_files\": ${FILES_JSON}, \"project_root\": \"${REPO_ROOT}\", \"project_id\": \"${PROJECT_ID}\"}" \
   > /dev/null
 
-echo "[acip] index_changes triggered for $(echo "$CHANGED" | wc -l | tr -d ' ') files (project: ${PROJECT_ID})"
+echo "[phronosis] index_changes triggered for $(echo "$CHANGED" | wc -l | tr -d ' ') files (project: ${PROJECT_ID})"
 
 # ── Contract check ──────────────────────────────────────────────────────────────
 # Resolve function IDs for changed files then check against active contracts.
@@ -54,7 +54,7 @@ if [ -n "$CHANGED_SRC" ]; then
 
   # Get function IDs for changed files.
   FN_RESP=$(curl --silent --max-time 5 \
-    -X POST "${ACIP_URL}/api/functions" \
+    -X POST "${PHRONOSIS_URL}/api/functions" \
     -H "Content-Type: application/json" \
     -d "{\"files\": ${ABS_FILES_JSON}, \"project_id\": \"${PROJECT_ID}\"}" 2>/dev/null || echo '{}')
 
@@ -67,7 +67,7 @@ print(json.dumps(ids))
 
   # Check contracts.
   VIOLATIONS=$(curl --silent --max-time 15 \
-    -X POST "${ACIP_URL}/api/contracts/check" \
+    -X POST "${PHRONOSIS_URL}/api/contracts/check" \
     -H "Content-Type: application/json" \
     -d "{\"project_id\": \"${PROJECT_ID}\", \"function_ids\": ${FUNCTION_IDS}}" 2>/dev/null || echo '{"violations":[]}')
 
@@ -76,12 +76,12 @@ import sys, json
 d = json.load(sys.stdin)
 viols = d.get('violations', [])
 if viols:
-    print(f'[acip] ⚠  {len(viols)} contract violation(s) detected:')
+    print(f'[phronosis] ⚠  {len(viols)} contract violation(s) detected:')
     for v in viols:
         pct = f\"{v['score']*100:.0f}%\" if v['violation_type'] == 'semantic' else 'structural'
         print(f'  [{v[\"violation_type\"]}] {v[\"function_id\"]} → {v.get(\"contract_title\",v[\"contract_id\"])} ({pct})')
 else:
-    print('[acip] contracts: ok (no violations)')
+    print('[phronosis] contracts: ok (no violations)')
 " 2>/dev/null || echo '')
 
   if [ -n "$VIOL_COUNT" ]; then
@@ -91,13 +91,13 @@ fi
 
 # ── Log decision ────────────────────────────────────────────────────────────────
 
-ACIP_PROJECT_ID="$PROJECT_ID" ACIP_URL="$ACIP_URL" REPO_ROOT="$REPO_ROOT" python3 - <<'PYEOF'
+PHRONOSIS_PROJECT_ID="$PROJECT_ID" PHRONOSIS_URL="$PHRONOSIS_URL" REPO_ROOT="$REPO_ROOT" python3 - <<'PYEOF'
 import json, os, subprocess, sys
 try:
     from urllib.request import urlopen, Request as UReq
 
-    acip_url    = os.environ.get("ACIP_URL", "http://localhost:3004")
-    project_id  = os.environ.get("ACIP_PROJECT_ID", "default")
+    phronosis_url    = os.environ.get("PHRONOSIS_URL", "http://localhost:3004")
+    project_id  = os.environ.get("PHRONOSIS_PROJECT_ID", "default")
     repo_root   = os.environ.get("REPO_ROOT", "")
 
     msg   = subprocess.check_output(["git", "log", "-1", "--format=%s"]).decode().strip()
@@ -128,13 +128,13 @@ try:
     parts.append(f"Changes:\n{diff_stat}")
     description = " — ".join(parts)
 
-    # Resolve changed files → actual indexed function IDs via the ACIP API.
+    # Resolve changed files → actual indexed function IDs via the Phronosis API.
     abs_files = [f"{repo_root}/{f}" for f in changed if f.endswith((".py", ".ts", ".tsx"))]
     linked = None
     if abs_files:
         try:
             fn_req = UReq(
-                f"{acip_url}/api/functions",
+                f"{phronosis_url}/api/functions",
                 data=json.dumps({"files": abs_files, "project_id": project_id}).encode(),
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -155,14 +155,14 @@ try:
     }).encode()
 
     req = UReq(
-        f"{acip_url}/api/decisions",
+        f"{phronosis_url}/api/decisions",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urlopen(req, timeout=10) as r:
         resp = json.loads(r.read())
-    print(f"[acip] decision logged ({type_}): {resp.get('decision_id', '')[:8]}")
+    print(f"[phronosis] decision logged ({type_}): {resp.get('decision_id', '')[:8]}")
 except Exception as e:
-    print(f"[acip] decision log skipped: {e}", file=sys.stderr)
+    print(f"[phronosis] decision log skipped: {e}", file=sys.stderr)
 PYEOF

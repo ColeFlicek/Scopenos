@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook — ACIP workflow enforcement.
+PreToolUse hook — Phronosis workflow enforcement.
 
 Fires on: Bash (grep), Read (source files), Edit (source files)
 
-Bash:  nudge toward ACIP tools instead of grep-based exploration.
-Read:  gate — blocks the first read of a session, calls ACIP itself,
+Bash:  nudge toward Phronosis tools instead of grep-based exploration.
+Read:  gate — blocks the first read of a session, calls Phronosis itself,
        prints the architectural summary, then defers ("review the above
        then retry"). Gate valid for 30 min; subsequent reads pass silently.
 Edit:  hard risk-signal check — warns on chokepoints and risk-surface
-       functions with the three pre-edit ACIP calls to run first.
+       functions with the three pre-edit Phronosis calls to run first.
 
 Gate strategy:
   - First Read of a session on a source file → hook fetches project_home,
-    prints it, writes ~/.claude/acip_gates/{project_id}, exits 2 (blocks).
+    prints it, writes ~/.claude/phronosis_gates/{project_id}, exits 2 (blocks).
   - Retry Read in same session → gate exists, exits 0 (allows).
   - Gate expires after GATE_TTL seconds → next Read re-fetches and re-gates.
-  - ACIP unreachable → silent pass (never block when the server is down).
+  - Phronosis unreachable → silent pass (never block when the server is down).
 """
 import json
 import os
@@ -25,17 +25,17 @@ import sys
 import time
 import urllib.request
 
-ACIP_URL = os.environ.get("ACIP_URL", "http://localhost:3004")
+PHRONOSIS_URL = os.environ.get("PHRONOSIS_URL", "http://localhost:3004")
 TIMEOUT = 3
 GATE_TTL = 1800  # 30 minutes
-_GATE_DIR = os.path.expanduser("~/.claude/acip_gates")
+_GATE_DIR = os.path.expanduser("~/.claude/phronosis_gates")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _project_id() -> str:
     """Resolve project ID from env, git remote, or repo dirname."""
-    pid = os.environ.get("ACIP_PROJECT", "")
+    pid = os.environ.get("PHRONOSIS_PROJECT", "")
     if pid:
         return pid
     try:
@@ -59,10 +59,10 @@ def _project_id() -> str:
 
 
 def _get_project_home(project_id: str) -> dict:
-    """Fetch the ACIP project home snapshot; returns empty dict on any error."""
+    """Fetch the Phronosis project home snapshot; returns empty dict on any error."""
     try:
         safe = urllib.request.quote(project_id, safe="")
-        url = f"{ACIP_URL}/api/project-home/{safe}"
+        url = f"{PHRONOSIS_URL}/api/project-home/{safe}"
         with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
             return json.loads(r.read())
     except Exception:
@@ -120,11 +120,11 @@ try:
             and not re.search(r"\b(git|pytest|rtk|ruff|mypy|test)\b", cmd)
         ):
             print(
-                "[ACIP] grep on source — MCP is faster and cross-file:\n"
+                "[Phronosis] grep on source — MCP is faster and cross-file:\n"
                 "  get_callers(fn) · get_callees(fn) · query_similar_functions(snippet)"
             )
 
-    # ── Read: gate — fetch ACIP context on first access, block until seen ─────
+    # ── Read: gate — fetch Phronosis context on first access, block until seen ─────
     elif tool == "Read":
         path = inp.get("file_path", "")
         if not re.search(r"\.(py|ts|tsx|js|jsx)$", path):
@@ -140,18 +140,18 @@ try:
             # Gate is fresh — pass silently
             sys.exit(0)
 
-        # Gate expired or absent — fetch ACIP context, display it, then block.
+        # Gate expired or absent — fetch Phronosis context, display it, then block.
         home = _get_project_home(project_id)
         if not home:
-            # ACIP unreachable — nudge only, never hard-block
+            # Phronosis unreachable — nudge only, never hard-block
             print(
-                "[ACIP] Reading source — if exploring structure, MCP is faster:\n"
+                "[Phronosis] Reading source — if exploring structure, MCP is faster:\n"
                 "  get_impact_radius(fn) · get_decision_history(fn) · get_callers(fn)"
             )
             sys.exit(0)
 
         # Print architectural summary so the agent actually sees it
-        print(f"[ACIP] Architectural context — {project_id} "
+        print(f"[Phronosis] Architectural context — {project_id} "
               f"({home.get('function_count', '?')} functions)")
         print(f"  Chokepoints : {_fmt_ids(home.get('chokepoints', []))}")
         print(f"  Risk surface: {_fmt_ids(home.get('risk_surface', []))}")
@@ -170,7 +170,7 @@ try:
                   f"({gaps[0].get('caller_count', 0)} callers, no docstring/decisions)")
 
         print()
-        print("[ACIP] Context loaded. Retry your Read — this message won't repeat "
+        print("[Phronosis] Context loaded. Retry your Read — this message won't repeat "
               f"for {GATE_TTL // 60} minutes.")
 
         # Write gate so the immediate retry passes
@@ -192,7 +192,7 @@ try:
         if not home:
             sys.exit(0)
 
-        # A successful Edit-time ACIP call also refreshes the gate
+        # A successful Edit-time Phronosis call also refreshes the gate
         _write_gate(project_id)
 
         warnings = []
@@ -214,7 +214,7 @@ try:
                 )
 
         if warnings:
-            print(f"[ACIP] High-risk edit in {os.path.basename(path)}:")
+            print(f"[Phronosis] High-risk edit in {os.path.basename(path)}:")
             for w in warnings:
                 print(w)
             print("  Before editing, run:")
@@ -224,7 +224,7 @@ try:
         else:
             fn_hint = module.split(".")[-1] if module else "fn"
             print(
-                f"[ACIP] Pre-edit: get_impact_radius({fn_hint}) · "
+                f"[Phronosis] Pre-edit: get_impact_radius({fn_hint}) · "
                 f"get_decision_history({fn_hint}) · "
                 f"query_similar_functions(snippet)"
             )

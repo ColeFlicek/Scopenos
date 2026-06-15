@@ -9,7 +9,7 @@ Results directory layout (public artifact):
                 patch.diff      — what the baseline agent produced
                 evaluation.json — pass/fail per test
             path_b/
-                patch.diff      — what the ACIP-assisted agent produced
+                patch.diff      — what the Phronosis-assisted agent produced
                 evaluation.json — pass/fail per test
         summary.json            — aggregate pass rates
 """
@@ -98,7 +98,7 @@ def write_summary(results_dir: str = "results") -> dict:
             "instance_id": task_dir.name,
             "path_a_resolved": a_ok,
             "path_b_resolved": b_ok,
-            "acip_advantage": b_ok and not a_ok,
+            "phronosis_advantage": b_ok and not a_ok,
         })
 
     summary = {
@@ -111,7 +111,7 @@ def write_summary(results_dir: str = "results") -> dict:
             "resolved": tasks_b_resolved,
             "resolve_rate": round(tasks_b_resolved / total, 4) if total else 0,
         },
-        "acip_advantage_tasks": sum(1 for r in rows if r["acip_advantage"]),
+        "phronosis_advantage_tasks": sum(1 for r in rows if r["phronosis_advantage"]),
         "tasks": rows,
     }
 
@@ -127,8 +127,8 @@ def print_summary(summary: dict) -> None:
     print(f"  Benchmark Results ({total} tasks)")
     print(f"{'='*50}")
     print(f"  Baseline (Path A): {a['resolved']}/{total} resolved ({a['resolve_rate']*100:.1f}%)")
-    print(f"  ACIP    (Path B): {b['resolved']}/{total} resolved ({b['resolve_rate']*100:.1f}%)")
-    print(f"  ACIP advantage:    {summary['acip_advantage_tasks']} tasks Path B fixed that A couldn't")
+    print(f"  Phronosis    (Path B): {b['resolved']}/{total} resolved ({b['resolve_rate']*100:.1f}%)")
+    print(f"  Phronosis advantage:    {summary['phronosis_advantage_tasks']} tasks Path B fixed that A couldn't")
     print(f"{'='*50}\n")
 
 

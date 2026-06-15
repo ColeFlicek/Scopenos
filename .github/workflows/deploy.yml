@@ -12,7 +12,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: coleflicek/acip
+  IMAGE_NAME: coleflicek/phronosis
 
 jobs:
   test:
@@ -22,9 +22,9 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg17
         env:
-          POSTGRES_USER: acip
-          POSTGRES_PASSWORD: acip
-          POSTGRES_DB: acip_test
+          POSTGRES_USER: phronosis
+          POSTGRES_PASSWORD: phronosis
+          POSTGRES_DB: phronosis_test
         ports:
           - 5432:5432
         options: >-
@@ -59,14 +59,14 @@ jobs:
 
       - name: Setup database
         run: |
-          PGPASSWORD=acip psql -U acip -h localhost -d acip_test \
+          PGPASSWORD=phronosis psql -U phronosis -h localhost -d phronosis_test \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
-          PGPASSWORD=acip psql -U acip -h localhost -d acip_test -f schema.sql
+          PGPASSWORD=phronosis psql -U phronosis -h localhost -d phronosis_test -f schema.sql
 
       - name: Run tests
         run: pytest tests/ -q
         env:
-          DATABASE_URL: postgresql://acip:acip@localhost/acip_test
+          DATABASE_URL: postgresql://phronosis:phronosis@localhost/phronosis_test
           REDIS_URL: redis://localhost:6379/1
 
   build-and-push:
@@ -173,7 +173,7 @@ jobs:
       # ── Secrets ───────────────────────────────────────────────────────────
       # Required secrets (set in repo Settings → Secrets → Actions):
       #   DATABASE_URL        - full postgres DSN (external DB, not in-cluster)
-      #                         TheHive: postgresql://acip:<pw>@<docker-bridge-gw>/acip
+      #                         TheHive: postgresql://phronosis:<pw>@<docker-bridge-gw>/phronosis
       #                         % in passwords must be encoded as %25 in the URL
       #   OPENAI_API_KEY      - for embeddings
       #   ANTHROPIC_API_KEY   - for LLM enrichment
@@ -181,13 +181,13 @@ jobs:
       #   KUBECONFIG          - base64-encoded kubeconfig for the cluster
       - name: Apply secrets
         run: |
-          kubectl create secret generic acip-secrets \
+          kubectl create secret generic phronosis-secrets \
             --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            --from-literal=REDIS_URL="redis://redis-svc.acip.svc.cluster.local:6379" \
+            --from-literal=REDIS_URL="redis://redis-svc.phronosis.svc.cluster.local:6379" \
             --from-literal=OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
             --from-literal=ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}" \
             --from-literal=RESEND_API_KEY="${{ secrets.RESEND_API_KEY }}" \
-            -n acip --dry-run=client -o yaml | kubectl apply -f -
+            -n phronosis --dry-run=client -o yaml | kubectl apply -f -
 
       # ── Redis ─────────────────────────────────────────────────────────────
       - name: Deploy Redis
@@ -211,20 +211,20 @@ jobs:
       # ── Wait for rollout — dump logs on failure so you can see WHY ─────────
       - name: Wait for rollout
         run: |
-          kubectl rollout status deployment/acip-api -n acip --timeout=5m
-          kubectl rollout status deployment/acip-worker -n acip --timeout=5m
+          kubectl rollout status deployment/phronosis-api -n phronosis --timeout=5m
+          kubectl rollout status deployment/phronosis-worker -n phronosis --timeout=5m
 
       - name: Dump pod logs on failure
         if: failure()
         run: |
           echo "=== Pod status ==="
-          kubectl get pods -n acip -o wide
+          kubectl get pods -n phronosis -o wide
           echo ""
           echo "=== API pod logs (last 100 lines) ==="
-          kubectl logs -l app=acip-api -n acip --tail=100 --prefix || true
+          kubectl logs -l app=phronosis-api -n phronosis --tail=100 --prefix || true
           echo ""
           echo "=== Worker pod logs (last 50 lines) ==="
-          kubectl logs -l app=acip-worker -n acip --tail=50 --prefix || true
+          kubectl logs -l app=phronosis-worker -n phronosis --tail=50 --prefix || true
           echo ""
           echo "=== Events (last 20) ==="
-          kubectl get events -n acip --sort-by='.lastTimestamp' | tail -20
+          kubectl get events -n phronosis --sort-by='.lastTimestamp' | tail -20

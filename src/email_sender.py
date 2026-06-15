@@ -8,10 +8,10 @@ async def resend_send_api_key(to: str, api_key: str) -> None:
     import httpx
 
     resend_key = os.getenv("RESEND_API_KEY", "")
-    from_addr = os.getenv("ACIP_FROM_EMAIL", "ACIP <noreply@acip.dev>")
+    from_addr = os.getenv("Phronosis_FROM_EMAIL", "Phronosis <noreply@phronosis.dev>")
 
     body = f"""\
-Welcome to ACIP!
+Welcome to Phronosis!
 
 Your API key:
 
@@ -22,9 +22,9 @@ Add it to your Claude Code MCP config:
     "headers": {{"X-API-Key": "{api_key}"}}
 
 This key was shown once in this email — it is not stored in plaintext anywhere.
-If you lose it, sign up again at acip.dev to issue a new one.
+If you lose it, sign up again at phronosis.dev to issue a new one.
 
-— The ACIP team
+— The Phronosis team
 """
 
     async with httpx.AsyncClient() as client:
@@ -34,7 +34,7 @@ If you lose it, sign up again at acip.dev to issue a new one.
             json={
                 "from": from_addr,
                 "to": [to],
-                "subject": "Your ACIP API key",
+                "subject": "Your Phronosis API key",
                 "text": body,
             },
         )
