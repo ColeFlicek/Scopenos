@@ -126,8 +126,9 @@ def register_routes(
             # ── Projects (from projects table + per-project embedding counts) ─
             try:
                 projects = await db.list_projects()
+                counts = await embeddings.count_embeddings_by_project()
                 for p in projects:
-                    p["embedded"] = await embeddings.count_embeddings(p["id"])
+                    p["embedded"] = counts.get(p["id"], 0)
                 result["projects"] = projects
             except Exception as proj_exc:
                 result["projects"] = [{"error": str(proj_exc)}]

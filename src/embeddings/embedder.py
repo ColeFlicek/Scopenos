@@ -202,6 +202,14 @@ class EmbeddingStore:
         async with conn.execute("SELECT COUNT(*) FROM function_embeddings") as cur:
             return (await cur.fetchone())[0]
 
+    async def count_embeddings_by_project(self) -> dict[str, int]:
+        """Return embedding counts keyed by project_id in a single query."""
+        conn = self._db._db
+        async with conn.execute(
+            "SELECT project_id, COUNT(*) FROM function_embeddings GROUP BY project_id"
+        ) as cur:
+            return {row[0]: row[1] for row in await cur.fetchall()}
+
     async def get_summaries(
         self, function_ids: list[str], project_id: str
     ) -> dict[str, str]:
