@@ -1421,6 +1421,32 @@ async def http_reembed_project(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
+@mcp.custom_route("/api/enrich-summaries/{project_id}", methods=["POST"])
+async def http_enrich_summaries(request: Request) -> JSONResponse:
+    """
+    POST /api/enrich-summaries/{project_id}
+    Optional body: {"limit": 500, "force": false}
+
+    Enqueues an LLM summary generation job for functions that used the large-model
+    fallback (no docstring/comment). Re-embeds them afterward for better search quality.
+    Returns immediately with a job_id; the worker processes it in the background.
+    """
+    try:
+        project_id = request.path_params["project_id"]
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        limit: int = int(body.get("limit", 500))
+        force: bool = bool(body.get("force", False))
+        q = _queue_mod.get_queue()
+        job = q.enqueue(run_enrich_summaries, project_id, limit, force, job_timeout=7200)
+        return JSONResponse({"job_id": job.id, "status": "queued", "project_id": project_id})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
