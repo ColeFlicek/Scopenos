@@ -170,6 +170,39 @@ def register_routes(
                 return JSONResponse({"error": "job not found"}, status_code=404)
             return JSONResponse({"error": str(exc)}, status_code=500)
 
+    @mcp.custom_route("/api/projects/{project_id}", methods=["PATCH"])
+    async def api_rename_project(request: Request) -> JSONResponse:
+        """PATCH /api/projects/{project_id} {"name": "new-name"} — rename a project's display name."""
+        try:
+            project_id = request.path_params["project_id"]
+            data = await request.json()
+            new_name = (data.get("name") or "").strip()
+            if not new_name:
+                return JSONResponse({"status": "error", "detail": "name is required"}, status_code=400)
+            svcs = await get_services()
+            found = await svcs.db.rename_project(project_id, new_name)
+            if not found:
+                return JSONResponse({"status": "error", "detail": "project not found"}, status_code=404)
+            return JSONResponse({"status": "ok", "project_id": project_id, "name": new_name})
+        except Exception as exc:
+            return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+    @mcp.custom_route("/api/me", methods=["GET"])
+    async def api_me(request: Request) -> JSONResponse:
+        """GET /api/me — returns the authenticated user's profile and accessible projects."""
+        try:
+            raw_key = request.headers.get("X-API-Key")
+            if not raw_key:
+                return JSONResponse({"status": "error", "detail": "Authentication required"}, status_code=401)
+            svcs = await get_services()
+            user = await svcs.db.get_user_by_key(raw_key)
+            if not user:
+                return JSONResponse({"status": "error", "detail": "Invalid API key"}, status_code=401)
+            projects = await svcs.db.list_user_projects(user["id"])
+            return JSONResponse({"user": user, "projects": projects})
+        except Exception as exc:
+            return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
     @mcp.custom_route("/api/health", methods=["GET"])
     async def api_health(request: Request) -> JSONResponse:
         """Return a lightweight health check result for all three Phronosis layers."""

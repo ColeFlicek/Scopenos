@@ -36,6 +36,55 @@ from .email_sender import get_email_sender
 from . import queue as _queue_mod
 from .jobs import run_index_project, run_enrich_summaries, run_reembed_project
 
+# Max jobs a user may have in QUEUED or STARTED state across all job types.
+_USER_QUEUE_DEPTH_LIMIT = 3
+
+
+def _check_and_enqueue(user_id: str, fn, *args, job_timeout: int = 3600):
+    """Enforce per-user queue depth limit, then enqueue the job.
+
+    Uses a Redis sorted set (score = expiry epoch) so per-member TTL is
+    approximated without worker-side callbacks. Expired entries are pruned
+    before counting so stale jobs don't block new ones indefinitely.
+
+    Raises RuntimeError with status "rate_limited" if the user is at the limit.
+    Returns the enqueued Job.
+    """
+    import time
+    from rq.job import Job, JobStatus
+
+    q = _queue_mod.get_queue()
+    redis = q.connection
+    depth_key = f"phronosis:user_queue_depth:{user_id}"
+    now = time.time()
+
+    # Remove entries whose TTL has expired (score < now).
+    redis.zremrangebyscore(depth_key, "-inf", now)
+
+    # Count remaining active jobs, verifying they're still queued/started.
+    active_ids = redis.zrange(depth_key, 0, -1)
+    stale = []
+    for raw_id in active_ids:
+        jid = raw_id.decode() if isinstance(raw_id, bytes) else raw_id
+        try:
+            j = Job.fetch(jid, connection=redis)
+            if j.get_status() not in (JobStatus.QUEUED, JobStatus.STARTED):
+                stale.append(raw_id)
+        except Exception:
+            stale.append(raw_id)
+    if stale:
+        redis.zrem(depth_key, *stale)
+
+    active_count = redis.zcard(depth_key)
+    if active_count >= _USER_QUEUE_DEPTH_LIMIT:
+        raise RuntimeError("rate_limited")
+
+    job = q.enqueue(fn, *args, job_timeout=job_timeout)
+    expire_at = now + job_timeout
+    redis.zadd(depth_key, {job.id: expire_at})
+    redis.expireat(depth_key, int(expire_at) + 60)
+    return job
+
 # ── Service container ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -130,20 +179,10 @@ async def index_project(path: str, project_id: str = "") -> str:
     await check_permission(get_current_user(), pid, "write", svcs.db)
     user = get_current_user()
     user_id = user["id"] if user else "anon"
-    rate_key = f"phronosis:user_job:{user_id}"
-    q = _queue_mod.get_queue()
-    existing_job_id = q.connection.get(rate_key)
-    if existing_job_id:
-        existing_job_id = existing_job_id.decode()
-        try:
-            from rq.job import Job, JobStatus
-            existing = Job.fetch(existing_job_id, connection=q.connection)
-            if existing.get_status() in (JobStatus.QUEUED, JobStatus.STARTED):
-                return json.dumps({"status": "rate_limited", "job_id": existing_job_id})
-        except Exception:
-            pass
-    job = q.enqueue(run_index_project, path, pid, job_timeout=3600)
-    q.connection.set(rate_key, job.id, ex=3600)
+    try:
+        job = _check_and_enqueue(user_id, run_index_project, path, pid, job_timeout=3600)
+    except RuntimeError:
+        return json.dumps({"status": "rate_limited"})
     return json.dumps({"job_id": job.id, "status": "queued"})
 
 
@@ -192,8 +231,12 @@ async def reembed_project(project_id: str) -> str:
     """
     svcs = await _get_services()
     await check_permission(get_current_user(), project_id, "write", svcs.db)
-    q = _queue_mod.get_queue()
-    job = q.enqueue(run_reembed_project, project_id, job_timeout=3600)
+    user = get_current_user()
+    user_id = user["id"] if user else "anon"
+    try:
+        job = _check_and_enqueue(user_id, run_reembed_project, project_id, job_timeout=3600)
+    except RuntimeError:
+        return json.dumps({"status": "rate_limited"})
     return json.dumps({"job_id": job.id, "status": "queued"})
 
 
@@ -221,8 +264,12 @@ async def enrich_summaries(
     """
     svcs = await _get_services()
     await check_permission(get_current_user(), project_id, "write", svcs.db)
-    q = _queue_mod.get_queue()
-    job = q.enqueue(run_enrich_summaries, project_id, limit, force, job_timeout=7200)
+    user = get_current_user()
+    user_id = user["id"] if user else "anon"
+    try:
+        job = _check_and_enqueue(user_id, run_enrich_summaries, project_id, limit, force, job_timeout=7200)
+    except RuntimeError:
+        return json.dumps({"status": "rate_limited"})
     return json.dumps({"job_id": job.id, "status": "queued"})
 
 
@@ -886,43 +933,6 @@ async def http_list_projects(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
-@mcp.custom_route("/api/projects/{project_id}", methods=["PATCH"])
-async def http_rename_project(request: Request) -> JSONResponse:
-    """PATCH /api/projects/{project_id} {"name": "new-name"} — rename a project's display name."""
-    try:
-        project_id = request.path_params["project_id"]
-        data = await request.json()
-        new_name = data.get("name", "").strip()
-        if not new_name:
-            return JSONResponse({"status": "error", "detail": "name is required"}, status_code=400)
-        svcs = await _get_services()
-        found = await svcs.db.rename_project(project_id, new_name)
-        if not found:
-            return JSONResponse({"status": "error", "detail": "project not found"}, status_code=404)
-        return JSONResponse({"status": "ok", "project_id": project_id, "name": new_name})
-    except Exception as exc:
-        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
-
-
-# ── Me endpoint ────────────────────────────────────────────────────────────────
-
-@mcp.custom_route("/api/me", methods=["GET"])
-async def http_me(request: Request) -> JSONResponse:
-    """GET /api/me — returns the authenticated user's profile and projects."""
-    try:
-        raw_key = request.headers.get("X-API-Key")
-        if not raw_key:
-            return JSONResponse({"status": "error", "detail": "Authentication required"}, status_code=401)
-        svcs = await _get_services()
-        user = await svcs.db.get_user_by_key(raw_key)
-        if not user:
-            return JSONResponse({"status": "error", "detail": "Invalid API key"}, status_code=401)
-        projects = await svcs.db.list_user_projects(user["id"])
-        return JSONResponse({"user": user, "projects": projects})
-    except Exception as exc:
-        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
-
-
 # ── Bulk index HTTP endpoint (used by phronosis-import slash command) ──────────────
 
 @mcp.custom_route("/api/index-bulk", methods=["POST"])
@@ -1477,8 +1487,14 @@ async def http_enrich_summaries(request: Request) -> JSONResponse:
             pass
         limit: int = int(body.get("limit", 500))
         force: bool = bool(body.get("force", False))
-        q = _queue_mod.get_queue()
-        job = q.enqueue(run_enrich_summaries, project_id, limit, force, job_timeout=7200)
+        raw_key = request.headers.get("X-API-Key")
+        svcs = await _get_services()
+        user = await svcs.db.get_user_by_key(raw_key) if raw_key else None
+        user_id = user["id"] if user else "anon"
+        try:
+            job = _check_and_enqueue(user_id, run_enrich_summaries, project_id, limit, force, job_timeout=7200)
+        except RuntimeError:
+            return JSONResponse({"status": "rate_limited"}, status_code=429)
         return JSONResponse({"job_id": job.id, "status": "queued", "project_id": project_id})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
