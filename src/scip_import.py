@@ -49,7 +49,17 @@ class ScipImporter:
         return self._extract(data)
 
     def _parse_binary(self, raw: bytes) -> tuple[list[FunctionNode], list[CallEdge]]:
-        """Parse a binary SCIP protobuf file using the generated scip_pb2 bindings."""
+        """Parse a binary SCIP protobuf file using the generated scip_pb2 bindings.
+
+        SCIP stores call relationships as occurrences, not as symbol.relationships.
+        Each occurrence has a symbolRoles field:
+          1 = DEFINITION   — where a symbol is defined
+          8 = READ_ACCESS  — where a symbol is referenced/called
+
+        To build call edges we attribute each READ_ACCESS occurrence to the
+        innermost DEFINITION occurrence that precedes it in the same file, then
+        create an edge: (containing_function_symbol → referenced_symbol).
+        """
         try:
             from . import scip_pb2
         except ImportError:
@@ -58,48 +68,117 @@ class ScipImporter:
         index = scip_pb2.Index()
         index.ParseFromString(raw)
 
-        # Convert the protobuf Index to the JSON-like dict structure _extract() expects
-        data: dict = {
-            "metadata": {},
-            "documents": [],
-            "externalSymbols": [],
-        }
+        nodes: list[FunctionNode] = []
+        edges: list[CallEdge] = []
+        seen_nodes: set[str] = set()
+        seen_edges: set[tuple] = set()
+
+        # Build a set of all internal symbol IDs for later filtering
+        internal_symbols: set[str] = set()
         for doc in index.documents:
-            syms = []
+            for sym in doc.symbols:
+                if sym.symbol:
+                    internal_symbols.add(sym.symbol)
+
+        for doc in index.documents:
+            rel_path = doc.relative_path
+            file_path = str(Path(self._root) / rel_path) if self._root else rel_path
+            module = _path_to_module(rel_path)
+
+            # Build a name→docstring map from doc.symbols metadata
+            sym_docs: dict[str, str] = {}
             for s in doc.symbols:
-                syms.append({
-                    "symbol": s.symbol,
-                    "documentation": list(s.documentation),
-                    "relationships": [
-                        {"symbol": r.symbol, "isReference": r.is_reference,
-                         "isImplementation": r.is_implementation,
-                         "isTypeDefinition": r.is_type_definition}
-                        for r in s.relationships
-                    ],
-                })
-            occs = []
-            for o in doc.occurrences:
-                occs.append({
-                    "range": list(o.range),
-                    "symbol": o.symbol,
-                    "symbolRoles": o.symbol_roles,
-                })
-            data["documents"].append({
-                "relativePath": doc.relative_path,
-                "language": doc.language,
-                "symbols": syms,
-                "occurrences": occs,
-            })
-        for es in index.external_symbols:
-            data["externalSymbols"].append({
-                "symbol": es.symbol,
-                "documentation": list(es.documentation),
-                "relationships": [
-                    {"symbol": r.symbol, "isReference": r.is_reference}
-                    for r in es.relationships
-                ],
-            })
-        return self._extract(data)
+                if s.symbol and s.documentation:
+                    sym_docs[s.symbol] = "\n".join(s.documentation)[:500]
+
+            # Sort occurrences by line so we can attribute references to the
+            # innermost enclosing function definition.
+            DEFINITION_ROLE = 1
+            READ_ACCESS_ROLE = 8
+
+            occ_sorted = sorted(doc.occurrences, key=lambda o: (o.range[0] if o.range else 0))
+
+            # Track the current function definition as we walk the file
+            current_fn_sym: str | None = None
+
+            for occ in occ_sorted:
+                sym_id = occ.symbol
+                role = occ.symbol_roles
+                if not sym_id:
+                    continue
+
+                if role == DEFINITION_ROLE:
+                    # Only treat function/method definitions as containers.
+                    # SCIP uses "#" for methods, "." for attributes/module-level names.
+                    # Heuristic: symbol ending with "()" or containing "#" is a function.
+                    if "#" in sym_id or sym_id.endswith("()."):
+                        current_fn_sym = sym_id
+
+                    # Register this symbol as a node
+                    doc_text = sym_docs.get(sym_id, "")
+                    lines = [l for l in doc_text.splitlines() if l.strip()]
+                    signature = lines[0][:400] if lines else _scip_name(sym_id)
+                    docstring = "\n".join(lines[1:]).strip()[:500] if len(lines) > 1 else ""
+                    kind = "class" if any(
+                        k in signature.lower() for k in ("class ", "interface ", "struct ")
+                    ) else "function"
+                    name = _scip_name(sym_id)
+                    node_id = f"{module}.{_norm(sym_id)}"
+                    if node_id not in seen_nodes:
+                        seen_nodes.add(node_id)
+                        body_hash = hashlib.sha256((doc_text or sym_id).encode()).hexdigest()[:16]
+                        nodes.append(FunctionNode(
+                            id=node_id, name=name, file=file_path, module=module,
+                            type=kind, signature=signature, body="", docstring=docstring,
+                            body_hash=body_hash, is_external=False,
+                        ))
+
+                elif role == READ_ACCESS_ROLE and current_fn_sym:
+                    # This is a call/reference inside the current function
+                    if sym_id == current_fn_sym:
+                        continue  # self-reference
+                    caller_id = f"{module}.{_norm(current_fn_sym)}"
+                    is_internal = sym_id in internal_symbols
+                    if is_internal:
+                        callee_module = _path_to_module(
+                            sym_id.split(" ")[3] if " " in sym_id else rel_path
+                        )
+                        callee_id = f"{callee_module}.{_norm(sym_id)}"
+                        edge_key = (caller_id, callee_id)
+                        if edge_key not in seen_edges:
+                            seen_edges.add(edge_key)
+                            edges.append(CallEdge(
+                                caller_id=caller_id,
+                                callee_name=_scip_name(sym_id),
+                                edge_type="reference",
+                                file=file_path,
+                            ))
+                    else:
+                        # External symbol
+                        lib = _library_name(sym_id)
+                        ext_id = f"external.{lib}.{_norm(sym_id)}"
+                        if ext_id not in seen_nodes:
+                            seen_nodes.add(ext_id)
+                            nodes.append(FunctionNode(
+                                id=ext_id, name=_scip_name(sym_id),
+                                file=f"<{lib}>", module=f"external.{lib}",
+                                type="function",
+                                signature=_normalise_external_signature(sym_id),
+                                body="", docstring="",
+                                body_hash=hashlib.sha256(sym_id.encode()).hexdigest()[:16],
+                                is_external=True,
+                            ))
+                        edge_key = (caller_id, ext_id)
+                        if edge_key not in seen_edges:
+                            seen_edges.add(edge_key)
+                            edges.append(CallEdge(
+                                caller_id=caller_id,
+                                callee_name=_scip_name(sym_id),
+                                edge_type="reference",
+                                file=file_path,
+                            ))
+
+        return nodes, edges
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
