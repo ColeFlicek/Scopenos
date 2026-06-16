@@ -742,7 +742,7 @@ async def _try_scip_index(
                     pass
 
             if not os.path.exists(scip_out):
-                # Check if binary output can be passed directly
+                # JSON conversion not available — pass binary directly to ScipImporter
                 if os.path.exists(scip_bin):
                     scip_out = scip_bin
                 else:

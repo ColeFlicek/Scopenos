@@ -30,14 +30,15 @@ class ScipImporter:
     # ── Public API ────────────────────────────────────────────────────────────
 
     def parse(self, source: str) -> tuple[list[FunctionNode], list[CallEdge]]:
-        """Accept a filesystem path to a SCIP JSON file or raw JSON content."""
-        try:
-            p = Path(source)
-            if p.exists() and p.is_file():
-                content = p.read_text(encoding="utf-8")
-            else:
-                content = source
-        except (OSError, ValueError):
+        """Accept a path to a SCIP binary (.scip), SCIP JSON, or raw JSON string."""
+        p = Path(source)
+        if p.exists() and p.is_file():
+            # Detect binary protobuf vs JSON by first byte
+            raw = p.read_bytes()
+            if raw[:1] != b"{":
+                return self._parse_binary(raw)
+            content = raw.decode("utf-8", errors="replace")
+        else:
             content = source
 
         try:
@@ -45,6 +46,59 @@ class ScipImporter:
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid SCIP JSON: {exc}") from exc
 
+        return self._extract(data)
+
+    def _parse_binary(self, raw: bytes) -> tuple[list[FunctionNode], list[CallEdge]]:
+        """Parse a binary SCIP protobuf file using the generated scip_pb2 bindings."""
+        try:
+            from . import scip_pb2
+        except ImportError:
+            raise ValueError("scip_pb2 not available — cannot parse binary SCIP format")
+
+        index = scip_pb2.Index()
+        index.ParseFromString(raw)
+
+        # Convert the protobuf Index to the JSON-like dict structure _extract() expects
+        data: dict = {
+            "metadata": {},
+            "documents": [],
+            "externalSymbols": [],
+        }
+        for doc in index.documents:
+            syms = []
+            for s in doc.symbols:
+                syms.append({
+                    "symbol": s.symbol,
+                    "documentation": list(s.documentation),
+                    "relationships": [
+                        {"symbol": r.symbol, "isReference": r.is_reference,
+                         "isImplementation": r.is_implementation,
+                         "isTypeDefinition": r.is_type_definition}
+                        for r in s.relationships
+                    ],
+                })
+            occs = []
+            for o in doc.occurrences:
+                occs.append({
+                    "range": list(o.range),
+                    "symbol": o.symbol,
+                    "symbolRoles": o.symbol_roles,
+                })
+            data["documents"].append({
+                "relativePath": doc.relative_path,
+                "language": doc.language,
+                "symbols": syms,
+                "occurrences": occs,
+            })
+        for es in index.external_symbols:
+            data["externalSymbols"].append({
+                "symbol": es.symbol,
+                "documentation": list(es.documentation),
+                "relationships": [
+                    {"symbol": r.symbol, "isReference": r.is_reference}
+                    for r in es.relationships
+                ],
+            })
         return self._extract(data)
 
     # ── Internal ──────────────────────────────────────────────────────────────
