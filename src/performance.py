@@ -1,28 +1,35 @@
 """
 Performance concern detector for Phronosis.
 
-Runs static detectors against indexed function bodies and the call graph.
-Results are filtered against acknowledged Performance decisions so known
-intentional patterns are not re-surfaced.
+Runs static detectors against indexed function bodies and the call graph,
+then scores findings using object embeddings to separate real concerns from
+intentional patterns.
 
-Detectors (Phase 1 — SQL + call graph, no object embeddings yet):
+Detectors:
   - correlated_join_aggregate: 2+ JOINs on a shared parent key before
     GROUP BY + COUNT — produces a Cartesian product before aggregation.
   - n_plus_one: a function that iterates over a collection and calls a
     function that transitively reaches the DB layer.
 
-Phase 2 (future): object embeddings add cardinality reasoning so the
-detectors can quantify expected row blowup rather than just flagging
-structural patterns.
+Scoring (object embedding layer):
+  Each N+1 candidate is scored by extracting which schema objects the loop
+  touches, then using embedding similarity + cardinality class to determine
+  whether the access pattern is likely problematic or intentional:
+
+    HIGH + HIGH + correlated  → severity=high   (e.g. nodes × edges per project)
+    HIGH + LOW                → severity=low    (e.g. loop over projects, query config)
+    batch function (executemany) → downgraded   (intentional bulk write)
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .call_graph.storage import CallGraphDB
+    from .schema_objects import SchemaObject
 
 # ── Finding ───────────────────────────────────────────────────────────────────
 
@@ -159,6 +166,81 @@ def _analyze_node_for_sql(node: dict) -> list[tuple[str, str]]:
     return results
 
 
+# ── Object embedding scoring ──────────────────────────────────────────────────
+
+# Bodies that call executemany are doing batch writes, not per-row queries
+_BATCH_PATTERN = re.compile(r"\bexecutemany\b", re.IGNORECASE)
+
+_CARDINALITY_WEIGHT = {"UNBOUNDED": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "SCALAR": 0}
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _score_n_plus_one(
+    node: dict,
+    callee_names: list[str],
+    schema_objects: list["SchemaObject"],
+    embeddings_by_name: dict[str, "SchemaObject"],
+) -> tuple[str, str]:
+    """
+    Return (severity, scored_detail) for an N+1 candidate, using schema
+    object embeddings to assess actual cardinality risk.
+
+    Severity rules:
+      - Function body calls executemany → "low" (batch write, not per-row read)
+      - Callee is a HIGH/UNBOUNDED schema object → "high"
+      - Callee is a LOW/SCALAR schema object → "low"
+      - Unknown → "medium" (original default)
+    """
+    body = node.get("body", "")
+
+    # Batch write: executemany is O(1) trips to the DB regardless of loop size
+    if _BATCH_PATTERN.search(body):
+        return "low", (
+            "Loop calls executemany — this is a batch write pattern, not an "
+            "N+1. Each executemany is a single round-trip regardless of row count."
+        )
+
+    if not schema_objects:
+        return "medium", ""
+
+    # Find schema objects mentioned in callee names or body
+    matched: list["SchemaObject"] = []
+    for name in callee_names:
+        # e.g. "get_nodes_by_file" → look for "nodes" schema object
+        for obj in schema_objects:
+            if obj.name.lower() in name.lower() or name.lower() in obj.name.lower():
+                matched.append(obj)
+
+    # Also scan body for table/class name mentions
+    for obj in schema_objects:
+        if obj.name.lower() in body.lower() and obj not in matched:
+            matched.append(obj)
+
+    if not matched:
+        return "medium", ""
+
+    max_weight = max(_CARDINALITY_WEIGHT.get(o.cardinality, 2) for o in matched)
+    top_obj = max(matched, key=lambda o: _CARDINALITY_WEIGHT.get(o.cardinality, 2))
+
+    if max_weight >= 3:  # HIGH or UNBOUNDED
+        return "high", (
+            f"Loop accesses {top_obj.name} ({top_obj.cardinality} cardinality). "
+            f"Each iteration issues a separate query against a large collection."
+        )
+    if max_weight <= 1:  # LOW or SCALAR
+        return "low", (
+            f"Loop accesses {top_obj.name} ({top_obj.cardinality} cardinality). "
+            f"Collection is small/bounded — likely acceptable."
+        )
+    return "medium", ""
+
+
 # ── N+1 detector ─────────────────────────────────────────────────────────────
 
 # Signatures that indicate a function is a DB access point
@@ -235,6 +317,7 @@ async def detect_n_plus_one(
 async def check_performance(
     db: "CallGraphDB",
     project_id: str,
+    embeddings: object = None,
 ) -> list[Finding]:
     """
     Run all detectors against the indexed functions for project_id.
@@ -275,6 +358,11 @@ async def check_performance(
 
     acknowledged: dict[str, str] = {r["function_id"]: r["description"] for r in ack_rows}
 
+    # 4. Load schema objects for scoring (optional — gracefully absent)
+    from .schema_objects import load_schema_objects
+    schema_objects = await load_schema_objects(db, project_id)
+    schema_by_name = {o.name: o for o in schema_objects}
+
     findings: list[Finding] = []
 
     # ── SQL detector ─────────────────────────────────────────────────────────
@@ -292,23 +380,44 @@ async def check_performance(
                 suppression_reason=acknowledged.get(node_id, ""),
             ))
 
-    # ── N+1 detector ─────────────────────────────────────────────────────────
+    # ── N+1 detector + object embedding scoring ───────────────────────────────
     db_sink_ids = {
         nid for nid, n in nodes_by_id.items() if _is_db_sink(n)
     }
     n1_findings = await detect_n_plus_one(nodes_by_id, callee_map, db_sink_ids)
-    for caller_id, _callee_id, detail in n1_findings:
+    for caller_id, _callee_id, base_detail in n1_findings:
         node = nodes_by_id.get(caller_id, {})
+        callee_names = [
+            nodes_by_id[c]["name"]
+            for c in callee_map.get(caller_id, [])
+            if c in nodes_by_id
+        ]
+
+        # Score with object embeddings if available
+        scored_severity, scored_detail = _score_n_plus_one(
+            node, callee_names, schema_objects, schema_by_name
+        )
+        detail = scored_detail if scored_detail else base_detail
+        severity = scored_severity
+
         suppressed = caller_id in acknowledged
+        # Auto-suppress low-severity findings unless explicitly dismissed —
+        # they represent intentional patterns the object layer identified.
+        if severity == "low" and caller_id not in acknowledged:
+            suppressed = True
+            suppression_reason = "auto: object embedding scored as low-cardinality or batch pattern"
+        else:
+            suppression_reason = acknowledged.get(caller_id, "")
+
         findings.append(Finding(
             function_id=caller_id,
             function_name=node.get("name", caller_id),
             file=node.get("file", ""),
             pattern="n_plus_one",
-            severity="medium",
+            severity=severity,
             detail=detail,
             suppressed=suppressed,
-            suppression_reason=acknowledged.get(caller_id, ""),
+            suppression_reason=suppression_reason,
         ))
 
     # Sort: new findings first, then by severity

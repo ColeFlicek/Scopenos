@@ -894,7 +894,7 @@ async def check_performance(project_id: str) -> str:
     """
     from .performance import check_performance as _check
     svcs = await _get_services()
-    findings = await _check(svcs.db, project_id)
+    findings = await _check(svcs.db, project_id, embeddings=svcs.embeddings)
     return json.dumps({
         "project_id": project_id,
         "total": len(findings),
@@ -935,6 +935,34 @@ async def dismiss_performance_concern(
         project_id=project_id,
     )
     return json.dumps({"status": "acknowledged", "decision_id": result.get("id")})
+
+
+@mcp.tool()
+async def index_schema_objects(project_id: str, include_db_tables: bool = False) -> str:
+    """
+    Extract and embed schema objects for a project, building the object
+    embedding layer used by check_performance to score N+1 findings.
+
+    Two object types are extracted:
+    - Python classes from the call graph (all projects)
+    - Postgres DB tables with FK relationships and cardinality (set
+      include_db_tables=True for projects that use this Phronosis database)
+
+    Each object is embedded as a structured description capturing what it
+    represents, what it relates to, and its cardinality class (LOW / MEDIUM /
+    HIGH / UNBOUNDED). check_performance uses these embeddings to distinguish
+    high-cardinality correlated access patterns (likely real performance issues)
+    from low-cardinality intentional loops (likely fine).
+
+    Run this after index_project to enable object-embedding-enhanced scoring.
+    """
+    from .schema_objects import index_schema_objects as _index
+    svcs = await _get_services()
+    result = await _index(
+        svcs.db, svcs.embeddings, project_id,
+        include_db_tables=include_db_tables,
+    )
+    return json.dumps(result)
 
 
 # ── Query HTTP endpoints ──────────────────────────────────────────────────────
