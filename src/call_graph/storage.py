@@ -401,24 +401,38 @@ class CallGraphDB:
     async def find_node_by_name(
         self, name: str, project_id: str | None = None
     ) -> list[dict]:
-        """Fuzzy match: exact id, then exact name, then suffix match."""
+        """Match nodes by name, returning all candidates across two lookup strategies.
+
+        Step 1 — exact id or exact name match.
+        Step 2 — suffix match (id LIKE '%.{name}'), excluding ids already found.
+
+        Both steps always run. Results from step 1 come first so callers that
+        take [0] get the most-specific match. The previous short-circuit
+        ('if rows: return rows') meant that when a bare name like 'index_project'
+        matched an exact-name node, the suffix search was skipped and a method
+        named 'Indexer.index_project' (whose id ends in '.index_project') was
+        silently omitted from get_callers / get_callees / get_impact_radius results.
+        """
         pid_clause = " AND project_id=?" if project_id else ""
         pid_args = (project_id,) if project_id else ()
 
+        # Step 1: exact id or exact name
         async with self._db.execute(
             f"SELECT * FROM nodes WHERE (id=? OR name=?){pid_clause}",
             (name, name, *pid_args),
         ) as cur:
-            rows = [dict(r) for r in await cur.fetchall()]
-        if rows:
-            return rows
+            exact = [dict(r) for r in await cur.fetchall()]
 
+        # Step 2: suffix match — always run, skip ids already found in step 1
+        seen_ids = {r["id"] for r in exact}
         escaped = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         async with self._db.execute(
             f"SELECT * FROM nodes WHERE id LIKE ? ESCAPE '\\'{pid_clause}",
             (f"%.{escaped}", *pid_args),
         ) as cur:
-            return [dict(r) for r in await cur.fetchall()]
+            suffix = [dict(r) for r in await cur.fetchall() if r["id"] not in seen_ids]
+
+        return exact + suffix
 
     # ── Edges ──────────────────────────────────────────────────────────────
 

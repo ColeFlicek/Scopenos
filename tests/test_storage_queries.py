@@ -122,14 +122,18 @@ class TestFindNodeByName:
         assert "proj_b" in project_ids
 
     @pytest.mark.asyncio
-    async def test_exact_name_match_wins_over_suffix_match(self, db: CallGraphDB):
+    async def test_both_exact_and_suffix_matches_returned(self, db: CallGraphDB):
         """
-        Regression for the ambiguity bug: when step 1 (exact name) finds a node,
-        step 2 (suffix match) is not run. The test pins this behavior.
+        Regression test for the fixed ambiguity bug.
 
-        Effect: querying 'index_project' returns the MCP tool handler
-        (name='index_project') but NOT the Indexer method (name='Indexer.index_project').
-        This is the known limitation — documented here so a fix can be tracked.
+        Previously: step 1 (exact name match) short-circuited and step 2 (suffix
+        match) was never reached. Querying 'index_project' returned only the tool
+        handler (name='index_project'), silently omitting the Indexer method whose
+        id ends in '.index_project'. get_callers("index_project") returned wrong results.
+
+        Now: both steps always run. The tool handler (exact name) comes first,
+        the method (suffix match) is appended. All graph traversal tools benefit
+        from the complete candidate set.
         """
         tool_handler = _node("src.server.index_project", name="index_project")
         indexer_method = _node("src.indexer.Indexer.index_project",
@@ -138,15 +142,33 @@ class TestFindNodeByName:
 
         results = await db.find_node_by_name("index_project", "proj")
         ids = {r["id"] for r in results}
-        # Step 1 finds exact name match on 'index_project' (the tool handler)
-        assert "src.server.index_project" in ids
-        # Step 2 is not reached — so the method is NOT in results despite id suffix match
-        # This is the known ambiguity limitation. When this test breaks (both returned),
-        # it means the ambiguity bug has been fixed.
-        assert "src.indexer.Indexer.index_project" not in ids, (
-            "find_node_by_name now returns both the tool handler AND the method. "
-            "If this was intentional, update the test — the disambiguation is fixed!"
+        # Both nodes must now be returned — the fix is complete
+        assert "src.server.index_project" in ids, "Exact name match must be present"
+        assert "src.indexer.Indexer.index_project" in ids, (
+            "Suffix match must be present — step 2 now always runs even when step 1 "
+            "finds results. This was the ambiguity bug: previously only the tool "
+            "handler was returned, making get_callers silent for the Indexer method."
         )
+
+    @pytest.mark.asyncio
+    async def test_exact_match_comes_before_suffix_match(self, db: CallGraphDB):
+        """Step 1 results appear first so callers that take [0] get the best match."""
+        tool_handler = _node("src.server.index_project", name="index_project")
+        indexer_method = _node("src.indexer.Indexer.index_project",
+                                name="Indexer.index_project")
+        await _seed(db, "proj", [tool_handler, indexer_method])
+
+        results = await db.find_node_by_name("index_project", "proj")
+        # The exact name match must be first — get_function_context takes [0]
+        assert results[0]["id"] == "src.server.index_project"
+
+    @pytest.mark.asyncio
+    async def test_no_duplicates_when_exact_also_matches_suffix(self, db: CallGraphDB):
+        """A node that matches both steps (full id passed) appears exactly once."""
+        await _seed(db, "proj", [_node("src.mod.my_func", name="my_func")])
+        results = await db.find_node_by_name("src.mod.my_func", "proj")
+        ids = [r["id"] for r in results]
+        assert ids.count("src.mod.my_func") == 1
 
     @pytest.mark.asyncio
     async def test_sql_special_chars_in_name_handled_safely(self, db: CallGraphDB):
