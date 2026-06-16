@@ -363,7 +363,7 @@ async def load_schema_objects(db: "CallGraphDB", project_id: str) -> list[Schema
             description=r["description"],
             references=json.loads(r["refs"]),
             referenced_by=json.loads(r["refs_in"]),
-            embedding=list(r["embedding"]) if r["embedding"] else None,
+            embedding=list(r["embedding"]) if r["embedding"] is not None else None,
         )
         for r in rows
     ]
