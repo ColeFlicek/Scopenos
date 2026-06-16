@@ -323,46 +323,29 @@ async def check_performance(
     Run all detectors against the indexed functions for project_id.
     Returns Finding objects, with suppressed=True for any that have an
     acknowledged Performance decision in decision memory.
+
+    I/O is isolated here; all detection logic is in _run_detectors (pure).
     """
-    # 1. Load all nodes for the project
-    async with db._db.execute(
-        "SELECT id, name, file, module, body FROM nodes WHERE project_id = ?",
-        (project_id,),
-    ) as cur:
-        rows = await cur.fetchall()
-
-    nodes_by_id = {r["id"]: dict(r) for r in rows}
-
-    # 2. Load call edges (caller → callees)
-    async with db._db.execute(
-        "SELECT caller_id, callee_id FROM edges WHERE project_id = ?",
-        (project_id,),
-    ) as cur:
-        edges = await cur.fetchall()
-
-    callee_map: dict[str, list[str]] = {}
-    for e in edges:
-        callee_map.setdefault(e["caller_id"], []).append(e["callee_id"])
-
-    # 3. Load acknowledged Performance decisions for suppression
-    async with db._db.execute(
-        """
-        SELECT df.function_id, d.description
-        FROM decisions d
-        JOIN decision_functions df ON df.decision_id = d.id
-        WHERE d.project_id = ? AND d.type = 'Performance'
-        """,
-        (project_id,),
-    ) as cur:
-        ack_rows = await cur.fetchall()
-
-    acknowledged: dict[str, str] = {r["function_id"]: r["description"] for r in ack_rows}
-
-    # 4. Load schema objects for scoring (optional — gracefully absent)
     from .schema_objects import load_schema_objects
+    nodes_by_id = await db.get_nodes_with_bodies(project_id)
+    callee_map = await db.get_callee_map(project_id)
+    acknowledged = await db.get_acknowledged_performance_decisions(project_id)
     schema_objects = await load_schema_objects(db, project_id)
-    schema_by_name = {o.name: o for o in schema_objects}
+    return await _run_detectors(nodes_by_id, callee_map, acknowledged, schema_objects)
 
+
+async def _run_detectors(
+    nodes_by_id: dict[str, dict],
+    callee_map: dict[str, list[str]],
+    acknowledged: dict[str, str],
+    schema_objects: list,
+) -> list[Finding]:
+    """Pure detection pipeline — no I/O. Accepts pre-loaded data from check_performance.
+
+    Separated from check_performance so callers that already hold the data dicts
+    (e.g. tests) can invoke detection directly without a database.
+    """
+    schema_by_name = {o.name: o for o in schema_objects}
     findings: list[Finding] = []
 
     # ── SQL detector ─────────────────────────────────────────────────────────
@@ -381,9 +364,7 @@ async def check_performance(
             ))
 
     # ── N+1 detector + object embedding scoring ───────────────────────────────
-    db_sink_ids = {
-        nid for nid, n in nodes_by_id.items() if _is_db_sink(n)
-    }
+    db_sink_ids = {nid for nid, n in nodes_by_id.items() if _is_db_sink(n)}
     n1_findings = await detect_n_plus_one(nodes_by_id, callee_map, db_sink_ids)
     for caller_id, _callee_id, base_detail in n1_findings:
         node = nodes_by_id.get(caller_id, {})
@@ -392,8 +373,6 @@ async def check_performance(
             for c in callee_map.get(caller_id, [])
             if c in nodes_by_id
         ]
-
-        # Score with object embeddings if available
         scored_severity, scored_detail = _score_n_plus_one(
             node, callee_names, schema_objects, schema_by_name
         )
@@ -401,8 +380,6 @@ async def check_performance(
         severity = scored_severity
 
         suppressed = caller_id in acknowledged
-        # Auto-suppress low-severity findings unless explicitly dismissed —
-        # they represent intentional patterns the object layer identified.
         if severity == "low" and caller_id not in acknowledged:
             suppressed = True
             suppression_reason = "auto: object embedding scored as low-cardinality or batch pattern"
@@ -420,7 +397,6 @@ async def check_performance(
             suppression_reason=suppression_reason,
         ))
 
-    # Sort: new findings first, then by severity
     _sev = {"high": 0, "medium": 1, "low": 2}
     findings.sort(key=lambda f: (f.suppressed, _sev.get(f.severity, 9)))
     return findings

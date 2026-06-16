@@ -95,13 +95,7 @@ class DecisionMemory:
         if not hits:
             return []
         id_to_distance = {h["id"]: h["distance"] for h in hits}
-        ph = ",".join("?" * len(hits))
-        pid_clause = " AND project_id = ?" if project_id else ""
-        async with self._db._db.execute(
-            f"SELECT * FROM decisions WHERE id IN ({ph}){pid_clause}",
-            [*id_to_distance.keys(), *((project_id,) if project_id else ())],
-        ) as cur:
-            rows = {r["id"]: dict(r) for r in await cur.fetchall()}
+        rows = await self._db.get_decisions_by_ids(list(id_to_distance.keys()), project_id)
         results = []
         for hit in hits:
             rec = rows.get(hit["id"])

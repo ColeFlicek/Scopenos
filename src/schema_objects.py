@@ -134,77 +134,18 @@ def _class_description(
 # ── Extraction ────────────────────────────────────────────────────────────────
 
 async def extract_db_schema_objects(db: "CallGraphDB", project_id: str) -> list[SchemaObject]:
-    """
-    Query Postgres information_schema to build SchemaObjects for every table.
-    Also queries pg_class for live row count estimates.
-    """
-    objects: list[SchemaObject] = []
-
-    # Columns per table
-    async with db._db.execute(
-        """
-        SELECT table_name, column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-        ORDER BY table_name, ordinal_position
-        """
-    ) as cur:
-        col_rows = await cur.fetchall()
-
-    tables: dict[str, list[dict]] = {}
-    for r in col_rows:
-        tables.setdefault(r["table_name"], []).append(
-            {"name": r["column_name"], "type": r["data_type"]}
-        )
-
-    # FK relationships
-    async with db._db.execute(
-        """
-        SELECT
-            tc.table_name  AS from_table,
-            ccu.table_name AS to_table
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name
-        JOIN information_schema.referential_constraints rc
-            ON tc.constraint_name = rc.constraint_name
-        JOIN information_schema.key_column_usage ccu
-            ON rc.unique_constraint_name = ccu.constraint_name
-        WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND tc.table_schema = 'public'
-        """
-    ) as cur:
-        fk_rows = await cur.fetchall()
-
-    refs_out: dict[str, list[str]] = {}   # table → tables it references
-    refs_in: dict[str, list[str]] = {}    # table → tables that reference it
-    for r in fk_rows:
-        refs_out.setdefault(r["from_table"], []).append(r["to_table"])
-        refs_in.setdefault(r["to_table"], []).append(r["from_table"])
-
-    # Row count estimates from pg_class
-    async with db._db.execute(
-        """
-        SELECT relname AS table_name, reltuples::BIGINT AS row_estimate
-        FROM pg_class
-        WHERE relkind = 'r' AND relnamespace = (
-            SELECT oid FROM pg_namespace WHERE nspname = 'public'
-        )
-        """
-    ) as cur:
-        count_rows = await cur.fetchall()
-
-    row_counts = {r["table_name"]: r["row_estimate"] for r in count_rows}
-
-    for table_name, columns in tables.items():
-        row_count = row_counts.get(table_name)
+    """Build SchemaObjects from Postgres information_schema and pg_class via CallGraphDB."""
+    schema = await db.get_db_schema()
+    objects = []
+    for table_name, info in schema.items():
+        columns = info["columns"]
+        row_count = info["row_count"]
         cardinality = _KNOWN_CARDINALITY.get(
             table_name,
             _cardinality_from_row_count(row_count) if row_count is not None else "MEDIUM"
         )
-        references = list(dict.fromkeys(refs_out.get(table_name, [])))
-        referenced_by = list(dict.fromkeys(refs_in.get(table_name, [])))
-
+        references = list(dict.fromkeys(info["refs_out"]))
+        referenced_by = list(dict.fromkeys(info["refs_in"]))
         desc = _table_description(
             table_name, columns, references, referenced_by, cardinality, row_count
         )
@@ -217,36 +158,15 @@ async def extract_db_schema_objects(db: "CallGraphDB", project_id: str) -> list[
             references=references,
             referenced_by=referenced_by,
         ))
-
     return objects
 
 
 async def extract_python_class_objects(db: "CallGraphDB", project_id: str) -> list[SchemaObject]:
-    """
-    Pull class nodes from the call graph and build SchemaObjects for each.
-    Methods are found by looking for nodes in the same module that call the class.
-    """
-    async with db._db.execute(
-        """
-        SELECT id, name, module, docstring, signature
-        FROM nodes
-        WHERE project_id = ? AND type = 'class'
-        """,
-        (project_id,),
-    ) as cur:
-        class_rows = await cur.fetchall()
+    """Build SchemaObjects for Python classes indexed in the call graph via CallGraphDB."""
+    class_rows = await db.get_class_nodes(project_id)
+    fn_rows = await db.get_function_nodes_light(project_id)
 
-    async with db._db.execute(
-        """
-        SELECT id, name, module
-        FROM nodes
-        WHERE project_id = ? AND type = 'function'
-        """,
-        (project_id,),
-    ) as cur:
-        fn_rows = await cur.fetchall()
-
-    # Group methods by class prefix (module.ClassName.method_name)
+    # Group method names by their class id prefix (module.ClassName.method → module.ClassName)
     class_methods: dict[str, list[str]] = {}
     for fn in fn_rows:
         parts = fn["id"].split(".")
@@ -258,12 +178,7 @@ async def extract_python_class_objects(db: "CallGraphDB", project_id: str) -> li
     for cls in class_rows:
         methods = class_methods.get(cls["id"], [])
         cardinality = _KNOWN_CARDINALITY.get(cls["name"], "MEDIUM")
-        desc = _class_description(
-            cls["name"],
-            methods,
-            cls["docstring"] or "",
-            cardinality,
-        )
+        desc = _class_description(cls["name"], methods, cls["docstring"] or "", cardinality)
         objects.append(SchemaObject(
             name=cls["name"],
             source="python_class",
@@ -271,7 +186,6 @@ async def extract_python_class_objects(db: "CallGraphDB", project_id: str) -> li
             cardinality=cardinality,
             description=desc,
         ))
-
     return objects
 
 

@@ -1081,6 +1081,139 @@ class CallGraphDB:
             return None
         return {"hashes": json.loads(row[0]), "captured_at": row[1]}
 
+    # ── Analysis data accessors ────────────────────────────────────────────
+    # These methods exist so that analysis modules (performance, schema_objects)
+    # do not access db._db directly.  Callers must not use db._db outside
+    # src/call_graph/storage.py and src/embeddings/embedder.py.
+
+    async def get_nodes_with_bodies(self, project_id: str) -> dict[str, dict]:
+        """All nodes for a project keyed by id, including body text for detectors."""
+        async with self._db.execute(
+            "SELECT id, name, file, module, body FROM nodes WHERE project_id = ?",
+            (project_id,),
+        ) as cur:
+            return {r["id"]: dict(r) for r in await cur.fetchall()}
+
+    async def get_callee_map(self, project_id: str) -> dict[str, list[str]]:
+        """All call edges for a project as caller_id → [callee_id, ...] dict."""
+        async with self._db.execute(
+            "SELECT caller_id, callee_id FROM edges WHERE project_id = ?",
+            (project_id,),
+        ) as cur:
+            callee_map: dict[str, list[str]] = {}
+            for e in await cur.fetchall():
+                callee_map.setdefault(e["caller_id"], []).append(e["callee_id"])
+            return callee_map
+
+    async def get_acknowledged_performance_decisions(
+        self, project_id: str
+    ) -> dict[str, str]:
+        """Return {function_id: description} for acknowledged Performance decisions."""
+        async with self._db.execute(
+            """
+            SELECT df.function_id, d.description
+            FROM decisions d
+            JOIN decision_functions df ON df.decision_id = d.id
+            WHERE d.project_id = ? AND d.type = 'Performance'
+            """,
+            (project_id,),
+        ) as cur:
+            return {r["function_id"]: r["description"] for r in await cur.fetchall()}
+
+    async def get_db_schema(self) -> dict[str, dict]:
+        """Database schema for all public tables: columns, FK refs, and row estimates.
+
+        Returns a dict keyed by table_name, each value containing:
+          columns: [{name, type}, ...]
+          refs_out: [table, ...]   (tables this table references via FK)
+          refs_in:  [table, ...]   (tables that reference this table via FK)
+          row_count: int | None    (pg_class estimate, may be -1 before ANALYZE)
+        """
+        async with self._db.execute(
+            """
+            SELECT table_name, column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+            ORDER BY table_name, ordinal_position
+            """
+        ) as cur:
+            col_rows = await cur.fetchall()
+
+        tables: dict[str, dict] = {}
+        for r in col_rows:
+            tables.setdefault(r["table_name"], {
+                "columns": [], "refs_out": [], "refs_in": [], "row_count": None
+            })["columns"].append({"name": r["column_name"], "type": r["data_type"]})
+
+        async with self._db.execute(
+            """
+            SELECT tc.table_name  AS from_table,
+                   ccu.table_name AS to_table
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name
+            JOIN information_schema.referential_constraints rc
+                ON tc.constraint_name = rc.constraint_name
+            JOIN information_schema.key_column_usage ccu
+                ON rc.unique_constraint_name = ccu.constraint_name
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+              AND tc.table_schema = 'public'
+            """
+        ) as cur:
+            for r in await cur.fetchall():
+                if r["from_table"] in tables:
+                    tables[r["from_table"]]["refs_out"].append(r["to_table"])
+                if r["to_table"] in tables:
+                    tables[r["to_table"]]["refs_in"].append(r["from_table"])
+
+        async with self._db.execute(
+            """
+            SELECT relname AS table_name, reltuples::BIGINT AS row_estimate
+            FROM pg_class
+            WHERE relkind = 'r' AND relnamespace = (
+                SELECT oid FROM pg_namespace WHERE nspname = 'public'
+            )
+            """
+        ) as cur:
+            for r in await cur.fetchall():
+                if r["table_name"] in tables:
+                    tables[r["table_name"]]["row_count"] = r["row_estimate"]
+
+        return tables
+
+    async def get_class_nodes(self, project_id: str) -> list[dict]:
+        """All class-type nodes for a project (id, name, module, docstring, signature)."""
+        async with self._db.execute(
+            """
+            SELECT id, name, module, docstring, signature
+            FROM nodes WHERE project_id = ? AND type = 'class'
+            """,
+            (project_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def get_function_nodes_light(self, project_id: str) -> list[dict]:
+        """All function-type nodes for a project (id, name, module only)."""
+        async with self._db.execute(
+            "SELECT id, name, module FROM nodes WHERE project_id = ? AND type = 'function'",
+            (project_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def get_decisions_by_ids(
+        self, ids: list[str], project_id: str | None = None
+    ) -> dict[str, dict]:
+        """Fetch decisions by a list of IDs, optionally filtered to a project."""
+        if not ids:
+            return {}
+        ph = ",".join("?" * len(ids))
+        pid_clause = " AND project_id = ?" if project_id else ""
+        async with self._db.execute(
+            f"SELECT * FROM decisions WHERE id IN ({ph}){pid_clause}",
+            [*ids, *((project_id,) if project_id else ())],
+        ) as cur:
+            return {r["id"]: dict(r) for r in await cur.fetchall()}
+
     # ── Project Home ───────────────────────────────────────────────────────
 
     async def fetch_graph_data(self, project_id: str) -> GraphData:
