@@ -19,15 +19,24 @@ _TRUNCATE_TABLES = [
     "projects",
 ]
 
+# Tables created on-demand (not in schema.sql) — use TRUNCATE IF EXISTS.
+_OPTIONAL_TRUNCATE_TABLES = [
+    "schema_object_embeddings",
+]
+
 
 @pytest_asyncio.fixture
 async def db():
     """Postgres DB fixture — truncates all tables before each test for isolation."""
     from src.call_graph.storage import CallGraphDB
     instance = await CallGraphDB.create(TEST_DSN)
-    # Clean slate before the test
     async with instance._pool.acquire() as conn:
         for table in _TRUNCATE_TABLES:
             await conn.execute(f"TRUNCATE TABLE {table} CASCADE")
+        for table in _OPTIONAL_TRUNCATE_TABLES:
+            try:
+                await conn.execute(f"TRUNCATE TABLE {table} CASCADE")
+            except Exception:
+                pass  # table doesn't exist yet — created on first use
     yield instance
     await instance.close()
