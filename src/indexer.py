@@ -737,7 +737,8 @@ async def _try_scip_index(
                         stderr=asyncio.subprocess.DEVNULL,
                     )
                     await asyncio.wait_for(conv.communicate(), timeout=30)
-                    os.unlink(scip_bin)
+                    if conv.returncode == 0:
+                        os.unlink(scip_bin)
                 except Exception:
                     pass
 
