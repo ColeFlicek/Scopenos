@@ -10,7 +10,11 @@ wrong signature means check_dependency returns unreadable output.
 """
 import json
 import pytest
-from src.scip_import import ScipImporter, _normalise_external_signature
+from src.scip_import import (
+    ScipImporter,
+    _normalise_external_signature,
+    _scip_sym_to_node_id,
+)
 
 
 # ── SCIP JSON fixture helpers ─────────────────────────────────────────────────
@@ -436,3 +440,157 @@ class TestProjectRoot:
         ])])
         stub = next(n for n in nodes if n.is_external)
         assert stub.file == "<numpy>"
+
+
+# ── _scip_sym_to_node_id ─────────────────────────────────────────────────────
+
+class TestScipSymToNodeId:
+    """
+    _scip_sym_to_node_id converts a SCIP internal symbol to a tree-sitter
+    compatible node ID so get_callers() JOIN succeeds.
+
+    Tree-sitter format: module.ClassName.method  or  module.function_name
+    SCIP format:        scip-python python pkg ver src/foo.py:ClassName#method().
+    """
+
+    def test_module_level_function(self):
+        """scip ...src/mod.py:my_fn(). → src.mod.my_fn"""
+        sym = "scip-python python myproject 1.0 src/mod.py:my_fn()."
+        assert _scip_sym_to_node_id(sym, "src.mod") == "src.mod.my_fn"
+
+    def test_class_method_includes_class_name(self):
+        """scip ...src/indexer.py:Indexer#index_project(). → src.indexer.Indexer.index_project"""
+        sym = "scip-python python myproject 1.0 src/indexer.py:Indexer#index_project()."
+        assert _scip_sym_to_node_id(sym, "src.indexer") == "src.indexer.Indexer.index_project"
+
+    def test_backticks_stripped(self):
+        """Backtick-quoted names produce clean output without backticks."""
+        sym = "scip-python python myproject 1.0 src/mod.py:`my_fn`()."
+        assert _scip_sym_to_node_id(sym, "src.mod") == "src.mod.my_fn"
+
+    def test_class_method_backtick_names(self):
+        sym = "scip-python python myproject 1.0 src/mod.py:`MyClass`#`method`()."
+        assert _scip_sym_to_node_id(sym, "src.mod") == "src.mod.MyClass.method"
+
+    def test_file_module_always_used_as_prefix(self):
+        """The module prefix comes from the calling context, not the SCIP path."""
+        sym = "scip-python python myproject 1.0 src/server.py:index_project()."
+        result = _scip_sym_to_node_id(sym, "src.server")
+        assert result.startswith("src.server.")
+
+    def test_no_scip_package_hash_in_output(self):
+        """The version / hash portion of a SCIP symbol must not appear in the ID."""
+        sym = "scip-python python phronosis c93d2e87879ab90d3d1afce546288ba974754e14 src/server.py:index_project()."
+        result = _scip_sym_to_node_id(sym, "src.server")
+        assert "c93d2e87879ab90d3d1afce546288ba974754e14" not in result
+        assert "scip-python" not in result
+
+
+# ── Binary parser edge filtering ──────────────────────────────────────────────
+
+class TestBinaryParserEdgeFiltering:
+    """
+    The binary SCIP parser (_parse_binary) should produce tree-sitter-format
+    caller_ids on edges and must NOT emit internal→internal edges (tree-sitter
+    already captures those; duplicates break get_callers() call counts).
+
+    We build a minimal binary SCIP Index via scip_pb2 to exercise this path.
+    """
+
+    @pytest.fixture
+    def binary_index_one_external(self):
+        """One internal function calling one external library function."""
+        from src import scip_pb2
+        index = scip_pb2.Index()
+        doc = index.documents.add()
+        doc.relative_path = "src/mod.py"
+
+        internal_sym = "scip-python python myproject 1.0 src/mod.py:my_fn()."
+        external_sym = "scip-python python numpy 1.23.5 numpy/`array`()."
+
+        # Symbol info for internal function
+        si = doc.symbols.add()
+        si.symbol = internal_sym
+
+        # Occurrence: DEFINITION of my_fn at line 1
+        occ_def = doc.occurrences.add()
+        occ_def.symbol = internal_sym
+        occ_def.symbol_roles = 1   # DEFINITION
+        occ_def.range.extend([1, 0, 1, 5])
+
+        # Occurrence: READ_ACCESS (call) to numpy.array inside my_fn
+        occ_ref = doc.occurrences.add()
+        occ_ref.symbol = external_sym
+        occ_ref.symbol_roles = 8   # READ_ACCESS
+        occ_ref.range.extend([2, 0, 2, 5])
+
+        return index.SerializeToString()
+
+    @pytest.fixture
+    def binary_index_two_internal(self):
+        """Two internal functions where one calls the other."""
+        from src import scip_pb2
+        index = scip_pb2.Index()
+        doc = index.documents.add()
+        doc.relative_path = "src/mod.py"
+
+        sym_a = "scip-python python myproject 1.0 src/mod.py:fn_a()."
+        sym_b = "scip-python python myproject 1.0 src/mod.py:fn_b()."
+
+        for sym in (sym_a, sym_b):
+            si = doc.symbols.add()
+            si.symbol = sym
+
+        # fn_a definition
+        occ_a_def = doc.occurrences.add()
+        occ_a_def.symbol = sym_a
+        occ_a_def.symbol_roles = 1
+        occ_a_def.range.extend([1, 0, 1, 4])
+
+        # fn_a reads fn_b (internal call)
+        occ_a_ref = doc.occurrences.add()
+        occ_a_ref.symbol = sym_b
+        occ_a_ref.symbol_roles = 8
+        occ_a_ref.range.extend([2, 0, 2, 4])
+
+        # fn_b definition
+        occ_b_def = doc.occurrences.add()
+        occ_b_def.symbol = sym_b
+        occ_b_def.symbol_roles = 1
+        occ_b_def.range.extend([5, 0, 5, 4])
+
+        return index.SerializeToString()
+
+    def test_external_ref_creates_edge(self, tmp_path, binary_index_one_external):
+        """Binary parser: internal→external call produces a reference edge."""
+        scip_file = tmp_path / "index.scip"
+        scip_file.write_bytes(binary_index_one_external)
+        _, edges = ScipImporter().parse(str(scip_file))
+        assert len(edges) == 1
+        assert edges[0].edge_type == "reference"
+
+    def test_external_ref_caller_id_is_tree_sitter_format(self, tmp_path, binary_index_one_external):
+        """caller_id must match tree-sitter format (module.function) not SCIP hash format."""
+        scip_file = tmp_path / "index.scip"
+        scip_file.write_bytes(binary_index_one_external)
+        _, edges = ScipImporter().parse(str(scip_file))
+        caller = edges[0].caller_id
+        # Must be "src.mod.my_fn", NOT "src.mod.scip-python_python_myproject_..."
+        assert caller == "src.mod.my_fn"
+        assert "scip-python" not in caller
+
+    def test_internal_to_internal_does_not_create_edge(self, tmp_path, binary_index_two_internal):
+        """Binary parser must NOT emit internal→internal edges; tree-sitter handles those."""
+        scip_file = tmp_path / "index.scip"
+        scip_file.write_bytes(binary_index_two_internal)
+        _, edges = ScipImporter().parse(str(scip_file))
+        assert edges == []
+
+    def test_external_stub_node_is_created(self, tmp_path, binary_index_one_external):
+        """External library functions must appear as is_external=True nodes."""
+        scip_file = tmp_path / "index.scip"
+        scip_file.write_bytes(binary_index_one_external)
+        nodes, _ = ScipImporter().parse(str(scip_file))
+        external = [n for n in nodes if n.is_external]
+        assert len(external) == 1
+        assert external[0].name == "array"

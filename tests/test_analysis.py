@@ -133,6 +133,48 @@ class TestCrossSubsystemConnections:
         assert conns[0]["edge_count"] == 3
         assert conns[1]["edge_count"] == 2
 
+    def test_filters_external_callee_subsystems(self):
+        """SCIP adds external.* library nodes; they must not appear in wiring diagram."""
+        data = _graph(
+            nodes=[_node("src.server.a"), _node("src.db.b")],
+            edges=[
+                ("src.server.a", "external.asyncpg.pool.Pool.acquire"),
+                ("src.server.a", "external.asyncpg.pool.Pool.acquire"),
+                ("src.server.a", "external.asyncpg.pool.Pool.acquire"),
+            ],
+        )
+        conns = ANALYZER._cross_subsystem_connections(data)
+        assert conns == []
+
+    def test_filters_external_caller_subsystems(self):
+        """Edges whose caller is an external stub are also excluded."""
+        data = _graph(
+            nodes=[_node("src.db.fn")],
+            edges=[
+                ("external.python-stdlib.os.path.join", "src.db.fn"),
+                ("external.python-stdlib.os.path.join", "src.db.fn"),
+            ],
+        )
+        conns = ANALYZER._cross_subsystem_connections(data)
+        assert conns == []
+
+    def test_internal_connections_not_affected_by_external_filter(self):
+        """Filtering external subsystems must not suppress internal wiring."""
+        data = _graph(
+            nodes=[_node("src.server.a"), _node("src.db.b")],
+            edges=[
+                ("src.server.a", "src.db.b"),
+                ("src.server.a", "src.db.b"),
+                # external edges alongside valid internal ones
+                ("src.server.a", "external.asyncpg.pool.Pool.acquire"),
+                ("src.server.a", "external.asyncpg.pool.Pool.acquire"),
+            ],
+        )
+        conns = ANALYZER._cross_subsystem_connections(data)
+        assert len(conns) == 1
+        assert conns[0]["from"] == "src.server"
+        assert conns[0]["to"] == "src.db"
+
 
 # ── _chokepoints ──────────────────────────────────────────────────────────────
 
