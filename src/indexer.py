@@ -688,20 +688,20 @@ async def _try_scip_index(
     _git_inited = False
     if not os.path.exists(git_dir):
         try:
-            init = await asyncio.create_subprocess_exec(
-                "git", "init",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                cwd=project_path,
-            )
-            await init.wait()
-            add = await asyncio.create_subprocess_exec(
-                "git", "add", "-A",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                cwd=project_path,
-            )
-            await add.wait()
+            for git_cmd in [
+                ["git", "init"],
+                ["git", "config", "user.email", "scip@phronosis.dev"],
+                ["git", "config", "user.name", "phronosis"],
+                ["git", "add", "-A"],
+                ["git", "commit", "-m", "index", "--allow-empty"],
+            ]:
+                proc = await asyncio.create_subprocess_exec(
+                    *git_cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    cwd=project_path,
+                )
+                await proc.wait()
             _git_inited = True
         except Exception:
             pass
