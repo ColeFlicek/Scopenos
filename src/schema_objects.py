@@ -305,7 +305,7 @@ async def embed_and_store_schema_objects(
     await db._db.commit()
 
     texts = [o.description for o in objects]
-    vecs = await embeddings._embedder._embed_batch(texts)
+    vecs = await embeddings._embed_batch(texts)
 
     rows = []
     for obj, vec in zip(objects, vecs):
