@@ -140,8 +140,9 @@ class ScipImporter:
                     caller_id = f"{module}.{_norm(current_fn_sym)}"
                     is_internal = sym_id in internal_symbols
                     if is_internal:
+                        parts = sym_id.split(" ")
                         callee_module = _path_to_module(
-                            sym_id.split(" ")[3] if " " in sym_id else rel_path
+                            parts[4] if len(parts) > 4 else (parts[-1] if parts else rel_path)
                         )
                         callee_id = f"{callee_module}.{_norm(sym_id)}"
                         edge_key = (caller_id, callee_id)
