@@ -290,14 +290,14 @@ async def embed_and_store_schema_objects(
     await db._db.execute(
         """
         CREATE TABLE IF NOT EXISTS schema_object_embeddings (
-            project_id   TEXT NOT NULL,
-            name         TEXT NOT NULL,
-            source       TEXT NOT NULL,
-            cardinality  TEXT NOT NULL,
-            description  TEXT NOT NULL,
-            references   TEXT NOT NULL DEFAULT '[]',
-            referenced_by TEXT NOT NULL DEFAULT '[]',
-            embedding    vector(1536),
+            project_id    TEXT NOT NULL,
+            name          TEXT NOT NULL,
+            source        TEXT NOT NULL,
+            cardinality   TEXT NOT NULL,
+            description   TEXT NOT NULL,
+            refs          TEXT NOT NULL DEFAULT '[]',
+            refs_in       TEXT NOT NULL DEFAULT '[]',
+            embedding     vector(1536),
             PRIMARY KEY (project_id, name, source)
         )
         """
@@ -324,13 +324,13 @@ async def embed_and_store_schema_objects(
     await db._db.executemany(
         """
         INSERT INTO schema_object_embeddings
-            (project_id, name, source, cardinality, description, references, referenced_by, embedding)
+            (project_id, name, source, cardinality, description, refs, refs_in, embedding)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (project_id, name, source) DO UPDATE SET
             cardinality=excluded.cardinality,
             description=excluded.description,
-            references=excluded.references,
-            referenced_by=excluded.referenced_by,
+            refs=excluded.refs,
+            refs_in=excluded.refs_in,
             embedding=excluded.embedding
         """,
         rows,
@@ -344,7 +344,7 @@ async def load_schema_objects(db: "CallGraphDB", project_id: str) -> list[Schema
     try:
         async with db._db.execute(
             """
-            SELECT name, source, cardinality, description, references, referenced_by, embedding
+            SELECT name, source, cardinality, description, refs, refs_in, embedding
             FROM schema_object_embeddings
             WHERE project_id = ?
             """,
@@ -361,8 +361,8 @@ async def load_schema_objects(db: "CallGraphDB", project_id: str) -> list[Schema
             project_id=project_id,
             cardinality=r["cardinality"],
             description=r["description"],
-            references=json.loads(r["references"]),
-            referenced_by=json.loads(r["referenced_by"]),
+            references=json.loads(r["refs"]),
+            referenced_by=json.loads(r["refs_in"]),
             embedding=list(r["embedding"]) if r["embedding"] else None,
         )
         for r in rows
