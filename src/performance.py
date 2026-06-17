@@ -254,6 +254,16 @@ _EXPAND_SEED = (
     "[(x, y) for x in a for y in b], nested iteration returning tuples or pairs"
 )
 
+# Covers the ML-specific O(n²) vocabulary: pairwise distances, kernel matrices,
+# gram matrices — all produce n×m outputs from n and m input samples.
+_PAIRWISE_SEED = (
+    "compute pairwise distances or similarities between all samples, "
+    "kernel matrix gram matrix n times n output, "
+    "pairwise_distances euclidean_distances rbf_kernel, "
+    "result[i, j] between sample i and sample j, "
+    "O(n squared) over all pairs of rows"
+)
+
 # Describes functions that collapse a collection to a scalar — used as a
 # negative filter so len/sum/count don't appear as expansion candidates
 _REDUCE_SEED = (
@@ -266,27 +276,29 @@ _REDUCE_SEED = (
 async def _classify_expand_functions(
     embeddings,
     project_id: str,
-    top_k: int = 50,
-    expand_threshold: float = 0.72,
+    top_k: int = 100,
+    expand_threshold: float = 0.70,
     reduce_threshold: float = 0.70,
 ) -> set[str]:
     """
     Return the set of function IDs whose embeddings cluster near quadratic
-    expansion semantics. Subtracts functions that cluster near reduce/aggregate
-    semantics to avoid flagging len(), sum(), etc.
+    expansion semantics. Runs two seeds — one for explicit cross-products and
+    one for pairwise/kernel-matrix patterns — and unions the results.
+    Subtracts functions that cluster near reduce/aggregate semantics.
     """
-    expand_rows = await embeddings.query_similar(
-        _EXPAND_SEED, top_k=top_k, project_id=project_id
-    )
-    reduce_rows = await embeddings.query_similar(
-        _REDUCE_SEED, top_k=top_k, project_id=project_id
+    expand_rows, pairwise_rows, reduce_rows = await asyncio.gather(
+        embeddings.query_similar(_EXPAND_SEED, top_k=top_k, project_id=project_id),
+        embeddings.query_similar(_PAIRWISE_SEED, top_k=top_k, project_id=project_id),
+        embeddings.query_similar(_REDUCE_SEED, top_k=top_k, project_id=project_id),
     )
     reduce_ids = {r["id"] for r in reduce_rows if r["similarity"] >= reduce_threshold}
-    return {
+    candidates = {
         r["id"]
-        for r in expand_rows
-        if r["similarity"] >= expand_threshold and r["id"] not in reduce_ids
+        for rows in (expand_rows, pairwise_rows)
+        for r in rows
+        if r["similarity"] >= expand_threshold
     }
+    return candidates - reduce_ids
 
 
 # ── N+1 detector ─────────────────────────────────────────────────────────────
