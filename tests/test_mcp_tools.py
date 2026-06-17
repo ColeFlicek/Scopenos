@@ -103,7 +103,7 @@ class TestGetCallers:
         with patch("src.server._get_services", AsyncMock(return_value=svc)):
             from src.server import get_callers
             result = json.loads(await get_callers("target", project_id="proj"))
-        names = [r["name"] for r in result]
+        names = [r["name"] for r in result["callers"]]
         assert "caller" in names
 
     @pytest.mark.asyncio
@@ -111,7 +111,7 @@ class TestGetCallers:
         with patch("src.server._get_services", AsyncMock(return_value=svc)):
             from src.server import get_callers
             result = json.loads(await get_callers("does_not_exist", project_id="proj"))
-        assert result == []
+        assert result["callers"] == []
 
     @pytest.mark.asyncio
     async def test_is_external_flag_present_in_results(self, svc):
@@ -125,9 +125,10 @@ class TestGetCallers:
         with patch("src.server._get_services", AsyncMock(return_value=svc)):
             from src.server import get_callees
             result = json.loads(await get_callees("handler", project_id="proj"))
-        assert len(result) == 1
-        assert "is_external" in result[0]
-        assert result[0]["is_external"] == 1
+        callees = result["callees"]
+        assert len(callees) == 1
+        assert "is_external" in callees[0]
+        assert callees[0]["is_external"] == 1
 
 
 class TestGetCallees:
@@ -141,7 +142,7 @@ class TestGetCallees:
         with patch("src.server._get_services", AsyncMock(return_value=svc)):
             from src.server import get_callees
             result = json.loads(await get_callees("fn_a", project_id="proj"))
-        names = [r["name"] for r in result]
+        names = [r["name"] for r in result["callees"]]
         assert "fn_b" in names
 
 
@@ -505,7 +506,7 @@ class TestGetImpactRadius:
         with patch("src.server._get_services", AsyncMock(return_value=svc)):
             from src.server import get_impact_radius
             result = json.loads(await get_impact_radius("inner", project_id="proj"))
-        ids = {r["id"] for r in result}
+        ids = {r["id"] for r in result["impact_radius"]}
         assert "src.mod.outer" in ids
 
     @pytest.mark.asyncio
@@ -513,7 +514,7 @@ class TestGetImpactRadius:
         with patch("src.server._get_services", AsyncMock(return_value=svc)):
             from src.server import get_impact_radius
             result = json.loads(await get_impact_radius("nonexistent", project_id="proj"))
-        assert result == []
+        assert result["impact_radius"] == []
 
     @pytest.mark.asyncio
     async def test_result_includes_impact_depth(self, svc):
@@ -525,7 +526,7 @@ class TestGetImpactRadius:
         with patch("src.server._get_services", AsyncMock(return_value=svc)):
             from src.server import get_impact_radius
             result = json.loads(await get_impact_radius("leaf", project_id="proj"))
-        caller = next(r for r in result if r["id"] == "src.mod.caller")
+        caller = next(r for r in result["impact_radius"] if r["id"] == "src.mod.caller")
         assert "impact_depth" in caller
         assert caller["impact_depth"] == 1
 
