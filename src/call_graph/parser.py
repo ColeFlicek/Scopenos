@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re as _re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -71,6 +72,10 @@ class FunctionNode:
     is_external: bool = False  # True for nodes from external libraries (SCIP reference targets)
     start_line: int = 0       # 1-indexed source line where the function/class starts
     end_line: int = 0         # 1-indexed source line where the function/class ends (inclusive)
+    return_type: str = ""     # parsed return type annotation ("str", "list[dict]", etc.)
+    is_async: bool = False    # true for async def / async fn / async function
+    parameter_names: list = field(default_factory=list)  # ["self", "project_id", ...]
+    enclosing_class: str = "" # bare class name when this is a method; "" for top-level
 
 
 @dataclass
@@ -79,6 +84,60 @@ class CallEdge:
     callee_name: str  # unresolved bare name; resolver in storage layer
     edge_type: str    # "calls" | "imports" | "inherits"
     file: str
+
+
+def _extract_return_type(sig: str) -> str:
+    """Extract return type from a function signature string.
+
+    Handles Python/Rust/Go (-> Type) and TypeScript/C# ((): Type).
+    Returns "" for Java/C++/Ruby where the return type precedes the name.
+    """
+    if " -> " in sig:
+        rt = sig.split(" -> ", 1)[1]
+        rt = _re.split(r"[:{;]", rt)[0]
+        return rt.strip()
+    m = _re.search(r"\)\s*:\s*([^{;\n]+)", sig)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _extract_param_names(sig: str) -> list:
+    """Extract parameter names from a function signature string.
+
+    Handles Python, TypeScript, Rust, Go, Java, C++, C#, Ruby.
+    Skips self/cls for cleaner output.
+    """
+    start = sig.find("(")
+    end = sig.rfind(")")
+    if start == -1 or end == -1 or start >= end:
+        return []
+    params_str = sig[start + 1 : end].strip()
+    if not params_str:
+        return []
+    # Split on commas respecting bracket depth
+    depth, parts, current = 0, [], ""
+    for ch in params_str:
+        if ch in "([{<":
+            depth += 1; current += ch
+        elif ch in ")]}>" :
+            depth -= 1; current += ch
+        elif ch == "," and depth == 0:
+            parts.append(current.strip()); current = ""
+        else:
+            current += ch
+    if current.strip():
+        parts.append(current.strip())
+    names = []
+    for p in parts:
+        p = p.strip()
+        if not p or p in ("*", "/", "..."):
+            continue
+        p_clean = p.lstrip("*&")
+        name = _re.split(r"[:\s=]", p_clean)[0].strip().lstrip("*")
+        if name and name not in ("self", "cls") and (name.isidentifier() or name.startswith("_")):
+            names.append(name)
+    return names
 
 
 class TreeSitterParser:
@@ -240,6 +299,8 @@ def _visit_python(
             nodes.append(FunctionNode(
                 id=class_id, name=class_name, file=file_path, module=module,
                 type="class", signature=sig, body="", docstring="",
+                is_async=False, return_type="", parameter_names=[],
+                enclosing_class=parent_class or "",
                 start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
             ))
             # Recurse into class body: class_id becomes the new enclosing_class.
@@ -283,6 +344,10 @@ def _visit_python(
             leading_comment=leading_comment,
             body_hash=body_hash,
             decorators=_decorators or [],
+            is_async=signature.startswith("async "),
+            return_type=_extract_return_type(signature),
+            parameter_names=_extract_param_names(signature),
+            enclosing_class=parent_class or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
 
@@ -450,6 +515,8 @@ def _visit_typescript(
             nodes.append(FunctionNode(
                 id=class_id, name=class_name, file=file_path, module=module,
                 type="class", signature=sig, body="", docstring="",
+                is_async=False, return_type="", parameter_names=[],
+                enclosing_class=parent_class or "",
                 start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
             ))
             for child in node.children:
@@ -478,6 +545,10 @@ def _visit_typescript(
             type="method" if parent_class else "function",
             signature=signature, body=func_text[:2000], docstring=docstring,
             body_hash=body_hash,
+            is_async=signature.startswith("async "),
+            return_type=_extract_return_type(signature),
+            parameter_names=_extract_param_names(signature),
+            enclosing_class=parent_class or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
 
@@ -560,6 +631,8 @@ def _visit_rust(
                 docstring=_extract_rust_doc(node, source), body_hash=hashlib.sha256(
                     _node_text(node, source).encode("utf-8", errors="replace")
                 ).hexdigest()[:16],
+                is_async=False, return_type="", parameter_names=[],
+                enclosing_class=parent_class or "",
                 start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
             ))
         for child in node.children:
@@ -583,11 +656,16 @@ def _visit_rust(
         func_id = f"{module}.{qual}"
         func_text = _node_text(node, source)
         body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        _sig = func_text.split("\n")[0].strip()
         nodes.append(FunctionNode(
             id=func_id, name=qual, file=file_path, module=module,
             type="method" if parent_class else "function",
-            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            signature=_sig, body=func_text[:2000],
             docstring=_extract_rust_doc(node, source), body_hash=body_hash,
+            is_async=_sig.startswith("async "),
+            return_type=_extract_return_type(_sig),
+            parameter_names=_extract_param_names(_sig),
+            enclosing_class=parent_class or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
         _collect_rust_calls(node, func_id, file_path, source, edges)
@@ -676,11 +754,16 @@ def _visit_go(
         func_id = f"{module}.{qual}"
         func_text = _node_text(node, source)
         body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        _sig = func_text.split("\n")[0].strip()
         nodes.append(FunctionNode(
             id=func_id, name=qual, file=file_path, module=module,
             type="method" if receiver_type else "function",
-            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            signature=_sig, body=func_text[:2000],
             docstring=_extract_go_doc(node, source), body_hash=body_hash,
+            is_async=False,
+            return_type=_extract_return_type(_sig),
+            parameter_names=_extract_param_names(_sig),
+            enclosing_class=receiver_type or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
         _collect_go_calls(node, func_id, file_path, source, edges)
@@ -759,6 +842,8 @@ def _visit_java(
                 type="class", signature=sig, body="",
                 docstring=_extract_java_javadoc(node, source),
                 body_hash=hashlib.sha256(sig.encode()).hexdigest()[:16],
+                is_async=False, return_type="", parameter_names=[],
+                enclosing_class=parent_class or "",
                 start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
             ))
             for child in node.children:
@@ -774,11 +859,14 @@ def _visit_java(
         func_id = f"{module}.{qual}"
         func_text = _node_text(node, source)
         body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        _sig = func_text.split("\n")[0].strip()
         nodes.append(FunctionNode(
             id=func_id, name=qual, file=file_path, module=module,
             type="method" if parent_class else "function",
-            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            signature=_sig, body=func_text[:2000],
             docstring=_extract_java_javadoc(node, source), body_hash=body_hash,
+            is_async=False, return_type="", parameter_names=_extract_param_names(_sig),
+            enclosing_class=parent_class or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
         _collect_java_calls(node, func_id, file_path, source, edges)
@@ -860,6 +948,8 @@ def _visit_cpp(
                 type="class", signature=sig, body="",
                 docstring=_extract_cpp_doc(node, source),
                 body_hash=hashlib.sha256(sig.encode()).hexdigest()[:16],
+                is_async=False, return_type="", parameter_names=[],
+                enclosing_class=parent_class or "",
                 start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
             ))
             for child in node.children:
@@ -875,11 +965,14 @@ def _visit_cpp(
         func_id = f"{module}.{qual}"
         func_text = _node_text(node, source)
         body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        _sig = func_text.split("\n")[0].strip()
         nodes.append(FunctionNode(
             id=func_id, name=qual, file=file_path, module=module,
             type="method" if parent_class else "function",
-            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            signature=_sig, body=func_text[:2000],
             docstring=_extract_cpp_doc(node, source), body_hash=body_hash,
+            is_async=False, return_type="", parameter_names=_extract_param_names(_sig),
+            enclosing_class=parent_class or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
         _collect_cpp_calls(node, func_id, file_path, source, edges)
@@ -972,6 +1065,8 @@ def _visit_csharp(
                 type="class", signature=sig, body="",
                 docstring=_extract_csharp_doc(node, source),
                 body_hash=hashlib.sha256(sig.encode()).hexdigest()[:16],
+                is_async=False, return_type="", parameter_names=[],
+                enclosing_class=parent_class or "",
                 start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
             ))
             for child in node.children:
@@ -987,11 +1082,16 @@ def _visit_csharp(
         func_id = f"{module}.{qual}"
         func_text = _node_text(node, source)
         body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        _sig = func_text.split("\n")[0].strip()
         nodes.append(FunctionNode(
             id=func_id, name=qual, file=file_path, module=module,
             type="method" if parent_class else "function",
-            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            signature=_sig, body=func_text[:2000],
             docstring=_extract_csharp_doc(node, source), body_hash=body_hash,
+            is_async=_sig.startswith("async "),
+            return_type=_extract_return_type(_sig),
+            parameter_names=_extract_param_names(_sig),
+            enclosing_class=parent_class or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
         _collect_csharp_calls(node, func_id, file_path, source, edges)
@@ -1070,6 +1170,8 @@ def _visit_ruby(
                 type="class", signature=sig, body="",
                 docstring=_extract_ruby_doc(node, source),
                 body_hash=hashlib.sha256(sig.encode()).hexdigest()[:16],
+                is_async=False, return_type="", parameter_names=[],
+                enclosing_class=parent_class or "",
                 start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
             ))
             for child in node.children:
@@ -1085,11 +1187,14 @@ def _visit_ruby(
         func_id = f"{module}.{qual}"
         func_text = _node_text(node, source)
         body_hash = hashlib.sha256(func_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        _sig = func_text.split("\n")[0].strip()
         nodes.append(FunctionNode(
             id=func_id, name=qual, file=file_path, module=module,
             type="method" if parent_class else "function",
-            signature=func_text.split("\n")[0].strip(), body=func_text[:2000],
+            signature=_sig, body=func_text[:2000],
             docstring=_extract_ruby_doc(node, source), body_hash=body_hash,
+            is_async=False, return_type="", parameter_names=_extract_param_names(_sig),
+            enclosing_class=parent_class or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
         _collect_ruby_calls(node, func_id, file_path, source, edges)

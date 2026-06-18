@@ -371,19 +371,24 @@ class CallGraphDB:
         rows = [
             (project_id, n.id, n.file, n.module, n.type, n.name,
              n.signature, n.docstring, n.body, n.body_hash, json.dumps(n.decorators),
-             1 if n.is_external else 0, n.start_line, n.end_line)
+             1 if n.is_external else 0, n.start_line, n.end_line,
+             n.return_type, 1 if n.is_async else 0,
+             json.dumps(n.parameter_names), n.enclosing_class)
             for n in nodes
         ]
         await self._db.executemany(
-            """INSERT INTO nodes(project_id,id,file,module,type,name,signature,docstring,summary,body,body_hash,decorators,is_external,start_line,end_line)
-               VALUES(?,?,?,?,?,?,?,?,'',?,?,?,?,?,?)
+            """INSERT INTO nodes(project_id,id,file,module,type,name,signature,docstring,summary,body,body_hash,decorators,is_external,start_line,end_line,return_type,is_async,parameter_names,enclosing_class)
+               VALUES(?,?,?,?,?,?,?,?,'',?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(project_id,id) DO UPDATE SET
                    file=excluded.file, module=excluded.module, type=excluded.type,
                    name=excluded.name, signature=excluded.signature,
                    docstring=excluded.docstring, body=excluded.body,
                    body_hash=excluded.body_hash,
                    decorators=excluded.decorators, is_external=excluded.is_external,
-                   start_line=excluded.start_line, end_line=excluded.end_line""",
+                   start_line=excluded.start_line, end_line=excluded.end_line,
+                   return_type=excluded.return_type, is_async=excluded.is_async,
+                   parameter_names=excluded.parameter_names,
+                   enclosing_class=excluded.enclosing_class""",
             rows,
         )
         await self._db.commit()

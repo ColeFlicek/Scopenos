@@ -1680,6 +1680,14 @@ async def get_function_context(
         if s.get("id") != node_id
     ][:5]
 
+    param_names = node.get("parameter_names")
+    if isinstance(param_names, str):
+        import json as _j
+        try:
+            param_names = _j.loads(param_names)
+        except Exception:
+            param_names = []
+
     return json.dumps({
         "node": {
             "id": node_id,
@@ -1690,6 +1698,12 @@ async def get_function_context(
             "signature": node.get("signature"),
             "docstring": node.get("docstring"),
             "summary": node.get("summary"),
+            "start_line": node.get("start_line", 0),
+            "end_line": node.get("end_line", 0),
+            "return_type": node.get("return_type", ""),
+            "is_async": bool(node.get("is_async", 0)),
+            "parameter_names": param_names or [],
+            "enclosing_class": node.get("enclosing_class", ""),
         },
         "callers": _safe(callers, []),
         "callees": _safe(callees, []),
