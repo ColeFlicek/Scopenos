@@ -86,33 +86,59 @@ class CallEdge:
     file: str
 
 
-def _extract_return_type(sig: str) -> str:
-    """Extract return type from a function signature string.
+def _find_param_close(text: str) -> tuple[int, int]:
+    """Return (open_idx, close_idx) of the parameter list in a function definition.
+
+    Uses bracket-depth counting so it works on both single-line signatures and
+    multi-line function bodies. Returns (-1, -1) if no matching pair is found.
+    """
+    start = text.find("(")
+    if start == -1:
+        return -1, -1
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return start, i
+    return start, -1
+
+
+def _extract_return_type(text: str) -> str:
+    """Extract return type from a function signature or body text.
 
     Handles Python/Rust/Go (-> Type) and TypeScript/C# ((): Type).
+    Looks only after the closing ) of the parameter list to avoid false
+    matches inside the function body.
     Returns "" for Java/C++/Ruby where the return type precedes the name.
     """
-    if " -> " in sig:
-        rt = sig.split(" -> ", 1)[1]
-        rt = _re.split(r"[:{;]", rt)[0]
-        return rt.strip()
-    m = _re.search(r"\)\s*:\s*([^{;\n]+)", sig)
+    _, close = _find_param_close(text)
+    after = text[close + 1 :] if close != -1 else text
+    # Python/Rust/Go: ) -> Type:
+    m = _re.search(r"->\s*([^:{;\n]+)", after)
+    if m:
+        return m.group(1).strip()
+    # TypeScript/C#: ): Type {
+    m = _re.search(r"\)\s*:\s*([^{;\n]+)", text if close == -1 else text[close:])
     if m:
         return m.group(1).strip()
     return ""
 
 
-def _extract_param_names(sig: str) -> list:
-    """Extract parameter names from a function signature string.
+def _extract_param_names(text: str) -> list:
+    """Extract parameter names from a function definition string or body.
 
+    Works on both single-line signatures and multi-line function definitions
+    by using bracket-depth counting to locate the parameter list.
     Handles Python, TypeScript, Rust, Go, Java, C++, C#, Ruby.
     Skips self/cls for cleaner output.
     """
-    start = sig.find("(")
-    end = sig.rfind(")")
+    start, end = _find_param_close(text)
     if start == -1 or end == -1 or start >= end:
         return []
-    params_str = sig[start + 1 : end].strip()
+    params_str = text[start + 1 : end].strip()
     if not params_str:
         return []
     # Split on commas respecting bracket depth
@@ -345,8 +371,8 @@ def _visit_python(
             body_hash=body_hash,
             decorators=_decorators or [],
             is_async=signature.startswith("async "),
-            return_type=_extract_return_type(signature),
-            parameter_names=_extract_param_names(signature),
+            return_type=_extract_return_type(func_text),
+            parameter_names=_extract_param_names(func_text),
             enclosing_class=parent_class or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
@@ -546,8 +572,8 @@ def _visit_typescript(
             signature=signature, body=func_text[:2000], docstring=docstring,
             body_hash=body_hash,
             is_async=signature.startswith("async "),
-            return_type=_extract_return_type(signature),
-            parameter_names=_extract_param_names(signature),
+            return_type=_extract_return_type(func_text),
+            parameter_names=_extract_param_names(func_text),
             enclosing_class=parent_class or "",
             start_line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
