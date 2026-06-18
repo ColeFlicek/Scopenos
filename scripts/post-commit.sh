@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-PHRONOSIS_URL="${PHRONOSIS_URL:-http://localhost:3004}"
+PHRONOSIS_URL="${PHRONOSIS_URL:-http://100.71.88.106:3004}"
 
 CHANGED=$(git diff-tree --no-commit-id -r --name-only HEAD 2>/dev/null || true)
 
@@ -96,7 +96,7 @@ import json, os, subprocess, sys
 try:
     from urllib.request import urlopen, Request as UReq
 
-    phronosis_url    = os.environ.get("PHRONOSIS_URL", "http://localhost:3004")
+    phronosis_url    = os.environ.get("PHRONOSIS_URL", "http://100.71.88.106:3004")
     project_id  = os.environ.get("PHRONOSIS_PROJECT_ID", "default")
     repo_root   = os.environ.get("REPO_ROOT", "")
 

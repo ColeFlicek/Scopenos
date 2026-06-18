@@ -15,12 +15,23 @@ contract compliance, churn hotspots, and recent decisions. This replaces reading
 files to understand architecture. After this call you know what exists and where
 the dangers are.
 
-**Tier 2 — targeted queries for the specific feature:**
+**Tier 2 — two phases: discover the function, then gate the edit:**
+
+*Phase A — Discovery (task description → function name):*
 ```
-query_similar_functions("<feature domain>", top_k=8)
+query_similar_functions("<what you want to change>", top_k=8)
+```
+This is how you find *which* function to edit. Top results give you the name.
+Skip Phase A only if the task already names the exact function.
+
+*Phase B — Pre-edit gate (function name → safe to edit):*
+```
 get_impact_radius("<function you plan to touch>", depth=2)
 get_decision_history("<function you plan to touch>")
+query_similar_functions("<what you are about to write>")   # structural consistency
 ```
+Steps 1–2 require the function name from Phase A. Step 3 is a different question:
+what should the *new code you're adding* look like — not which function to edit.
 
 **Tier 3 — file reads, only for exact implementation:**
 ```
@@ -32,13 +43,15 @@ you are about to modify. They are not how you understand architecture.
 
 ## Step 1 — Pre-edit gate (before every Edit on an existing function)
 
+*Precondition: you already know which function to edit. If not, run Phase A above first.*
+
 1. `get_impact_radius(function_name, depth=2)` — what breaks if this changes?
 2. `get_decision_history(function_name)` — why was this designed this way?
-3. `query_similar_functions(what_you_are_about_to_write)` — what is the existing pattern?
+3. `query_similar_functions(what_you_are_about_to_write)` — what should new code look like?
 
-Check 3 is the **structural consistency check**: find what similar code looks like in this
-codebase before writing new code. Inconsistent patterns create maintenance debt and confuse
-future agents.
+Step 3 is the **structural consistency check** — it asks about the *new code you're adding*,
+not about finding the target function. Inconsistent patterns create maintenance debt and
+confuse future agents.
 
 In multi-agent contexts: `get_decision_history` also reveals whether a concurrent agent
 recently modified this function. Run it even on functions you wrote last session.
@@ -49,17 +62,25 @@ recently modified this function. Run it even on functions you wrote last session
 
 Pass the actual file contents as a dict: `{"path/to/file.py": "<full content>"}`.
 
-## Step 3 — At session end
+## Step 3 — After every git push
 
-5. Call `log_decision()` with a summary of any significant decisions made this session.
+5. A PostToolUse hook fires automatically after `git push`. Review each pushed commit
+   and call `log_decision()` for it.
 
-Fields:
-- `type`: `Architectural` | `Design` | `Implementation` | `Patch`
-- `description`: what was decided and why
-- `rejected_alternatives`: what was considered and not chosen
-- `trigger`: ticket ID, CVE, UX finding, or reason for the change
-- `linked_function_ids`: full function IDs this decision governs (e.g., `src.auth.authenticate_user`)
-- `parent_decision_id`: link to a broader architectural decision if applicable
+For each commit:
+- `git show <hash> --stat` — scope
+- `git show <hash>` — diff, understand the why
+- Call `log_decision()`:
+  - `type`: `Architectural` | `Design` | `Implementation` | `Patch`
+  - `description`: what changed AND why — not just the commit message
+  - `rejected_alternatives`: what was considered and not done
+  - `trigger`: `git:<short-hash>`
+  - `linked_function_ids`: full function IDs for modified functions
+  - `project_id`: must match the indexed project
+  - `parent_decision_id`: link to a broader decision if applicable
+
+Also call `log_decision()` immediately for any significant in-session architectural
+trade-off or rejected approach that won't be captured by a commit.
 
 ## Initial setup (run once per project)
 

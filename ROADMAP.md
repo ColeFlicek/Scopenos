@@ -4,6 +4,21 @@
 
 ---
 
+## Pre-launch gate — Internal Documentation & Feature Audit
+
+Before the public website (Phase 17): audit every feature end-to-end and build an internal reference site.
+
+**Produces:**
+- A verdict on every MCP tool, HTTP endpoint, web UI panel, and hook: ✅ ship | 🔧 fix | 🚫 remove
+- An internal docs site (not public): full tool reference with live examples, architecture overview, ops runbook, known limitations, teaching series compiled, internal decision index
+- A hard gate: nothing ships publicly that exists in the code but doesn't work
+
+Content that passes review moves to `docs.phronosis.dev`. Limitations, internal architecture rationale, and ops details stay internal.
+
+See Notion Phase 16 for full task breakdown.
+
+---
+
 ## Active — implement next
 
 *No active items. Select from back burner or ideas below.*
