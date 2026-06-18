@@ -27,19 +27,68 @@ else
   fi
 fi
 
-# ── Re-index changed files ──────────────────────────────────────────────────────
+# ── Re-index ────────────────────────────────────────────────────────────────────
+# If the parser itself changed, all previously indexed files have stale metadata
+# (e.g. new columns like start_line/return_type were added). In that case, re-index
+# every source file instead of just the diff.
+#
+# Add paths to FULL_REINDEX_TRIGGERS to extend the list of files that trigger this.
 
-FILES_JSON=$(echo "$CHANGED" | while IFS= read -r f; do
-  [ -n "$f" ] && echo "\"${REPO_ROOT}/${f}\""
-done | paste -sd ',' - | sed 's/^/[/' | sed 's/$/]/')
+FULL_REINDEX_TRIGGERS="src/call_graph/parser.py"
+NEEDS_FULL_REINDEX=false
 
-curl --silent --show-error --max-time 30 \
-  -X POST "${PHRONOSIS_URL}/index" \
-  -H "Content-Type: application/json" \
-  -d "{\"changed_files\": ${FILES_JSON}, \"project_root\": \"${REPO_ROOT}\", \"project_id\": \"${PROJECT_ID}\"}" \
-  > /dev/null
+for _trigger in $FULL_REINDEX_TRIGGERS; do
+  if echo "$CHANGED" | grep -qF "$_trigger"; then
+    NEEDS_FULL_REINDEX=true
+    echo "[phronosis] $( echo "$_trigger" | xargs basename ) changed — triggering full re-index"
+    break
+  fi
+done
 
-echo "[phronosis] index_changes triggered for $(echo "$CHANGED" | wc -l | tr -d ' ') files (project: ${PROJECT_ID})"
+if [ "$NEEDS_FULL_REINDEX" = "true" ]; then
+  PHRONOSIS_URL="$PHRONOSIS_URL" PHRONOSIS_PROJECT_ID="$PROJECT_ID" REPO_ROOT="$REPO_ROOT" python3 - <<'PYEOF'
+import glob, json, os, sys
+from urllib.request import urlopen, Request as UReq
+
+url       = os.environ.get("PHRONOSIS_URL", "http://100.71.88.106:3004")
+project   = os.environ.get("PHRONOSIS_PROJECT_ID", "default")
+root      = os.environ.get("REPO_ROOT", "")
+src_files = glob.glob(f"{root}/src/**/*.py", recursive=True)
+
+BATCH, total_fns = 10, 0
+for i in range(0, len(src_files), BATCH):
+    files = {}
+    for fp in src_files[i:i + BATCH]:
+        try:
+            files[fp] = open(fp, encoding="utf-8", errors="replace").read()
+        except Exception:
+            pass
+    if not files:
+        continue
+    payload = json.dumps({"project_root": root, "project_id": project, "files": files}).encode()
+    req = UReq(f"{url}/api/index-bulk", data=payload,
+               headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urlopen(req, timeout=60) as r:
+            total_fns += json.loads(r.read()).get("functions_updated", 0)
+    except Exception as e:
+        print(f"[phronosis] batch failed: {e}", file=sys.stderr)
+
+print(f"[phronosis] full re-index: {len(src_files)} files, {total_fns} functions updated")
+PYEOF
+else
+  FILES_JSON=$(echo "$CHANGED" | while IFS= read -r f; do
+    [ -n "$f" ] && echo "\"${REPO_ROOT}/${f}\""
+  done | paste -sd ',' - | sed 's/^/[/' | sed 's/$/]/')
+
+  curl --silent --show-error --max-time 30 \
+    -X POST "${PHRONOSIS_URL}/index" \
+    -H "Content-Type: application/json" \
+    -d "{\"changed_files\": ${FILES_JSON}, \"project_root\": \"${REPO_ROOT}\", \"project_id\": \"${PROJECT_ID}\"}" \
+    > /dev/null
+
+  echo "[phronosis] index_changes triggered for $(echo "$CHANGED" | wc -l | tr -d ' ') files (project: ${PROJECT_ID})"
+fi
 
 # ── Contract check ──────────────────────────────────────────────────────────────
 # Resolve function IDs for changed files then check against active contracts.
