@@ -3,10 +3,10 @@ import asyncio
 import json
 import os
 import re
-import subprocess
 import uuid
 from pathlib import Path
 
+from .branch_tracking import BranchContext, detect_branch
 from .call_graph.parser import TreeSitterParser
 from .call_graph.storage import CallGraphDB
 from .dependency_fingerprint import DependencyFingerprint, DependencyFingerprinter
@@ -106,20 +106,6 @@ def estimate_project(path: str) -> dict:
     }
 
 
-def _detect_git_context(path: str) -> tuple[str, str]:
-    """Return (branch, head_commit) for the git repo at path. Returns ('', '') if not a git repo."""
-    try:
-        branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, cwd=path, timeout=5,
-        ).stdout.strip()
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, cwd=path, timeout=5,
-        ).stdout.strip()
-        return (branch or "", head or "")
-    except Exception:
-        return ("", "")
 
 
 class Indexer:
@@ -225,31 +211,20 @@ class Indexer:
         await self._db.upsert_edges(all_edges, all_ids, project_id)
         print(f"[indexer] call graph written ok")
 
-        # Only embed functions that changed — unchanged ones keep their existing vectors.
-        chunks = [
-            c for fp, content in contents.items()
-            for c in extract_chunks(fp, content, project_root=path)
-            if c.id in delta.to_embed
-        ]
         print(f"[indexer] +{len(delta.functions_added)} new, "
               f"~{len(delta.functions_changed)} changed, "
               f"-{len(delta.functions_removed)} removed, "
               f"{len(delta.unchanged)} unchanged (skipping embed)")
-        embed_stats = {"docs": 0, "fallback": 0}
-        if chunks:
-            print(f"[indexer] starting embedding for {len(chunks)} chunks")
-            embed_stats = await self._pipeline.upsert_chunks(
-                chunks,
-                project_id=project_id,
-                existing_summaries=existing_summaries if existing_summaries else None,
-            )
-
-        # Register / update project record with current git context.
-        detected_branch, head_commit = _detect_git_context(path)
-        effective_branch = branch or detected_branch
-        await self._db.upsert_project(
-            project_id, project_id, path,
-            branch=effective_branch, head_commit=head_commit,
+        embed_stats, fp_result = await self._finalize_index(
+            project_id=project_id,
+            project_root=path,
+            branch_override=branch,
+            ids_to_embed=delta.to_embed,
+            changed_fn_ids=list(delta.functions_added | delta.functions_changed),
+            existing_summaries=existing_summaries,
+            contents=contents,
+            always_save_fingerprint=True,
+            capture_fingerprint=True,
         )
 
         internal_count = sum(1 for n in all_nodes if not n.is_external)
@@ -265,7 +240,7 @@ class Indexer:
             "functions_changed": len(delta.functions_changed),
             "functions_removed": len(delta.functions_removed),
             "functions_unchanged": len(delta.unchanged),
-            "functions_reembedded": len(chunks),
+            "functions_reembedded": len(delta.to_embed),
             "edges_indexed": len(all_edges),
             "embedded_with_docs": embed_stats["docs"],
             "embedded_large_fallback": embed_stats["fallback"],
@@ -281,34 +256,89 @@ class Indexer:
         if coverage.status != "ok":
             result["status"] = coverage.status
             print(f"[indexer] coverage check: {coverage.status} — {coverage.recommendation}")
+        result["dependency_fingerprint"] = fp_result  # type: ignore[assignment]
 
-        # Capture dependency fingerprint — snapshot external symbols, diff against previous.
+        print(f"[indexer] index_project complete: {result}")
+        return result
+
+    async def _finalize_index(
+        self,
+        *,
+        project_id: str,
+        project_root: str,
+        branch_override: str = "",
+        ids_to_embed: set[str],
+        changed_fn_ids: list[str],
+        existing_summaries: dict[str, str],
+        contents: dict[str, str],
+        always_save_fingerprint: bool = True,
+        capture_fingerprint: bool = True,
+    ) -> tuple[dict, dict | None]:
+        """Shared post-reconciliation phases for index_project and index_changes.
+
+        1. Embed chunks for changed function IDs.
+        2. Update project record + record branch changes.
+        3. Optionally capture dependency fingerprint.
+
+        Returns (embed_stats, fingerprint_result).
+        fingerprint_result is None when capture_fingerprint=False.
+        """
+        # Phase 1: Embed
+        chunks = [
+            c for fp, content in contents.items()
+            for c in extract_chunks(fp, content, project_root=project_root)
+            if c.id in ids_to_embed
+        ]
+        embed_stats = {"docs": 0, "fallback": 0}
+        if chunks:
+            print(f"[indexer] starting embedding for {len(chunks)} chunks")
+            embed_stats = await self._pipeline.upsert_chunks(
+                chunks,
+                project_id=project_id,
+                existing_summaries=existing_summaries or None,
+            )
+
+        # Phase 2: Update project record + branch
+        ctx = detect_branch(project_root)
+        effective_branch = branch_override or ctx.branch
+        head_commit = ctx.head_commit
+        await self._db.upsert_project(
+            project_id, project_id, project_root,
+            branch=effective_branch, head_commit=head_commit,
+        )
+        await self._db.record_branch_changes(
+            project_id, effective_branch, changed_fn_ids, head_commit
+        )
+
+        # Phase 3: Fingerprint
+        if not capture_fingerprint:
+            return embed_stats, None
+
         deps = await self._db.list_external_dependencies(project_id)
         prev_row = await self._db.get_latest_dependency_fingerprint(project_id)
         prev_fp = (
             DependencyFingerprint.from_dict(json.loads(prev_row["snapshot_json"]))
             if prev_row else None
         )
-        fp = _fingerprinter.compute(project_id, deps, project_path=path)
-        diff = _fingerprinter.diff(prev_fp, fp) if prev_fp else None
-        await self._db.save_dependency_fingerprint(
-            project_id, uuid.uuid4().hex, fp.captured_at, fp.fingerprint_hash,
-            json.dumps(fp.to_dict()),
-            json.dumps(diff.to_dict()) if diff else None,
-        )
-        result["dependency_fingerprint"] = {
+        fp = _fingerprinter.compute(project_id, deps, project_path=project_root)
+        fp_result: dict = {
             "hash": fp.fingerprint_hash,
             "libraries": fp.total_libraries,
             "symbols": fp.total_external_symbols,
         }
+        diff = _fingerprinter.diff(prev_fp, fp) if prev_fp else None
+        if always_save_fingerprint or prev_fp is None or fp.fingerprint_hash != prev_fp.fingerprint_hash:
+            await self._db.save_dependency_fingerprint(
+                project_id, uuid.uuid4().hex, fp.captured_at, fp.fingerprint_hash,
+                json.dumps(fp.to_dict()),
+                json.dumps(diff.to_dict()) if diff else None,
+            )
         if diff and (diff.removed_symbols or diff.changed_symbols):
-            result["dependency_fingerprint"]["warning"] = (
+            fp_result["warning"] = (
                 f"{len(diff.removed_symbols)} symbols removed, "
                 f"{len(diff.changed_symbols)} signatures changed since last index"
             )
-
-        print(f"[indexer] index_project complete: {result}")
-        return result
+        return embed_stats, fp_result
 
     async def _verify_coverage(self, project_id: str) -> IndexCoverage:
         """
@@ -362,6 +392,7 @@ class Indexer:
         updated_nodes = []
         updated_edges = []
         changed_ids: set[str] = set()
+        processed_contents: dict[str, str] = {}
 
         print(f"[indexer] index_changes: project={project_id!r} {len(file_paths)} files")
         for fp in file_paths:
@@ -381,6 +412,7 @@ class Indexer:
                 print(f"[indexer]   {fp}: skipped (unsupported extension {ext!r})")
                 continue
 
+            processed_contents[fp] = content
             nodes, edges = _parser.parse_file(fp, content, project_root=project_root)
             new_hashes = {n.id: n.body_hash for n in nodes}
 
@@ -416,50 +448,28 @@ class Indexer:
         if updated_nodes or updated_edges:
             print(f"[indexer] call graph written ok")
 
-        # Collect and embed only the changed chunks.
-        updated_chunks = [
-            c for fp in file_paths
-            if file_contents.get(fp) and Path(fp).suffix.lower() in _SUPPORTED_EXTENSIONS
-            for c in extract_chunks(fp, file_contents[fp], project_root=project_root)
-            if c.id in changed_ids
-        ]
-        if updated_chunks:
-            print(f"[indexer] starting embedding for {len(updated_chunks)} chunks")
-            await self._pipeline.upsert_chunks(
-                updated_chunks,
+        embed_stats = {"docs": 0, "fallback": 0}
+        if updated_nodes or changed_ids:
+            embed_stats, _ = await self._finalize_index(
                 project_id=project_id,
-                existing_summaries=existing_summaries if existing_summaries else None,
+                project_root=project_root,
+                branch_override="",
+                ids_to_embed=changed_ids,
+                changed_fn_ids=list(changed_ids),
+                existing_summaries=existing_summaries,
+                contents=processed_contents,
+                always_save_fingerprint=False,
+                capture_fingerprint=bool(updated_nodes),
             )
-
-        # Update project last_indexed timestamp.
-        if updated_nodes or updated_chunks:
-            await self._db.upsert_project(project_id, project_id, project_root)
 
         result = {
             "status": "ok",
             "project_id": project_id,
             "files_updated": len([fp for fp in file_paths if file_contents.get(fp) is not None]),
             "functions_updated": len(updated_nodes),
-            "functions_reembedded": len(updated_chunks),
+            "functions_reembedded": len(changed_ids),
             "function_ids": [n.id for n in updated_nodes],
         }
-
-        # Capture fingerprint if external nodes changed (new import added or removed).
-        if updated_nodes:
-            deps = await self._db.list_external_dependencies(project_id)
-            prev_row = await self._db.get_latest_dependency_fingerprint(project_id)
-            prev_fp = (
-                DependencyFingerprint.from_dict(json.loads(prev_row["snapshot_json"]))
-                if prev_row else None
-            )
-            fp = _fingerprinter.compute(project_id, deps, project_path=project_root)
-            if prev_fp is None or fp.fingerprint_hash != prev_fp.fingerprint_hash:
-                diff = _fingerprinter.diff(prev_fp, fp) if prev_fp else None
-                await self._db.save_dependency_fingerprint(
-                    project_id, uuid.uuid4().hex, fp.captured_at, fp.fingerprint_hash,
-                    json.dumps(fp.to_dict()),
-                    json.dumps(diff.to_dict()) if diff else None,
-                )
 
         print(f"[indexer] index_changes complete: {result}")
         return result

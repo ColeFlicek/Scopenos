@@ -183,6 +183,37 @@ async def compare_branches(project_id_a: str, project_id_b: str) -> str:
 
 
 @mcp.tool()
+async def get_branch_conflicts(
+    project_id: str,
+    function_ids: list[str],
+    current_branch: str = "",
+) -> str:
+    """
+    Conflict detection for shared project indexes.
+
+    Given a list of functions you are currently working on, returns any other
+    branches (or main) that have recently modified the same functions. Use this
+    before starting a significant edit to see if a teammate or concurrent agent
+    has already touched the same code.
+
+    project_id: the shared project index (same one all branches index into)
+    function_ids: full function IDs you plan to edit (e.g. ["src.auth.login"])
+    current_branch: your current branch — excluded from results so you only see
+                    competing changes. If omitted, all branches are returned.
+
+    Returns:
+      conflicts: list of {function_id, competing_branches: [{branch, head_commit,
+                 modified_at}], main_drift: bool}
+      main_drift: functions where main/master was recently modified — indicates
+                  your branch may be behind and could conflict on merge
+      summary: {total, branches, functions_with_main_drift}
+    """
+    svcs = await _get_services()
+    result = await svcs.db.get_branch_conflicts(project_id, function_ids, current_branch)
+    return json.dumps(result)
+
+
+@mcp.tool()
 async def get_function_at_commit(
     function_id: str, commit_hash: str, project_id: str = ""
 ) -> str:

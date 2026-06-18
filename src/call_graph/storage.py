@@ -13,6 +13,7 @@ import asyncpg
 
 from .models import GraphData
 from .parser import CallEdge, FunctionNode
+from ..branch_tracking import classify_conflicts, empty_conflict_result
 
 
 def _pg(sql: str) -> str:
@@ -231,6 +232,61 @@ class CallGraphDB:
                 "changed": len(changed),
             },
         }
+
+    # ── Branch conflict detection ──────────────────────────────────────────────
+
+    async def record_branch_changes(
+        self,
+        project_id: str,
+        branch: str,
+        function_ids: list[str],
+        head_commit: str = "",
+    ) -> None:
+        """Log which functions were modified on a branch. Upserts per (project, branch, fn)."""
+        if not branch or not function_ids:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.executemany(
+            """INSERT INTO branch_function_changes(project_id, branch, function_id, head_commit, modified_at)
+               VALUES(?, ?, ?, ?, ?)
+               ON CONFLICT(project_id, branch, function_id) DO UPDATE SET
+                   head_commit=excluded.head_commit, modified_at=excluded.modified_at""",
+            [(project_id, branch, fn_id, head_commit, now) for fn_id in function_ids],
+        )
+        await self._db.commit()
+
+    async def get_branch_conflicts(
+        self,
+        project_id: str,
+        function_ids: list[str],
+        current_branch: str = "",
+    ) -> dict:
+        """Find other branches that touched the same functions the caller is working on.
+
+        Returns conflicts grouped by function, showing which competing branches modified
+        each function and when. Classification (main_drift, branch grouping) is handled
+        by branch_tracking.classify_conflicts so the domain logic is testable without a DB.
+        """
+        if not function_ids:
+            return empty_conflict_result()
+
+        placeholders = ", ".join("?" * len(function_ids))
+        params: list = [project_id, *function_ids]
+        if current_branch:
+            params.append(current_branch)
+
+        async with self._db.execute(
+            f"""SELECT branch, function_id, head_commit, modified_at
+                FROM branch_function_changes
+                WHERE project_id = ?
+                  AND function_id IN ({placeholders})
+                  {"AND branch != ?" if current_branch else ""}
+                ORDER BY modified_at DESC""",
+            tuple(params),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+        return classify_conflicts(rows)
 
     async def rename_project(self, project_id: str, new_name: str) -> bool:
         """Update the display name of a project. Returns False if project not found."""

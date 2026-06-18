@@ -16,6 +16,7 @@ _TRUNCATE_TABLES = [
     "dependency_fingerprints", "project_home_snapshots",
     "function_embeddings", "decision_embeddings",
     "api_keys", "project_access", "demo_projects", "users",
+    "branch_function_changes",
     "projects",
 ]
 

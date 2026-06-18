@@ -208,3 +208,18 @@ CREATE TABLE IF NOT EXISTS demo_projects (
     auto_update  INTEGER NOT NULL DEFAULT 1,
     added_at     TEXT NOT NULL
 );
+
+-- Per-branch function change log. Populated on every index_project/index_changes.
+-- Enables conflict detection: "who else touched this function on another branch?"
+-- Primary key deduplicates per (project, branch, function) — records the latest touch.
+CREATE TABLE IF NOT EXISTS branch_function_changes (
+    project_id   TEXT NOT NULL,
+    branch       TEXT NOT NULL,
+    function_id  TEXT NOT NULL,
+    head_commit  TEXT NOT NULL DEFAULT '',
+    modified_at  TEXT NOT NULL,
+    PRIMARY KEY (project_id, branch, function_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bfc_project_function ON branch_function_changes(project_id, function_id);
+CREATE INDEX IF NOT EXISTS idx_bfc_project_branch   ON branch_function_changes(project_id, branch);
