@@ -236,3 +236,16 @@ CREATE TABLE IF NOT EXISTS branch_function_changes (
 
 CREATE INDEX IF NOT EXISTS idx_bfc_project_function ON branch_function_changes(project_id, function_id);
 CREATE INDEX IF NOT EXISTS idx_bfc_project_branch   ON branch_function_changes(project_id, branch);
+
+-- Cached module-level patterns. Populated lazily by compute_guidance as results
+-- accumulate; used by validate_proposed_code (Week 3) to validate new code
+-- against established conventions without re-scanning the full module.
+CREATE TABLE IF NOT EXISTS module_patterns (
+    project_id         TEXT NOT NULL,
+    module             TEXT NOT NULL,
+    naming_regex       TEXT NOT NULL DEFAULT '',
+    async_ratio        REAL NOT NULL DEFAULT -1,
+    primary_chokepoints TEXT NOT NULL DEFAULT '[]',
+    computed_at        TEXT NOT NULL,
+    PRIMARY KEY (project_id, module)
+);

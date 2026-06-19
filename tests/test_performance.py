@@ -286,3 +286,150 @@ class TestFindingToDict:
         d = f.to_dict()
         for key in ("function", "file", "pattern", "severity", "detail", "status"):
             assert key in d
+
+
+# ── External calls in loops ───────────────────────────────────────────────────
+
+from src.performance import detect_external_calls_in_loops, detect_sequential_awaits, _detect_sequential_awaits
+
+
+def _ext_node(node_id: str, name: str = "") -> dict:
+    """Helper for external library nodes."""
+    return {"id": node_id, "name": name or node_id.split(".")[-1], "file": "", "body": "", "is_external": True}
+
+
+class TestDetectExternalCallsInLoops:
+    def test_loop_calling_openai_is_high_severity(self):
+        nodes = {
+            "app.fn": {**_node("app.fn", "for item in items:\n    r = client.call(item)"), "is_external": False},
+            "openai.complete": _ext_node("openai.complete", "openai.complete"),
+        }
+        findings = detect_external_calls_in_loops(nodes, {"app.fn": ["openai.complete"]})
+        assert len(findings) == 1
+        severity, fn_id, ext_name, detail = findings[0]
+        assert severity == "high"
+        assert fn_id == "app.fn"
+        assert "openai" in ext_name.lower() or "openai" in detail.lower()
+
+    def test_loop_calling_httpx_is_high_severity(self):
+        nodes = {
+            "app.fn": {**_node("app.fn", "for u in urls:\n    r = client.get(u)"), "is_external": False},
+            "httpx.get": _ext_node("httpx.get", "httpx.get"),
+        }
+        findings = detect_external_calls_in_loops(nodes, {"app.fn": ["httpx.get"]})
+        assert len(findings) == 1
+        assert findings[0][0] == "high"
+
+    def test_loop_calling_unknown_external_is_medium(self):
+        nodes = {
+            "app.fn": {**_node("app.fn", "for x in xs:\n    r = lib.process(x)"), "is_external": False},
+            "mylib.process": _ext_node("mylib.process", "process"),
+        }
+        findings = detect_external_calls_in_loops(nodes, {"app.fn": ["mylib.process"]})
+        assert len(findings) == 1
+        assert findings[0][0] == "medium"
+
+    def test_external_call_without_loop_not_flagged(self):
+        nodes = {
+            "app.fn": {**_node("app.fn", "result = client.call(item)"), "is_external": False},
+            "openai.complete": _ext_node("openai.complete", "openai.complete"),
+        }
+        findings = detect_external_calls_in_loops(nodes, {"app.fn": ["openai.complete"]})
+        assert findings == []
+
+    def test_internal_callee_in_loop_not_flagged(self):
+        nodes = {
+            "app.fn": {**_node("app.fn", "for x in xs:\n    r = helper(x)"), "is_external": False},
+            "app.helper": {**_node("app.helper"), "is_external": False},
+        }
+        findings = detect_external_calls_in_loops(nodes, {"app.fn": ["app.helper"]})
+        assert findings == []
+
+    def test_external_node_as_caller_not_flagged(self):
+        nodes = {
+            "ext.fn": _ext_node("ext.fn", "ext.fn"),
+            "openai.chat": _ext_node("openai.chat", "openai.chat"),
+        }
+        findings = detect_external_calls_in_loops(nodes, {"ext.fn": ["openai.chat"]})
+        assert findings == []
+
+
+# ── Sequential awaits ─────────────────────────────────────────────────────────
+
+class TestDetectSequentialAwaits:
+    def test_two_independent_awaits_flagged(self):
+        body = (
+            "async def fn(self):\n"
+            "    callers = await self.get_callers(fn_id)\n"
+            "    callees = await self.get_callees(fn_id)\n"
+            "    return callers, callees\n"
+        )
+        detail = _detect_sequential_awaits(body)
+        assert detail is not None
+        assert "asyncio.gather" in detail
+
+    def test_dependent_awaits_not_flagged(self):
+        body = (
+            "async def fn(self):\n"
+            "    node = await self.find_node(fn_id)\n"
+            "    callers = await self.get_callers(node)\n"
+        )
+        # second await uses `node` from the first
+        detail = _detect_sequential_awaits(body)
+        assert detail is None
+
+    def test_already_using_gather_not_flagged(self):
+        body = (
+            "async def fn(self):\n"
+            "    a, b = await asyncio.gather(\n"
+            "        self.get_callers(fn),\n"
+            "        self.get_callees(fn),\n"
+            "    )\n"
+        )
+        assert _detect_sequential_awaits(body) is None
+
+    def test_already_using_create_task_not_flagged(self):
+        body = (
+            "async def fn():\n"
+            "    t1 = asyncio.create_task(step_a())\n"
+            "    t2 = asyncio.create_task(step_b())\n"
+            "    a, b = await asyncio.gather(t1, t2)\n"
+        )
+        assert _detect_sequential_awaits(body) is None
+
+    def test_single_await_not_flagged(self):
+        assert _detect_sequential_awaits(
+            "async def fn():\n    result = await self.query(x)\n"
+        ) is None
+
+    def test_empty_body_not_flagged(self):
+        assert _detect_sequential_awaits("") is None
+
+    def test_detect_sequential_awaits_skips_non_async_nodes(self):
+        nodes = {
+            "app.fn": {
+                **_node("app.fn", "a = await get_a()\nb = await get_b()\n"),
+                "is_async": False,
+            }
+        }
+        findings = run(detect_sequential_awaits(nodes))
+        assert findings == []
+
+    def test_detect_sequential_awaits_finds_async_node(self):
+        nodes = {
+            "app.fn": {
+                **_node("app.fn", "a = await get_a()\nb = await get_b()\n"),
+                "is_async": True,
+            }
+        }
+        findings = run(detect_sequential_awaits(nodes))
+        assert len(findings) == 1
+        fn_id, detail = findings[0]
+        assert fn_id == "app.fn"
+        assert "asyncio.gather" in detail
+
+    def test_detail_mentions_variable_names(self):
+        body = "callers = await get_callers(x)\ncallees = await get_callees(x)\n"
+        detail = _detect_sequential_awaits(body)
+        assert detail is not None
+        assert "callers" in detail

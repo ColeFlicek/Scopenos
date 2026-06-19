@@ -573,7 +573,10 @@ class TestLogDecision:
             result = json.loads(await get_decision_history(
                 function_name="my_func", project_id="proj"
             ))
-        assert isinstance(result, list)
+        assert isinstance(result["decisions"], list)
+        assert len(result["decisions"]) == 1
+        assert "_guidance" in result
+        assert "Chose asyncpg" in result["_guidance"]["note"]
 
     @pytest.mark.asyncio
     async def test_get_decision_history_returns_empty_for_unknown(self, svc):
@@ -585,4 +588,6 @@ class TestLogDecision:
             result = json.loads(await get_decision_history(
                 function_name="nonexistent", project_id="proj"
             ))
-        assert result == []
+        assert result["decisions"] == []
+        assert "_guidance" in result
+        assert "No decisions logged" in result["_guidance"]["note"]

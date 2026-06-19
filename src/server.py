@@ -493,10 +493,11 @@ async def get_callers(function_name: str, project_id: str = "") -> str:
 
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
+    from .guidance import compute_callers_guidance
     svcs = await _get_services()
     results = await svcs.db.get_callers(function_name, project_id or None)
     contracts = await _contracts_for_name(svcs.db, function_name, project_id)
-    out: dict = {"callers": results}
+    out: dict = {"callers": results, "_guidance": compute_callers_guidance(results, function_name)}
     if contracts:
         out["applicable_contracts"] = _fmt_contracts(contracts)
     return json.dumps(out)
@@ -511,10 +512,11 @@ async def get_callees(function_name: str, project_id: str = "") -> str:
 
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
+    from .guidance import compute_callees_guidance
     svcs = await _get_services()
     results = await svcs.db.get_callees(function_name, project_id or None)
     contracts = await _contracts_for_name(svcs.db, function_name, project_id)
-    out: dict = {"callees": results}
+    out: dict = {"callees": results, "_guidance": compute_callees_guidance(results, function_name)}
     if contracts:
         out["applicable_contracts"] = _fmt_contracts(contracts)
     return json.dumps(out)
@@ -724,6 +726,10 @@ async def query_similar_functions(
     """
     svcs = await _get_services()
     results = await svcs.embeddings.query_similar(snippet, top_k, project_id or None)
+    if project_id and results:
+        from .guidance import compute_guidance
+        guidance = await compute_guidance(results, svcs.db, project_id)
+        return json.dumps({"results": results, "_guidance": guidance.to_dict()})
     return json.dumps(results)
 
 
@@ -775,11 +781,15 @@ async def get_decision_history(function_name: str, project_id: str = "") -> str:
 
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
+    from .guidance import compute_decision_guidance
     svcs = await _get_services()
     results = await svcs.decisions.get_decision_history(
         function_name, project_id or None
     )
-    return json.dumps(results)
+    return json.dumps({
+        "decisions": results,
+        "_guidance": compute_decision_guidance(results, function_name, project_id),
+    })
 
 
 @mcp.tool()
@@ -1129,6 +1139,7 @@ async def check_performance(project_id: str) -> str:
     dismiss_performance_concern with the reason the pattern is intentional.
     """
     from .performance import check_performance as _check
+    from .guidance import compute_performance_guidance
     svcs = await _get_services()
     findings = await _check(svcs.db, project_id, embeddings=svcs.embeddings)
     return json.dumps({
@@ -1137,7 +1148,73 @@ async def check_performance(project_id: str) -> str:
         "new": sum(1 for f in findings if not f.suppressed),
         "acknowledged": sum(1 for f in findings if f.suppressed),
         "findings": [f.to_dict() for f in findings],
+        "_guidance": compute_performance_guidance(findings),
     }, indent=2)
+
+
+@mcp.tool()
+async def validate_proposed_code(
+    code: str,
+    target_file: str,
+    project_id: str,
+) -> str:
+    """
+    Pre-flight conformance check for code before writing it to disk.
+
+    Parses the proposed code in-memory, compares it against the indexed module's
+    naming and async conventions, checks active contracts, and runs performance
+    detectors on function bodies.
+
+    Returns a conformance_score (0–1) with specific deviations and examples
+    from the existing module so you can see exactly what convention to follow.
+
+    code:        the proposed source code string (full function definitions)
+    target_file: path of the file being written (determines language + module context)
+    project_id:  which project's conventions and contracts to check against
+    """
+    from .validate import validate_proposed_code as _validate
+    svcs = await _get_services()
+    result = await _validate(code, target_file, project_id, svcs.db)
+    return json.dumps(result.to_dict(), indent=2)
+
+
+@mcp.tool()
+async def preflight_architecture(project_id: str) -> str:
+    """
+    Gather structural signals that focus an architectural review on high-value areas.
+
+    Returns four categories of signal as a Markdown brief:
+
+    1. Coupling hotspots — internal functions with high fan-in × fan-out.
+       High score = structurally central. Apply the deletion test to decide
+       whether the function is a load-bearing seam or an accidental hub.
+
+    2. External dependency scatter — libraries used directly from 3+ files,
+       suggesting a missing adapter layer. One adapter = hypothetical seam;
+       two adapters (prod + test) = real seam worth introducing.
+
+    3. Duplication clusters — semantically similar functions spread across
+       3+ files, suggesting a concept that should be a single deep module.
+       Requires function embeddings to be indexed.
+
+    4. Performance → structural cause — maps check_performance findings to
+       the missing abstraction that would eliminate each pattern structurally.
+
+    Feed the output directly to the improve-codebase-architecture skill's
+    Explore step so it knows where to look rather than walking blind.
+    """
+    from .performance import check_performance as _check_perf
+    from .architecture_preflight import run_preflight
+
+    svcs = await _get_services()
+    findings = await _check_perf(svcs.db, project_id, embeddings=svcs.embeddings)
+    preflight = await run_preflight(
+        svcs.db,
+        project_id,
+        performance_findings=findings,
+        embeddings=svcs.embeddings,
+    )
+    return preflight.to_brief()
 
 
 @mcp.tool()

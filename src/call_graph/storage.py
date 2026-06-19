@@ -1247,6 +1247,33 @@ class CallGraphDB:
         async with self._db.execute("SELECT COUNT(*) FROM decision_embeddings") as cur:
             return (await cur.fetchone())[0]
 
+    # ── Guidance layer accessors ───────────────────────────────────────────
+
+    async def get_caller_counts(
+        self, project_id: str, function_ids: list[str]
+    ) -> dict[str, int]:
+        """Count distinct callers in the project for each function ID in the list."""
+        if not function_ids:
+            return {}
+        async with self._db.execute(
+            """SELECT callee_id, COUNT(DISTINCT caller_id) AS cnt
+               FROM edges
+               WHERE project_id = ? AND callee_id = ANY(?)
+               GROUP BY callee_id""",
+            (project_id, function_ids),
+        ) as cur:
+            return {r["callee_id"]: r["cnt"] for r in await cur.fetchall()}
+
+    async def get_functions_with_decisions(self, function_ids: list[str]) -> set[str]:
+        """Return the subset of function_ids that have at least one logged decision."""
+        if not function_ids:
+            return set()
+        async with self._db.execute(
+            "SELECT DISTINCT function_id FROM decision_functions WHERE function_id = ANY(?)",
+            (function_ids,),
+        ) as cur:
+            return {r["function_id"] for r in await cur.fetchall()}
+
     # ── Analysis data accessors ────────────────────────────────────────────
     # These methods exist so that analysis modules (performance, schema_objects)
     # do not access db._db directly.  Callers must not use db._db outside

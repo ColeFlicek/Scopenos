@@ -13,6 +13,12 @@ Detectors:
   - quadratic_expansion: functions whose embeddings cluster near cross-product
     semantics AND either call another such function (silent O(n²) composition)
     or are called inside a loop (O(n) × O(m) expansion).
+  - external_call_in_loop: a function that calls an external library (HTTP
+    client, AI API, cloud SDK) inside a loop — serializes network latency that
+    could run concurrently via asyncio.gather() or a batch API.
+  - sequential_awaits: an async function with 2+ independent sequential
+    await expressions — each runs after the previous completes, when they
+    could run concurrently via asyncio.gather().
 
 Scoring (object embedding layer):
   Each N+1 candidate is scored by extracting which schema objects the loop
@@ -425,6 +431,147 @@ async def detect_quadratic_expansion(
     return findings
 
 
+# ── External calls in loops detector ─────────────────────────────────────────
+
+# Known high-latency external call patterns — HTTP clients, AI APIs, cloud SDKs.
+# A loop over these serializes latency that could run concurrently.
+_HIGH_LATENCY_EXTERNAL = re.compile(
+    r"openai|anthropic|httpx|aiohttp|requests\."
+    r"|boto|stripe|twilio|sendgrid|resend|urllib\.request|aiofiles",
+    re.IGNORECASE,
+)
+
+
+def detect_external_calls_in_loops(
+    nodes_by_id: dict[str, dict],
+    callee_map: dict[str, list[str]],
+) -> list[tuple[str, str, str, str]]:
+    """
+    Return list of (severity, caller_id, ext_callee_name, detail) for
+    functions that call an external library inside a loop.
+
+    External calls in loops serialize network/API latency: 10 iterations
+    of an OpenAI call takes 10× the latency of one call. The fix is
+    asyncio.gather() for concurrent I/O or the library's batch API.
+
+    Severity:
+      high   — callee name matches a known high-latency API pattern
+      medium — callee is external but not pattern-matched
+    """
+    external_ids = {nid for nid, n in nodes_by_id.items() if n.get("is_external")}
+    seen: set[tuple[str, str]] = set()
+    findings = []
+
+    for node_id, node in nodes_by_id.items():
+        if node.get("is_external") or not _has_loop(node):
+            continue
+        ext_callees = [c for c in callee_map.get(node_id, []) if c in external_ids]
+        if not ext_callees:
+            continue
+        for ext_id in ext_callees:
+            if (node_id, ext_id) in seen:
+                continue
+            seen.add((node_id, ext_id))
+            ext_node = nodes_by_id.get(ext_id, {})
+            ext_name = ext_node.get("name", ext_id.split(".")[-1])
+            is_high = bool(
+                _HIGH_LATENCY_EXTERNAL.search(ext_name)
+                or _HIGH_LATENCY_EXTERNAL.search(ext_id)
+            )
+            severity = "high" if is_high else "medium"
+            detail = (
+                f"Loop calls external function '{ext_name}'"
+                + (" — network/API latency per iteration (50–500ms). "
+                   if is_high else " — external call per loop iteration. ")
+                + "Consider asyncio.gather() for concurrent I/O "
+                + "or the library's batch API."
+            )
+            findings.append((severity, node_id, ext_name, detail))
+    return findings
+
+
+# ── Sequential awaits detector ────────────────────────────────────────────────
+
+# Matches: varname = await some.call(
+_AWAIT_ASSIGN_RE = re.compile(
+    r"(\w+)\s*=\s*await\s+([\w.]+\s*\()",
+    re.MULTILINE,
+)
+# If already using concurrency primitives, don't flag — developer is aware
+_GATHER_RE = re.compile(r"\basyncio\.gather\b|\bcreate_task\b|\bTaskGroup\b")
+
+
+def _find_matching_paren(body: str, start: int) -> int:
+    """Return the index after the closing paren, given start is just after the opening paren."""
+    depth = 1
+    for i in range(start, len(body)):
+        if body[i] == '(':
+            depth += 1
+        elif body[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return len(body)
+
+
+def _detect_sequential_awaits(body: str) -> str | None:
+    """
+    Return a detail string if the function body contains 2+ sequential
+    independent awaits that could be parallelized with asyncio.gather().
+
+    Conservative: skips functions already using gather/create_task, and
+    skips pairs where the first result variable appears in the second call
+    expression or in the body between the two awaits (data dependency).
+    """
+    if not body or _GATHER_RE.search(body):
+        return None
+
+    matches = list(_AWAIT_ASSIGN_RE.finditer(body))
+    if len(matches) < 2:
+        return None
+
+    independent: list[tuple[str, str]] = []
+    for i in range(len(matches) - 1):
+        var_i = matches[i].group(1)
+        # Window covers from after match[i] through the closing paren of match[i+1].
+        # Using paren matching avoids false positives where var_i appears in code
+        # after the second call (e.g. a return statement). Word-boundary regex
+        # avoids single-char names matching inside identifiers like `await`.
+        call_end = _find_matching_paren(body, matches[i + 1].end())
+        window = body[matches[i].end() : call_end]
+        # Skip self — it's always in scope, not a data dependency
+        if var_i != "self" and not re.search(r'\b' + re.escape(var_i) + r'\b', window):
+            independent.append((var_i, matches[i + 1].group(1)))
+
+    if not independent:
+        return None
+
+    count = len(independent)
+    examples = ", ".join(f"`{a}`" for a, _ in independent[:3])
+    return (
+        f"{count} sequential await(s) appear independent: {examples}. "
+        f"asyncio.gather() would run these concurrently "
+        f"— up to {count + 1}× latency reduction."
+    )
+
+
+async def detect_sequential_awaits(
+    nodes_by_id: dict[str, dict],
+) -> list[tuple[str, str]]:
+    """
+    Return list of (function_id, detail) for async functions containing
+    sequential independent awaits that could use asyncio.gather().
+    """
+    findings = []
+    for node_id, node in nodes_by_id.items():
+        if node.get("is_external") or not node.get("is_async"):
+            continue
+        detail = _detect_sequential_awaits(node.get("body", ""))
+        if detail:
+            findings.append((node_id, detail))
+    return findings
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 async def check_performance(
@@ -538,6 +685,38 @@ async def _run_detectors(
                 suppressed=suppressed,
                 suppression_reason=suppression_reason,
             ))
+
+    # ── External calls in loops ───────────────────────────────────────────────
+    for severity, caller_id, ext_name, detail in detect_external_calls_in_loops(
+        nodes_by_id, callee_map
+    ):
+        node = nodes_by_id.get(caller_id, {})
+        suppressed = caller_id in acknowledged
+        findings.append(Finding(
+            function_id=caller_id,
+            function_name=node.get("name", caller_id),
+            file=node.get("file", ""),
+            pattern="external_call_in_loop",
+            severity=severity,
+            detail=detail,
+            suppressed=suppressed,
+            suppression_reason=acknowledged.get(caller_id, ""),
+        ))
+
+    # ── Sequential awaits ─────────────────────────────────────────────────────
+    for fn_id, detail in await detect_sequential_awaits(nodes_by_id):
+        node = nodes_by_id.get(fn_id, {})
+        suppressed = fn_id in acknowledged
+        findings.append(Finding(
+            function_id=fn_id,
+            function_name=node.get("name", fn_id),
+            file=node.get("file", ""),
+            pattern="sequential_awaits",
+            severity="medium",
+            detail=detail,
+            suppressed=suppressed,
+            suppression_reason=acknowledged.get(fn_id, ""),
+        ))
 
     _sev = {"high": 0, "medium": 1, "low": 2}
     findings.sort(key=lambda f: (f.suppressed, _sev.get(f.severity, 9)))
