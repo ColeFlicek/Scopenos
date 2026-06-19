@@ -1006,11 +1006,11 @@ async def check_contracts(project_id: str, semantic: bool = False) -> str:
     return json.dumps(result)
 
 
-# delete_contract is intentionally NOT exposed as an MCP tool.
+# delete_contract is intentionally NOT exposed as an MCP tool OR HTTP endpoint.
 # An agent could delete a contract to bypass enforcement — this is the
 # primary adversarial failure vector for the contracts system.
-# Deletion is available only through the web UI (human control plane).
-# See: http_delete_contract below.
+# Use deactivate (POST .../deactivate) to retire a contract; it preserves
+# the audit trail and prevents silent removal by agents or unauthenticated callers.
 
 
 # ── Agent Improvement Tools ───────────────────────────────────────────────────
@@ -1586,29 +1586,10 @@ async def http_approve_contract(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
-@mcp.custom_route("/api/projects/{project_id}", methods=["DELETE"])
-async def http_delete_project(request: Request) -> JSONResponse:
-    """DELETE /api/projects/{project_id} — remove all data for a project"""
-    try:
-        project_id = request.path_params["project_id"]
-        svcs = await _get_services()
-        result = await svcs.db.delete_project(project_id)
-        await svcs.embeddings.delete_project_embeddings(project_id)
-        return JSONResponse({"status": "deleted", **result})
-    except Exception as exc:
-        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
-
-
-@mcp.custom_route("/api/contracts/{contract_id}", methods=["DELETE"])
-async def http_delete_contract(request: Request) -> JSONResponse:
-    """DELETE /api/contracts/{id}"""
-    try:
-        contract_id = request.path_params["contract_id"]
-        svcs = await _get_services()
-        await svcs.contracts.delete(contract_id)
-        return JSONResponse({"status": "deleted"})
-    except Exception as exc:
-        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+# DELETE /api/projects/{id} and DELETE /api/contracts/{id} are intentionally
+# not exposed as HTTP endpoints. Removing a project or contract is irreversible
+# and was exploitable without auth. Projects cannot be deleted via API; contracts
+# can be deactivated (POST .../deactivate) which preserves the audit trail.
 
 
 @mcp.custom_route("/api/contracts/{contract_id}/deactivate", methods=["POST"])

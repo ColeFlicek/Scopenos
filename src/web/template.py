@@ -1160,7 +1160,7 @@ HTML = r"""<!DOCTYPE html>
 
   function discardDraft() {
     if (_draftContractId) {
-      fetch(`/api/contracts/${_draftContractId}`, {method:'DELETE'});
+      fetch(`/api/contracts/${_draftContractId}/deactivate`, {method:'POST'});
       _draftContractId = null;
     }
     resetCreateForm();
@@ -1343,8 +1343,8 @@ HTML = r"""<!DOCTYPE html>
   }
 
   async function deleteContract(id) {
-    if (!confirm('Delete this contract and its embeddings?')) return;
-    await fetch(`/api/contracts/${id}`, {method:'DELETE'});
+    if (!confirm('Deactivate this contract? It will no longer be enforced.')) return;
+    await fetch(`/api/contracts/${id}/deactivate`, {method:'POST'});
     loadContracts();
   }
 
