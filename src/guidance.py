@@ -90,11 +90,23 @@ def _concentration_signal(results: list[dict]) -> tuple[str, float] | None:
 
 
 def _async_signal(results: list[dict]) -> str | None:
-    """Surface async/sync distribution. Returns None if all-sync (no signal)."""
+    """Surface async/sync distribution. Returns None if all-sync (no signal).
+
+    Uses the is_async field when present (set by precision parsers for all
+    languages: Kotlin suspend fun, Swift async func, Python async def, etc.).
+    Falls back to 'async def' text scan for embeddings results that don't
+    include the field.
+    """
     if not results:
         return None
     total = len(results)
-    async_count = sum(1 for r in results if "async def" in r.get("signature", ""))
+
+    def _is_async(r: dict) -> bool:
+        if "is_async" in r:
+            return bool(r["is_async"])
+        return "async def" in r.get("signature", "")
+
+    async_count = sum(1 for r in results if _is_async(r))
     if async_count == 0:
         return None
     ratio = async_count / total

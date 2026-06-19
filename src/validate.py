@@ -144,8 +144,19 @@ def _check_async(
     proposed: list[dict],
     existing: list[dict],
 ) -> Deviation | None:
-    """Return an async deviation if proposed functions break the module's async convention."""
+    """Return an async deviation if proposed functions break the module's async convention.
+
+    Skips when all existing nodes have structural_layer='generic': their
+    is_async=False reflects data absence, not a real sync convention. Firing
+    on them would produce false "module is 0% async" positives when indexing
+    transitions from generic to precision parsing.
+    """
     if not existing or not proposed:
+        return None
+
+    # If every existing node is generically parsed, is_async=False is an
+    # artefact of the parser, not evidence of a sync-first module.
+    if all(n.get("structural_layer", "precision") == "generic" for n in existing):
         return None
 
     total_existing = len(existing)

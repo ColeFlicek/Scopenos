@@ -192,7 +192,7 @@ class EmbeddingStore:
             async with conn.execute(
                 """SELECT fe.id, (fe.embedding <=> ?) AS distance,
                           n.file, n.module, n.name, n.signature, n.summary, n.project_id,
-                          n.start_line, n.end_line
+                          n.start_line, n.end_line, n.is_async, n.structural_layer
                    FROM function_embeddings fe
                    JOIN nodes n ON n.id = fe.id AND n.project_id = fe.project_id
                    WHERE fe.project_id = ?
@@ -204,7 +204,7 @@ class EmbeddingStore:
             async with conn.execute(
                 """SELECT fe.id, (fe.embedding <=> ?) AS distance,
                           n.file, n.module, n.name, n.signature, n.summary, fe.project_id,
-                          n.start_line, n.end_line
+                          n.start_line, n.end_line, n.is_async, n.structural_layer
                    FROM function_embeddings fe
                    JOIN nodes n ON n.id = fe.id AND n.project_id = fe.project_id
                    ORDER BY distance LIMIT ?""",
