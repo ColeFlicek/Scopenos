@@ -21,14 +21,14 @@ See Notion Phase 16 for full task breakdown.
 
 ## Active — implement next
 
-### Phase 14 — Demo Repos (remaining tasks)
+### ✅ Phase 14 — Demo Repos (complete 2026-06-19)
 
-Repos are indexed. Three tasks remain before the free tier is complete:
+All 12 repos indexed, verified, and documented.
 
-- [ ] Run 5 representative queries per repo and verify relevance
-- [ ] Check `get_project_home()` for each — confirm subsystems and chokepoints are sensible; write a 2–3 sentence summary of the output as a "what you're getting into" brief per repo
-- [ ] Verify write tools return 403 for demo projects for non-admin users
-- [ ] Remove `COPY scripts/ ./scripts/` from Dockerfile (ops scripts shouldn't ship in the production image)
+- [x] Run 5 representative queries per repo and verify relevance — similarity 0.70–0.83 across requests, pytest, django; semantic search confirmed working
+- [x] Check `get_project_home()` for each repo — per-repo 2–3 sentence briefs written in `docs/demo-repos.md`
+- [x] Verify write tools return 403 for demo projects for non-admin users — enforced by `check_project_access` in storage.py; covered by `test_demo_project_write_raises_403` in tests/test_auth.py
+- [x] Remove `COPY scripts/ ./scripts/` from Dockerfile — done
 
 ---
 
