@@ -824,6 +824,7 @@ async def setup_phronosis_client(
     project_id: str = "",
     claude_home: str = "",
     install_git_hook: bool = True,
+    server_url: str = "",
 ) -> str:
     """
     First-time setup for a new Phronosis-integrated project. Call this once after
@@ -843,9 +844,12 @@ async def setup_phronosis_client(
     project_id: slug for this project (default: derived from project_root basename)
     claude_home: path to ~/.claude directory (default: ~/.claude)
     install_git_hook: whether to install the post-commit git hook (default: true)
+    server_url: the URL you used to connect to this MCP server (e.g. "http://100.71.88.106:3004").
+                Pass this so generated hooks and CLAUDE.md point at the right server.
+                Defaults to the PHRONOSIS_URL env var on the server, then http://localhost:3004.
 
     Usage:
-        result = setup_phronosis_client("/Users/name/myproject")
+        result = setup_phronosis_client("/Users/name/myproject", server_url="http://100.71.88.106:3004")
         # Then run: exec(result["setup_script"])  or  Bash(result["run_command"])
     """
     if not project_root:
@@ -853,7 +857,7 @@ async def setup_phronosis_client(
 
     pid = project_id or _derive_project_id(project_root)
     home = claude_home or _default_claude_home()
-    server_url = os.getenv("PHRONOSIS_URL", "http://localhost:3004")
+    server_url = server_url or os.getenv("PHRONOSIS_URL", "http://localhost:3004")
 
     # Load post-commit hook content from the scripts directory.
     scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
