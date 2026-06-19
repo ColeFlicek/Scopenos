@@ -117,6 +117,60 @@ try:
 except ImportError:
     _HAS_HASKELL = False
 
+try:
+    import tree_sitter_zig as tszig
+    _HAS_ZIG = True
+except ImportError:
+    _HAS_ZIG = False
+
+try:
+    import tree_sitter_groovy as tsgroovy
+    _HAS_GROOVY = True
+except ImportError:
+    _HAS_GROOVY = False
+
+try:
+    import tree_sitter_perl as tsperl
+    _HAS_PERL = True
+except ImportError:
+    _HAS_PERL = False
+
+try:
+    import tree_sitter_commonlisp as tscommonlisp
+    _HAS_COMMONLISP = True
+except ImportError:
+    _HAS_COMMONLISP = False
+
+try:
+    import tree_sitter_fortran as tsfortran
+    _HAS_FORTRAN = True
+except ImportError:
+    _HAS_FORTRAN = False
+
+try:
+    import tree_sitter_solidity as tssolidity
+    _HAS_SOLIDITY = True
+except ImportError:
+    _HAS_SOLIDITY = False
+
+try:
+    import tree_sitter_julia as tsjulia
+    _HAS_JULIA = True
+except ImportError:
+    _HAS_JULIA = False
+
+try:
+    import tree_sitter_odin as tsodin
+    _HAS_ODIN = True
+except ImportError:
+    _HAS_ODIN = False
+
+try:
+    import tree_sitter_matlab as tsmatlab
+    _HAS_MATLAB = True
+except ImportError:
+    _HAS_MATLAB = False
+
 
 @dataclass
 class FunctionNode:
@@ -288,6 +342,29 @@ class TreeSitterParser:
         if _HAS_TREE_SITTER and _HAS_HASKELL:
             for ext in (".hs", ".lhs"):
                 self._generic_parsers[ext] = (Parser(Language(tshaskell.language())), "haskell")
+        if _HAS_TREE_SITTER and _HAS_ZIG:
+            self._generic_parsers[".zig"] = (Parser(Language(tszig.language())), "zig")
+        if _HAS_TREE_SITTER and _HAS_GROOVY:
+            for ext in (".groovy", ".gvy", ".gy", ".gsh"):
+                self._generic_parsers[ext] = (Parser(Language(tsgroovy.language())), "groovy")
+        if _HAS_TREE_SITTER and _HAS_PERL:
+            for ext in (".pl", ".pm", ".t"):
+                self._generic_parsers[ext] = (Parser(Language(tsperl.language())), "perl")
+        if _HAS_TREE_SITTER and _HAS_COMMONLISP:
+            for ext in (".lisp", ".cl", ".lsp"):
+                self._generic_parsers[ext] = (Parser(Language(tscommonlisp.language())), "commonlisp")
+        if _HAS_TREE_SITTER and _HAS_FORTRAN:
+            for ext in (".f90", ".f95", ".f", ".f03", ".f08", ".for"):
+                self._generic_parsers[ext] = (Parser(Language(tsfortran.language())), "fortran")
+        if _HAS_TREE_SITTER and _HAS_SOLIDITY:
+            self._generic_parsers[".sol"] = (Parser(Language(tssolidity.language())), "solidity")
+        if _HAS_TREE_SITTER and _HAS_JULIA:
+            self._generic_parsers[".jl"] = (Parser(Language(tsjulia.language())), "julia")
+        if _HAS_TREE_SITTER and _HAS_ODIN:
+            self._generic_parsers[".odin"] = (Parser(Language(tsodin.language())), "odin")
+        if _HAS_TREE_SITTER and _HAS_MATLAB:
+            for ext in (".m", ".mlx"):
+                self._generic_parsers[ext] = (Parser(Language(tsmatlab.language())), "matlab")
 
     @property
     def supported_extensions(self) -> set[str]:
@@ -1729,18 +1806,29 @@ def _collect_php_calls(
 
 # Function and class node types per language.
 _GENERIC_FUNC_TYPES: dict[str, frozenset[str]] = {
-    "bash":    frozenset({"function_definition"}),
-    "lua":     frozenset({"function_declaration"}),
-    "scala":   frozenset({"function_definition"}),
-    "c":       frozenset({"function_definition"}),
-    "ocaml":   frozenset({"value_definition"}),
-    "haskell": frozenset({"function"}),
+    "bash":       frozenset({"function_definition"}),
+    "lua":        frozenset({"function_declaration"}),
+    "scala":      frozenset({"function_definition"}),
+    "c":          frozenset({"function_definition"}),
+    "ocaml":      frozenset({"value_definition"}),
+    "haskell":    frozenset({"function"}),
+    "zig":        frozenset({"function_declaration"}),
+    "groovy":     frozenset({"method_declaration"}),
+    "perl":       frozenset({"subroutine_declaration_statement"}),
+    "commonlisp": frozenset({"defun"}),
+    "fortran":    frozenset({"function", "subroutine"}),
+    "solidity":   frozenset({"function_definition"}),
+    "julia":      frozenset({"function_definition"}),
+    "odin":       frozenset({"procedure_declaration"}),
+    "matlab":     frozenset({"function_definition"}),
     # elixir: handled via identifier-verb inspection — not a fixed type name
 }
 _GENERIC_CLASS_TYPES: dict[str, frozenset[str]] = {
-    "scala":   frozenset({"class_definition", "object_definition", "trait_definition"}),
-    "c":       frozenset({"struct_specifier"}),
-    "ocaml":   frozenset({"module_definition"}),
+    "scala":    frozenset({"class_definition", "object_definition", "trait_definition"}),
+    "c":        frozenset({"struct_specifier"}),
+    "ocaml":    frozenset({"module_definition"}),
+    "groovy":   frozenset({"class_declaration"}),
+    "solidity": frozenset({"contract_declaration"}),
 }
 
 # Node types to skip entirely (don't recurse into them) per language.
@@ -1752,7 +1840,11 @@ _GENERIC_SKIP_TYPES: dict[str, frozenset[str]] = {
 }
 
 # Identifier-like child types tried in order when extracting a function name.
-_GENERIC_ID_TYPES = ("identifier", "name", "value_name", "word", "variable", "simple_identifier")
+_GENERIC_ID_TYPES = (
+    "identifier", "name", "value_name", "word", "variable", "simple_identifier",
+    "bareword",   # Perl subroutine names
+    "sym_lit",    # Common Lisp symbol literals
+)
 
 # Call-expression heuristic: any node whose type contains these substrings.
 _GENERIC_CALL_SUBSTRINGS = ("call_expression", "function_call", "application", "invocation")
@@ -1774,6 +1866,36 @@ def _generic_func_name(node: "Node", source: bytes, lang: str) -> str:
         if binding:
             vn = next((c for c in binding.children if c.type == "value_name"), None)
             return _text(vn, source) if vn else ""
+        return ""
+
+    if lang == "commonlisp":
+        # defun → defun_header → sym_lit (the function name)
+        header = next((c for c in node.children if c.type == "defun_header"), None)
+        if header:
+            sym = next((c for c in header.children if c.type == "sym_lit"), None)
+            return _text(sym, source) if sym else ""
+        return ""
+
+    if lang == "fortran":
+        # function/subroutine container → function_statement/subroutine_statement → name
+        stmt = next(
+            (c for c in node.children
+             if c.type in ("function_statement", "subroutine_statement")),
+            None,
+        )
+        if stmt:
+            n = next((c for c in stmt.children if c.type == "name"), None)
+            return _text(n, source) if n else ""
+        return ""
+
+    if lang == "julia":
+        # function_definition → signature → call_expression → identifier
+        sig = next((c for c in node.children if c.type == "signature"), None)
+        if sig:
+            call = next((c for c in sig.children if c.type == "call_expression"), None)
+            if call:
+                id_n = next((c for c in call.children if c.type == "identifier"), None)
+                return _text(id_n, source) if id_n else ""
         return ""
 
     if lang == "elixir":
@@ -1997,7 +2119,11 @@ def _path_to_module(file_path: str, project_root: str) -> str:
                ".swift", ".kt", ".kts", ".php", ".phtml",
                ".sh", ".bash", ".zsh", ".fish",
                ".lua", ".scala", ".sc", ".c", ".h",
-               ".ml", ".mli", ".ex", ".exs", ".hs", ".lhs"):
+               ".ml", ".mli", ".ex", ".exs", ".hs", ".lhs",
+               ".zig", ".groovy", ".gvy", ".gy", ".gsh",
+               ".pl", ".pm", ".t", ".lisp", ".cl", ".lsp",
+               ".f90", ".f95", ".f", ".f03", ".f08", ".for",
+               ".sol", ".jl", ".odin", ".m", ".mlx"):
         if rel.endswith(ext):
             rel = rel[: -len(ext)]
             break

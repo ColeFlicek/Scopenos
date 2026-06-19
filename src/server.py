@@ -97,7 +97,7 @@ class Services:
     indexer: Indexer
     contracts: ContractManager
     checker: DependencyChecker
-    arch: ArchitectureService
+    arch: ArchitectureService | None = None
 
 
 _services: Services | None = None
