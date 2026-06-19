@@ -1565,6 +1565,20 @@ class CallGraphDB:
         await self._db.commit()
         return dict(row)
 
+
+    async def get_accessible_project_ids(self, user_id: str) -> set[str]:
+        """Return all project IDs this user can read: demo projects + explicitly granted projects."""
+        ids: set[str] = set()
+        async with self._db.execute("SELECT project_id FROM demo_projects") as cur:
+            async for row in cur:
+                ids.add(row[0])
+        async with self._db.execute(
+            "SELECT project_id FROM project_access WHERE user_id = $1", (user_id,)
+        ) as cur:
+            async for row in cur:
+                ids.add(row[0])
+        return ids
+
     async def check_project_access(
         self, user_id: str, project_id: str, operation: str
     ) -> bool:

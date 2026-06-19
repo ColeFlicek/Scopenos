@@ -574,10 +574,23 @@ async def detect_sequential_awaits(
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
+def _is_test_file(file_path: str) -> bool:
+    """Return True if the file lives in a test directory or has a test_ prefix."""
+    import os
+    parts = file_path.replace("\\", "/").split("/")
+    basename = os.path.basename(file_path)
+    return (
+        any(p in ("tests", "test") for p in parts)
+        or basename.startswith("test_")
+        or basename.endswith("_test.py")
+    )
+
+
 async def check_performance(
     db: "CallGraphDB",
     project_id: str,
     embeddings: object = None,
+    exclude_test_files: bool = True,
 ) -> list[Finding]:
     """
     Run all detectors against the indexed functions for project_id.
@@ -588,6 +601,8 @@ async def check_performance(
     """
     from .schema_objects import load_schema_objects
     nodes_by_id = await db.get_nodes_with_bodies(project_id)
+    if exclude_test_files:
+        nodes_by_id = {k: v for k, v in nodes_by_id.items() if not _is_test_file(v.get("file", ""))}
     callee_map = await db.get_callee_map(project_id)
     acknowledged = await db.get_acknowledged_performance_decisions(project_id)
     schema_objects = await load_schema_objects(db, project_id)

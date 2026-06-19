@@ -762,6 +762,24 @@ HTML = r"""<!DOCTYPE html>
   // Currently scoped project_id (empty = all).
   let _scopeId = '';
 
+  // API key for authenticated write operations — persisted in localStorage.
+  let _apiKey = localStorage.getItem('phronosis_api_key') || '';
+
+  function writeHeaders(extra) {
+    const h = {'Content-Type': 'application/json'};
+    if (_apiKey) h['X-API-Key'] = _apiKey;
+    return Object.assign(h, extra || {});
+  }
+
+  function promptApiKey(action) {
+    const key = prompt('Enter your Phronosis API key to ' + action + ':\n(It will be saved in your browser for this session)');
+    if (key) {
+      _apiKey = key.trim();
+      localStorage.setItem('phronosis_api_key', _apiKey);
+    }
+    return !!key;
+  }
+
   function setDot(id, state) { document.getElementById(id).className = 'dot ' + state; }
   function fmt(n) {
     if (n === undefined || n === null) return '—';
@@ -1092,9 +1110,10 @@ HTML = r"""<!DOCTYPE html>
     btn.disabled = true; btn.textContent = 'generating...';
     msg.textContent = 'calling claude haiku to parse rule...'; msg.style.color = 'var(--text3)';
     try {
+      if (!_apiKey && !promptApiKey('create a contract')) return;
       const d = await fetch('/api/contracts', {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
+        headers: writeHeaders(),
         body: JSON.stringify({title, natural_language: rule, project_ids: pids}),
       }).then(r => r.json());
       if (d.status === 'error') throw new Error(d.detail);
@@ -1160,7 +1179,7 @@ HTML = r"""<!DOCTYPE html>
 
   function discardDraft() {
     if (_draftContractId) {
-      fetch(`/api/contracts/${_draftContractId}/deactivate`, {method:'POST'});
+      fetch(`/api/contracts/${_draftContractId}/deactivate`, {method:'POST', headers: writeHeaders()});
       _draftContractId = null;
     }
     resetCreateForm();
@@ -1191,13 +1210,13 @@ HTML = r"""<!DOCTYPE html>
       // Save any edits first.
       await fetch(`/api/contracts/${_draftContractId}`, {
         method: 'PUT',
-        headers: {'Content-Type':'application/json'},
+        headers: writeHeaders(),
         body: JSON.stringify({violation_examples: viols, compliance_examples: comps}),
       });
 
       msg.textContent = 'embedding examples...';
       const d = await fetch(`/api/contracts/${_draftContractId}/approve`, {
-        method:'POST'
+        method:'POST', headers: writeHeaders()
       }).then(r => r.json());
       if (d.status === 'error') throw new Error(d.detail);
 
@@ -1317,7 +1336,7 @@ HTML = r"""<!DOCTYPE html>
     try {
       const d = await fetch(`/api/contracts/${contractId}`, {
         method: 'PUT',
-        headers: {'Content-Type':'application/json'},
+        headers: writeHeaders(),
         body: JSON.stringify({violation_examples: viols, compliance_examples: comps}),
       }).then(r => r.json());
       if (d.status === 'error') throw new Error(d.detail);
@@ -1330,14 +1349,14 @@ HTML = r"""<!DOCTYPE html>
   }
 
   async function deactivateContract(id) {
-    await fetch(`/api/contracts/${id}/deactivate`, {method:'POST'});
+    await fetch(`/api/contracts/${id}/deactivate`, {method:'POST', headers: writeHeaders()});
     loadContracts();
   }
 
   async function reactivateContract(id) {
     const msg = document.createElement('span');
     try {
-      await fetch(`/api/contracts/${id}/approve`, {method:'POST'});
+      await fetch(`/api/contracts/${id}/approve`, {method:'POST', headers: writeHeaders()});
       loadContracts();
     } catch(e) { console.error(e); }
   }

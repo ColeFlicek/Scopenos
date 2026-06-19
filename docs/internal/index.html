@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phronosis — Internal Docs</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:          #0d0f12;
+    --bg2:         #141720;
+    --bg3:         #1c2030;
+    --border:      #252a3a;
+    --text1:       #e2e8f0;
+    --text2:       #94a3b8;
+    --text3:       #64748b;
+    --accent:      #6366f1;
+    --accent-dim:  rgba(99,102,241,0.15);
+    --yellow:      #fbbf24;
+    --sidebar-w:   220px;
+    --font:        -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono:        "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+    --transition:  0.22s ease;
+  }
+
+  html, body { height: 100%; }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text1);
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── Sidebar ─────────────────────────────────────────────────── */
+  #sidebar {
+    width: var(--sidebar-w);
+    min-width: var(--sidebar-w);
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: width var(--transition), min-width var(--transition);
+    position: relative;
+    z-index: 10;
+  }
+
+  /* Collapsed state */
+  body.sidebar-collapsed #sidebar {
+    width: 0;
+    min-width: 0;
+    border-right-color: transparent;
+  }
+
+  /* On mobile: sidebar overlays content when open */
+  @media (max-width: 640px) {
+    #sidebar {
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      box-shadow: 4px 0 24px rgba(0,0,0,0.5);
+    }
+    body.sidebar-collapsed #sidebar {
+      width: 0;
+      min-width: 0;
+      box-shadow: none;
+    }
+    /* Scrim behind open sidebar on mobile */
+    #scrim {
+      display: block;
+    }
+    body.sidebar-collapsed #scrim {
+      opacity: 0;
+      pointer-events: none;
+    }
+  }
+
+  #scrim {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 9;
+    opacity: 1;
+    transition: opacity var(--transition);
+    cursor: pointer;
+  }
+
+  .sidebar-header {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .sidebar-brand {
+    overflow: hidden;
+  }
+
+  .sidebar-logo {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .sidebar-sub {
+    font-size: 10px;
+    color: var(--text3);
+    margin-top: 2px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* Toggle button inside sidebar header */
+  #toggle-btn {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text3);
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, background 0.15s;
+  }
+  #toggle-btn:hover { color: var(--text1); background: var(--bg3); }
+
+  #nav {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+    white-space: nowrap;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 16px;
+    cursor: pointer;
+    font-size: 12.5px;
+    color: var(--text2);
+    border-left: 2px solid transparent;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+    user-select: none;
+  }
+
+  .nav-item:hover { background: var(--bg3); color: var(--text1); }
+
+  .nav-item.active {
+    background: var(--accent-dim);
+    color: var(--text1);
+    border-left-color: var(--accent);
+    font-weight: 600;
+  }
+
+  .nav-icon {
+    font-size: 14px;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  /* ── Main content ────────────────────────────────────────────── */
+  #main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    min-height: 48px;
+    flex-shrink: 0;
+  }
+
+  /* Open button — only visible when sidebar is collapsed */
+  #open-btn {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text3);
+    padding: 4px;
+    border-radius: 4px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, background 0.15s;
+  }
+  #open-btn:hover { color: var(--text1); background: var(--bg3); }
+
+  body.sidebar-collapsed #open-btn { display: flex; }
+
+  #doc-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text1);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #search-wrap {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  #search {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text1);
+    font-size: 12px;
+    font-family: var(--font);
+    padding: 5px 10px 5px 28px;
+    width: 180px;
+    outline: none;
+    transition: border-color 0.15s, width 0.2s;
+  }
+
+  #search:focus { border-color: var(--accent); width: 220px; }
+  #search::placeholder { color: var(--text3); }
+
+  @media (max-width: 480px) {
+    #search { width: 120px; }
+    #search:focus { width: 150px; }
+  }
+
+  .search-icon {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text3);
+    font-size: 12px;
+    pointer-events: none;
+  }
+
+  #content-wrap {
+    flex: 1;
+    overflow-y: auto;
+    padding: 36px 40px 80px;
+  }
+
+  #content {
+    max-width: 820px;
+    margin: 0 auto;
+  }
+
+  @media (max-width: 640px) {
+    #content-wrap { padding: 24px 20px 60px; }
+  }
+
+  /* ── Markdown styles ─────────────────────────────────────────── */
+  #content h1 {
+    font-size: 22px; font-weight: 700; color: var(--text1);
+    margin-bottom: 6px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  #content h2 {
+    font-size: 16px; font-weight: 600; color: var(--text1);
+    margin: 36px 0 12px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  #content h3 {
+    font-size: 13.5px; font-weight: 600; color: var(--accent);
+    margin: 22px 0 8px;
+  }
+  #content h4 {
+    font-size: 12px; font-weight: 600; color: var(--text2);
+    margin: 14px 0 5px; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  #content p { color: var(--text2); margin: 10px 0; }
+  #content a { color: var(--accent); text-decoration: none; }
+  #content a:hover { text-decoration: underline; }
+  #content strong { color: var(--text1); font-weight: 600; }
+  #content em { color: var(--text2); font-style: italic; }
+  #content ul, #content ol { margin: 8px 0 8px 22px; color: var(--text2); }
+  #content li { margin: 4px 0; }
+  #content li > strong { color: var(--text1); }
+  #content hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+  #content blockquote {
+    border-left: 3px solid var(--accent); padding: 8px 16px;
+    margin: 14px 0; background: var(--bg3); border-radius: 0 6px 6px 0;
+    color: var(--text2); font-size: 13px;
+  }
+
+  /* Inline code */
+  #content code:not(pre code) {
+    font-family: var(--mono); font-size: 11.5px;
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px; color: #a5f3fc;
+  }
+
+  /* Code blocks */
+  #content pre {
+    background: #0f1117 !important; border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px; overflow-x: auto;
+    margin: 10px 0 18px; font-size: 12px; line-height: 1.65;
+  }
+  #content pre code {
+    font-family: var(--mono) !important; background: none !important;
+    border: none !important; padding: 0 !important; font-size: inherit !important;
+  }
+
+  /* Tables */
+  #content table {
+    width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 12.5px;
+    display: block; overflow-x: auto;
+  }
+  #content th {
+    background: var(--bg3); color: var(--text2); font-weight: 600;
+    text-align: left; padding: 7px 11px; border: 1px solid var(--border);
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  #content td {
+    padding: 7px 11px; border: 1px solid var(--border);
+    color: var(--text2); vertical-align: top;
+  }
+  #content tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+
+  /* Search highlight */
+  mark {
+    background: rgba(251,191,36,0.28); color: var(--yellow);
+    border-radius: 2px; padding: 0 1px;
+  }
+
+  /* Scrollbars */
+  #content-wrap::-webkit-scrollbar { width: 6px; }
+  #content-wrap::-webkit-scrollbar-track { background: transparent; }
+  #content-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  #nav::-webkit-scrollbar { width: 4px; }
+  #nav::-webkit-scrollbar-track { background: transparent; }
+  #nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body class="sidebar-collapsed-init">
+
+<!-- Mobile scrim — tap to close sidebar -->
+<div id="scrim" onclick="closeSidebar()"></div>
+
+<div id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-brand">
+      <div class="sidebar-logo">Phronosis</div>
+      <div class="sidebar-sub">Internal Docs</div>
+    </div>
+    <button id="toggle-btn" onclick="closeSidebar()" title="Close sidebar" aria-label="Close sidebar">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div id="nav"></div>
+</div>
+
+<div id="main">
+  <div id="toolbar">
+    <button id="open-btn" onclick="openSidebar()" title="Open sidebar" aria-label="Open sidebar">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+    <span id="doc-title"></span>
+    <div id="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input id="search" type="text" placeholder="Search…" autocomplete="off">
+    </div>
+  </div>
+  <div id="content-wrap">
+    <div id="content"></div>
+  </div>
+</div>
+
+<script>
+const DOCS = [{"id": "tool-reference", "title": "MCP Tool Reference", "content": "# Phronosis MCP Tool Reference\n\nInternal reference. Every tool, every parameter, one working example against an indexed demo repo.\nPromoted to `docs.phronosis.dev` in Phase 17 with pricing/limitation sections redacted.\n\n---\n\n## Discovery tools\n\n### `list_projects`\nList all indexed projects with node count, edge count, and last-indexed timestamp.\n\n**Parameters:** none\n\n**Example:**\n```\nlist_projects()\n\u2192 [{\"id\": \"django\", \"name\": \"django\", \"node_count\": 42988, \"edge_count\": 189763, ...}]\n```\n\n---\n\n### `get_project_home(project_id)`\nFull architectural snapshot in one call: subsystems, wiring diagram, chokepoints, entry points, risk surface, health, recent decisions. **Call this first at every session start.**\n\n**Parameters:**\n- `project_id` \u2014 string, required\n\n**Example:**\n```\nget_project_home(\"pytest\")\n\u2192 {\n    \"function_count\": 6578,\n    \"subsystems\": [{\"name\": \"src._pytest\", \"function_count\": 2199, ...}],\n    \"chokepoints\": [{\"id\": \"src._pytest.pytester.LineMatcher.fnmatch_lines\", \"caller_count\": 1750}],\n    \"health\": {\"top_knowledge_gaps\": [...], \"risk_detection_mode\": \"structural_heuristic_no_decisions\"},\n    \"recent_decisions\": []\n  }\n```\n\n---\n\n### `query_similar_functions(snippet, project_id?, top_k?)`\nSemantic search \u2014 find functions by what they do, not what they're named. Returns top-k results with similarity scores and a `_guidance` field.\n\n**Parameters:**\n- `snippet` \u2014 natural language description or code fragment, required\n- `project_id` \u2014 limit to one project; omit to search all, optional\n- `top_k` \u2014 default 10, optional\n\n**Example:**\n```\nquery_similar_functions(\"HTTP session cookie authentication middleware\", project_id=\"requests\", top_k=5)\n\u2192 {\"results\": [{\"id\": \"tests.test_requests.TestRequests.test_DIGEST_AUTH_SETS_SESSION_COOKIES\",\n                \"similarity\": 0.742, \"file\": \"tests/test_requests.py\", ...}]}\n```\n\n---\n\n### `get_function_context(function_name, project_id?)`\nUnified pipeline for a single function: node metadata + callers + callees + impact radius + decision history + similar functions. Use this when you have a function name and want everything about it.\n\n**Parameters:**\n- `function_name` \u2014 exact function ID or name, required\n- `project_id` \u2014 optional scoping\n\n---\n\n### `get_callers(function_name, project_id?)`\nAll functions that call the named function, with file, module, and signature.\n\n**Example:**\n```\nget_callers(\"Session\", project_id=\"requests\")\n\u2192 {\"callers\": [{\"id\": \"tests.test_requests.TestRequests.test_session_...\", \"caller_count\": 58}]}\n```\n\n---\n\n### `get_callees(function_name, project_id?)`\nAll functions called by the named function, with `is_external` flag to distinguish library calls.\n\n---\n\n### `get_impact_radius(function_name, depth?, project_id?)`\nRecursive BFS of everything that depends on this function. Returns full dependency tree annotated with `impact_depth`.\n\n**Parameters:**\n- `function_name` \u2014 required\n- `depth` \u2014 default 2; use 1 for chokepoints (depth=2 can return 70+ functions for heavily-called nodes)\n- `project_id` \u2014 optional\n\n**Example:**\n```\nget_impact_radius(\"check_permission\", depth=2, project_id=\"phronosis\")\n\u2192 {\"impact_radius\": [...], \"total_impacted\": 18}\n```\n\n---\n\n### `find_dependents(function_name, project_id?)`\nAll functions that transitively depend on this function (callers-of-callers). Equivalent to `get_impact_radius` but flat list.\n\n---\n\n## Decision memory tools\n\n### `get_decision_history(function_name, project_id?)`\nAll logged architectural decisions linked to this function \u2014 why it was designed this way, what was rejected.\n\n**Note:** Returns empty `[]` if `log_decision` has never been called for this function. `risk_detection_mode: \"structural_heuristic_no_decisions\"` in `get_project_home` is the signal that no decisions are logged yet.\n\n---\n\n### `query_decisions(query_text, project_id?)`\nSemantic search over decision memory. Finds decisions by topic, not by function name.\n\n**Example:**\n```\nquery_decisions(\"why did we choose ContextVar over threading.local\")\n\u2192 [{\"description\": \"Auth uses ContextVar for per-request user...\", \"similarity\": 0.83}]\n```\n\n---\n\n### `log_decision(project_id, type, description, linked_function_ids?, rejected_alternatives?, trigger?)`\nRecord a significant architectural decision. Call after any non-obvious choice, after every git push, and whenever an approach is rejected.\n\n**Parameters:**\n- `type` \u2014 `\"Architectural\"` | `\"Design\"` | `\"Implementation\"` | `\"Patch\"`\n- `description` \u2014 what changed AND why (not just the commit message)\n- `linked_function_ids` \u2014 list of function IDs this decision applies to\n- `rejected_alternatives` \u2014 what was considered and not done\n- `trigger` \u2014 `\"git:<short-hash>\"` for commit-linked decisions\n\n**Auth:** requires valid API key \u2014 owner or write access to project.\n\n---\n\n## Contract tools\n\n### `list_contracts(project_id?)`\nList active contracts. Returns empty array if none.\n\n---\n\n### `create_contract(project_id, title, natural_language, function_ids?)`\nGenerate a contract draft from a plain-English rule. Uses Claude Haiku to parse the rule into violation/compliance examples and a structural expression.\n\n**Auth:** requires valid API key.\n\n---\n\n### `approve_contract(contract_id)`\nEmbed examples and activate the contract. After approval, `check_contracts` will flag violations.\n\n**Auth:** requires valid API key.\n\n---\n\n### `check_contracts(project_id, function_ids?)`\nCheck functions against all active contracts. Returns violations. Called automatically by the post-commit hook.\n\n---\n\n### `list_improvements(project_id?)`\nList open improvement suggestions filed by `file_improvement`.\n\n---\n\n### `file_improvement(project_id, function_id, description, suggested_fix?)`\nFile a suggested improvement for a function. Stored in decision memory; visible in web UI improvements panel.\n\n---\n\n### `resolve_improvement(improvement_id, resolution_notes, status)`\nClose an improvement as `resolved`, `dismissed`, or `wont_fix`.\n\n---\n\n## Performance tools\n\n### `check_performance(project_id, exclude_test_files?)`\nRun all performance detectors against a project.\n\n**Parameters:**\n- `project_id` \u2014 required\n- `exclude_test_files` \u2014 default `true`; set to `false` to include test code\n\n**Detectors:**\n- `correlated_join_aggregate` \u2014 SQL Cartesian product before GROUP BY\n- `n_plus_one` \u2014 loop + DB call inside it\n- `quadratic_expansion` \u2014 O(n\u00b2) composition via embedding similarity\n- `external_call_in_loop` \u2014 HTTP/AI API calls serialized inside a loop\n- `sequential_awaits` \u2014 independent async operations that could use `gather()`\n\n**Example:**\n```\ncheck_performance(\"requests\")\n\u2192 {\"total\": 3, \"new\": 2, \"acknowledged\": 1, \"findings\": [...]}\n```\n\n---\n\n### `dismiss_performance_concern(project_id, function_id, reason)`\nAcknowledge a finding as intentional. It will appear with `status: \"acknowledged\"` on future runs.\n\n---\n\n### `check_solid_principles(project_id)`\nRun SRP/OCP/DIP detectors. Undocumented in Phase 16 \u2014 add to Phase 17 docs.\n\n### `dismiss_solid_concern(project_id, function_id, reason)`\nAcknowledge a SOLID finding.\n\n---\n\n## Dependency fingerprint tools\n\n### `get_dependency_fingerprint(project_id)`\nLatest snapshot of all external library symbols in use, with diff from previous snapshot. Returns guidance note if no SCIP data is available.\n\n### `list_dependency_fingerprint_history(project_id, limit?)`\nAll fingerprint snapshots, newest first.\n\n### `get_dependency_fingerprint_at(fingerprint_id)`\nFull snapshot for a specific point in time.\n\n### `compare_dependency_fingerprints(fingerprint_id_a, fingerprint_id_b)`\nDiff two historical snapshots.\n\n### `list_external_dependencies(project_id)`\nAll external library symbols called by this project, grouped by library. Returns guidance note if no SCIP data.\n\n### `get_library_dependents(library_name, project_id)`\nAll internal functions that call any symbol in the given library. Returns guidance note if no SCIP data.\n\n**Note:** All dependency fingerprint tools require SCIP augmentation. Run `index_scip` or `index_project` with `scip-python` installed to populate external symbol data.\n\n---\n\n## Indexing tools\n\n### `index_project(path, project_id?)`\nFull index of a project from server-side filesystem path. Enqueues a background job; returns `job_id`.\n\n**Auth:** requires valid API key.\n\n### `index_changes(changed_files, file_contents, project_root?, project_id?)`\nIncremental index \u2014 update only the changed files. Synchronous (fast). Called by the post-edit hook.\n\n**Auth:** requires valid API key.\n\n### `index_scip(path, project_id?)`\nIngest a SCIP index file (JSON format) to populate external dependency data and type-resolved call edges.\n\n### `index_schema_objects(project_id)`\nDetect and index database schema objects (tables, columns, cardinality classes) for performance analysis.\n\n### `reembed_project(project_id)`\nForce re-embedding of all functions. Use after changing the embedding model.\n\n**Auth:** requires valid API key.\n\n### `enrich_summaries(project_id, limit?, force?)`\nGenerate LLM summaries for functions that fell back to the large model (no docstring). Enqueues background job.\n\n**Auth:** requires valid API key.\n\n---\n\n## Setup tool\n\n### `setup_phronosis_client(project_id, project_root, server_url?)`\nGenerate all client-side artifacts for a new project: post-commit hook, Claude Code settings, CLAUDE.md section, memory files, and the `acip-workflow` skill.\n\n**Parameters:**\n- `project_id` \u2014 required\n- `project_root` \u2014 absolute path to the project root\n- `server_url` \u2014 the Phronosis server URL as seen from the client (e.g. `http://100.71.88.106:3004`). If omitted, falls back to `PHRONOSIS_URL` env var then `http://localhost:3004`.\n\n**Important:** Always pass `server_url` explicitly when connecting to a remote instance. The tool reads its own `PHRONOSIS_URL` (the server's internal address), which is wrong for remote clients.\n\n---\n\n## Branch tools (requires branch tracking setup)\n\n### `compare_branches(project_id, branch_a, branch_b)`\nDiff call graphs between two branches.\n\n### `get_branch_conflicts(project_id)`\nSurface functions modified on multiple branches simultaneously.\n\n**Note:** These tools require the project to be indexed with branch tracking enabled. Not tested against current deployment \u2014 no branch data exists yet.\n\n---\n\n## Untested / limited tools\n\n| Tool | Status |\n|---|---|\n| `get_function_at_commit` | Requires commit hash \u2014 no test case |\n| `estimate_index` | Requires server-side path access |\n| `index_lsif` | Compiles; no LSIF file available for testing |\n| `compare_branches` / `get_branch_conflicts` | No branch data in deployment |\n"}, {"id": "architecture", "title": "Architecture", "content": "# Phronosis Architecture\n\nInternal reference. Not for public docs \u2014 contains rationale for rejected designs and known tradeoffs.\n\n---\n\n## The four-layer model\n\n```\n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502  Layer 4: Decision Memory                                   \u2502\n\u2502  Why things are the way they are. Survives code changes.    \u2502\n\u2502  Tools: log_decision, get_decision_history, query_decisions \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502  Layer 3: Invariant Contracts                               \u2502\n\u2502  Rules the codebase must not violate. Enforced post-commit. \u2502\n\u2502  Tools: create_contract, check_contracts, approve_contract  \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502  Layer 2: Semantic Embeddings                               \u2502\n\u2502  What functions do, queryable by meaning not name.          \u2502\n\u2502  Tools: query_similar_functions, performance detectors      \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502  Layer 1: Call Graph                                        \u2502\n\u2502  Who calls whom, what files exist, what signatures look like\u2502\n\u2502  Tools: get_callers, get_callees, get_impact_radius, ...    \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n```\n\nEach layer uses the one below. Contracts reference functions from the call graph. The performance detector uses embeddings to classify functions semantically and the call graph to trace N+1 paths.\n\n---\n\n## Layer 1: Call Graph\n\n**What it stores:** `function_nodes` (id, name, file, module, signature, body, start_line, end_line, is_async, return_type, parameter_names, enclosing_class, structural_layer, summary) and `call_edges` (caller_id \u2192 callee_id, is_external).\n\n**Parser pipeline:**\n1. Language-specific precision parsers (Python via tree-sitter, JS/TS via tree-sitter, Swift, Kotlin, PHP)\n2. Generic fallback parsers for 12+ languages (Zig, Groovy, Perl, etc.)\n3. SCIP ingestion for type-resolved edges from compiled languages\n\n**`structural_layer` field:** marks whether a function's context came from precision parsing (`\"precision\"`) or generic fallback (`\"generic\"`). Used to calibrate confidence in analysis results.\n\n**Incremental indexing:** `index_changes` accepts a dict of `{filepath: content}` and updates only those functions. The post-commit hook calls this on every commit. Full re-index via `index_project` is needed only after adding a new parser or changing the schema.\n\n**Why Postgres not SQLite:** SQLite single-writer bottleneck becomes real with concurrent project indexing. Postgres + pgvector was chosen before public launch rather than after. See `log_decision` records tagged `trigger: \"git:03df6fd\"`.\n\n---\n\n## Layer 2: Semantic Embeddings\n\n**What it stores:** `function_embeddings` (project_id, function_id, embedding vector(1536)) with HNSW index for cosine similarity search.\n\n**Embedding model:** `text-embedding-3-small` (OpenAI) by default. The `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIM` env vars configure this. Ollama is supported for local/air-gapped deployments.\n\n**Two embedding types:**\n- Function embeddings: indexed at `index_project` / `index_changes` time\n- Decision embeddings: indexed when `log_decision` is called (for `query_decisions`)\n- Contract embeddings: indexed when `approve_contract` is called (for `check_contracts`)\n\n**Enrichment:** Functions without docstrings get a body-text embedding, which is lower quality. `enrich_summaries` runs Claude Haiku on these to generate summaries before re-embedding. The `needs_enrichment` flag (TODO: see roadmap) should replace the current `embedding_model` string check.\n\n**HNSW index:** Applied via `CREATE INDEX ... USING hnsw (embedding vector_cosine_ops)`. Not applied in the current K8s deployment (see roadmap known issue). Fine at current scale.\n\n---\n\n## Layer 3: Invariant Contracts\n\n**What it stores:** `contracts` table (id, title, natural_language, structural_expression JSON, violation_examples[], compliance_examples[], status, project_ids).\n\n**Lifecycle:** draft \u2192 approved \u2192 (active enforcement) \u2192 deactivated\n\n**Enforcement:** The post-commit hook calls `POST /api/contracts/check` with new function IDs after every commit. Violations are stored in `contract_violations` and surfaced in the web UI.\n\n**Primary adversarial vector:** An agent that can delete a contract can bypass enforcement. This is why DELETE /api/contracts was removed \u2014 deactivation (POST .../deactivate) is the only exit path, and it preserves the audit trail.\n\n**`structural_expression`:** JSON blob encoding the abstract rule as a set of detectable patterns (e.g. \"all public functions must have a docstring\", \"no HTTP calls inside a loop\"). Generated by Claude Haiku at contract creation time. The structural expression drives embedding-based violation scoring.\n\n---\n\n## Layer 4: Decision Memory\n\n**What it stores:** `decisions` table (id, project_id, type, description, rejected_alternatives, trigger, linked_function_ids[], created_at) + decision embeddings.\n\n**Why it exists:** Code is the answer; decision memory is the question behind the answer. Without it, every agent starts from scratch and may re-implement rejected approaches.\n\n**Current gap:** `risk_detection_mode: \"structural_heuristic_no_decisions\"` in every project means no decisions are linked to functions. The backfill script (`scripts/backfill_decisions.py`) was never run, and the post-commit hook logs commit-level decisions but doesn't always populate `linked_function_ids`. This degrades `get_decision_history` quality. Fix: run the backfill script against all indexed projects.\n\n---\n\n## Entry points and routing\n\n**MCP server:** FastMCP over HTTP/SSE. All `@mcp.tool()` decorated functions are MCP tools. Auth middleware (`AuthMiddleware`) fires on every MCP message, sets `_current_user` ContextVar via `X-API-Key` header lookup.\n\n**HTTP routes:** `@mcp.custom_route(...)` decorators register Starlette routes. Read routes are unauthenticated. Write routes call `_require_valid_key(request, db)`. Two routes are intentionally unauthenticated: `POST /index` and `POST /api/decisions` (used by git hooks without user credentials).\n\n**Web UI:** Single-page app served from `GET /`. All JS is inlined in `src/web/template.py`. Write operations include `X-API-Key` header loaded from localStorage.\n\n**Background workers:** Redis + RQ. `index_project` and `enrich_summaries` enqueue jobs; `GET /api/jobs/{id}` polls status. `index_changes` is synchronous (fast).\n\n---\n\n## Key architectural decisions\n\n**ContextVar for per-request user (not threading.local):** FastMCP is async; thread-local state doesn't work across `await` boundaries. ContextVar propagates correctly through async task graphs. Services is a singleton \u2014 user is per-request.\n\n**`_get_services()` pattern:** Returns a `Services` singleton (db, embeddings, indexer, contracts). Initialized once at startup via FastMCP lifespan. Avoids repeated DB connection setup and ensures all handlers share the same connection pool.\n\n**Subsystem detection via module prefix clustering:** `get_project_home` groups functions by module prefix. No explicit subsystem configuration needed. Works well for Python (module paths reflect architecture) and reasonably for other languages.\n\n**Demo projects are read-only at the storage layer:** `check_project_access` returns False for write operations on demo projects regardless of who's asking. Not enforced at the API key level \u2014 a user can own all demo repos and still can't write to them. This is intentional: demo data is shared across all users.\n\n---\n\n## Known non-obvious constraints\n\n- `asyncpg` connection pool (min=2, max=10 currently, should be raised before high-concurrency load)\n- The `app.src.*` namespace duplication in the call graph is a Docker build artifact \u2014 `app.src.module` and `src.module` may appear as separate nodes for the same function. Pending cleanup (see roadmap).\n- `enrich_summaries` model check: `embedding_model = 'text-embedding-3-large'` string literal identifies unenriched functions. Should be a `needs_enrichment BOOLEAN` column.\n- Post-commit hook requires `PHRONOSIS_URL` env var to be set on the developer's machine. Without it, commits silently skip indexing.\n"}, {"id": "ops-runbook", "title": "Ops Runbook", "content": "# Phronosis Ops Runbook\n\nProcedures for operating the production Phronosis instance. Internal only.\n\n---\n\n## Deploy\n\n**Trigger:** Push to `main` branch. GitHub Actions CI runs:\n1. Tests (pytest against Postgres service container)\n2. Docker image build \u2192 push to GHCR\n3. `kubectl apply` of all manifests in `k8s/`\n4. Waits for Postgres, then rolls API and worker pods\n\n**Secrets required in GitHub Actions:**\n- `DATABASE_URL` \u2014 Postgres connection string\n- `OPENAI_API_KEY` \u2014 for embeddings\n- `ANTHROPIC_API_KEY` \u2014 for contract generation and enrichment\n- `RESEND_API_KEY` \u2014 for signup emails\n- `TAILSCALE_AUTH_KEY` \u2014 for VPN access to home cluster\n- `KUBECONFIG` \u2014 base64-encoded kubeconfig for K3s on TheHive\n\n**Manual deploy (emergency):**\n```bash\nexport KUBECONFIG=~/.kube/theHive.config\nkubectl apply -f k8s/\nkubectl rollout restart deployment/phronosis-api -n phronosis\nkubectl rollout restart deployment/phronosis-worker -n phronosis\n```\n\n**Check pod status:**\n```bash\nkubectl get pods -n phronosis\nkubectl logs -n phronosis deployment/phronosis-api --tail=50\n```\n\n---\n\n## Re-index a project\n\n**From a developer machine (via MCP):**\n```\nindex_project(\"/absolute/path/to/project\", project_id=\"myapp\")\n```\nReturns a `job_id`. Poll with `GET /api/jobs/{job_id}` or wait for the MCP tool response.\n\n**From inside the cluster (for large repos):**\n```bash\nkubectl exec -n phronosis -it deployment/phronosis-worker -- \\\n  python3 -c \"\nimport asyncio\nfrom src.call_graph.storage import CallGraphDB\nfrom src.indexer import IndexerService\nasync def main():\n    db = CallGraphDB()\n    await db.initialize()\n    # ... run indexer\nasyncio.run(main())\n\"\n```\n\n**After changing the embedding model:**\n```\nreembed_project(\"myapp\")\n```\n\n---\n\n## Add a demo repo\n\n1. Clone the repo to `/tmp/phronosis-demos/<name>` on the server\n2. Run `index_project(\"/tmp/phronosis-demos/<name>\", project_id=\"<name>\")`\n3. Run `enrich_summaries(\"<name>\", limit=2000)`\n4. Mark as demo in DB:\n```sql\nINSERT INTO demo_projects (project_id, display_name, repo_url, added_at)\nVALUES ('<name>', '<Display Name>', 'https://github.com/org/repo', NOW());\n```\n5. Verify with `get_project_home(\"<name>\")` \u2014 check subsystems and chokepoints are sensible\n\n---\n\n## Rotate API keys\n\n**Create a new user + key:**\n```bash\nkubectl exec -n phronosis -it deployment/phronosis-api -- \\\n  python3 scripts/create_user.py --email user@example.com --name \"User Name\" --plan free\n```\nPrints the API key. Send it to the user.\n\n**Revoke a key:**\n```sql\nUPDATE api_keys SET revoked_at = NOW() WHERE key_hash = '<hash>';\n```\nKey hash is SHA-256 of the raw key.\n\n**List all keys for a user:**\n```sql\nSELECT id, name, created_at, last_used FROM api_keys WHERE user_id = '<user_id>' AND revoked_at IS NULL;\n```\n\n---\n\n## Diagnose a broken index\n\n**Symptoms:** `get_project_home` returns empty subsystems, `query_similar_functions` returns no results, or `get_callers` returns an empty list for a function that clearly has callers.\n\n**Check 1 \u2014 Is the project indexed?**\n```\nlist_projects()\n```\nIf the project is missing, run `index_project` again.\n\n**Check 2 \u2014 Are functions in the DB?**\n```sql\nSELECT COUNT(*) FROM function_nodes WHERE project_id = '<id>';\nSELECT COUNT(*) FROM function_embeddings WHERE project_id = '<id>';\n```\nIf `function_embeddings` count is much lower than `function_nodes`, run `reembed_project`.\n\n**Check 3 \u2014 Is the indexer job stuck?**\n```bash\nkubectl exec -n phronosis -it deployment/phronosis-worker -- \\\n  python3 -c \"from rq import Queue; from redis import Redis; q = Queue(connection=Redis(host='phronosis-redis')); print(q.job_ids)\"\n```\n\n**Check 4 \u2014 Parser errors?**\nLook at worker logs:\n```bash\nkubectl logs -n phronosis deployment/phronosis-worker --tail=100 | grep -i \"error\\|exception\"\n```\n\n**Check 5 \u2014 HNSW index missing?**\n```sql\n\\d function_embeddings\n```\nIf no HNSW index exists, run:\n```sql\nCREATE INDEX CONCURRENTLY ON function_embeddings USING hnsw (embedding vector_cosine_ops);\n```\n\n---\n\n## Recover from a failed migration\n\n**Symptom:** Deploy fails with schema errors or `asyncpg` connection errors.\n\n**Step 1 \u2014 Check what schema the DB is on:**\n```bash\nkubectl exec -n phronosis -it deployment/phronosis-postgres-0 -- \\\n  psql -U phronosis -d phronosis -c \"\\dt\"\n```\n\n**Step 2 \u2014 Revert to the last working image:**\n```bash\nkubectl set image deployment/phronosis-api api=ghcr.io/coleflicek/phronosis:<previous-tag> -n phronosis\nkubectl set image deployment/phronosis-worker worker=ghcr.io/coleflicek/phronosis:<previous-tag> -n phronosis\n```\n\n**Step 3 \u2014 Apply the missing migration manually:**\nMigrations are not tracked by a migration tool \u2014 schema changes are in `k8s/postgres.yaml` ConfigMap. Compare the current schema against the ConfigMap and apply the delta manually.\n\n**Step 4 \u2014 Re-run the broken deploy after fixing the migration.**\n\n---\n\n## Network restriction (required before public launch)\n\n`POST /index` and `POST /api/decisions` are intentionally unauthenticated (used by git hooks). Before public launch, restrict port 3004 to:\n- The VPN subnet (Tailscale IP range for developer machines)\n- The K8s pod CIDR (for internal service-to-service calls)\n\nThis is not currently configured. Add a Kubernetes NetworkPolicy or a firewall rule on the Hetzner/DO host.\n\n---\n\n## Useful one-liners\n\n```bash\n# Check health\ncurl http://100.71.88.106:3004/api/health | jq .\n\n# List projects\ncurl http://100.71.88.106:3004/api/projects | jq '.[].id'\n\n# Trigger a re-index via HTTP (requires API key)\ncurl -X POST http://100.71.88.106:3004/api/enrich-summaries/pytest \\\n  -H \"X-API-Key: ph_...\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"limit\": 500}'\n\n# Tail API logs\nkubectl logs -n phronosis -f deployment/phronosis-api\n\n# Connect to Postgres directly\nkubectl exec -n phronosis -it deployment/phronosis-postgres-0 -- \\\n  psql -U phronosis -d phronosis\n```\n"}, {"id": "known-limitations", "title": "Known Limitations", "content": "# Known Limitations\n\nHonest internal notes. Not for public docs. Review before Phase 17 to decide what to disclose vs. what to fix.\n\n---\n\n## Analysis limitations\n\n### Decision memory is empty for most functions\n`get_decision_history` returns `[]` for virtually every function because `log_decision` has not been called consistently, and `backfill_decisions.py` has never been run against the production indexes. The `risk_detection_mode: \"structural_heuristic_no_decisions\"` flag in `get_project_home` is the indicator.\n\n**Impact:** Risk scoring degrades. The system falls back to structural heuristics (call count, churn) instead of knowledge-aware risk detection. Agents will not see why things were designed a certain way.\n\n**Fix:** Run `backfill_decisions.py` against all indexed projects. Enforce `log_decision` calls in the post-commit hook (currently the hook logs commit-level decisions but doesn't always link `linked_function_ids`).\n\n---\n\n### check_performance flags test code without `exclude_test_files=True`\nThe default is now `exclude_test_files=True`, but the tool historically flagged test helper functions as N+1 and external-call-in-loop patterns. In large repos (scikit-learn, django, astropy) there may be legitimate-looking test patterns that still trigger.\n\n**Impact:** First-time users on large repos may see noise. Trust erodes.\n\n**Fix:** Defaults now exclude test files. Users can opt in with `exclude_test_files=False`. Pre-dismiss known false positives in batch/executemany code for each indexed demo repo.\n\n---\n\n### SCIP data is empty for all indexed projects\n`list_external_dependencies`, `get_library_dependents`, and `get_dependency_fingerprint` all return empty results with a guidance note. SCIP augmentation (`index_scip`) has never been run on any demo repo.\n\n**Impact:** Dependency fingerprint and library migration planning tools are not functional for any current demo repo. A user querying django for \"which functions use requests?\" gets an empty result.\n\n**Fix:** Run `scip-python index` + `index_scip` on each demo repo. One-time per repo. Estimated 2-4 minutes per repo.\n\n---\n\n### `app.src.*` namespace duplication in Phronosis's own index\nFunctions in Phronosis itself appear under both `src.module.function` and `app.src.module.function` in the call graph. This is a Docker build artifact where the container's working directory creates a duplicate import path.\n\n**Impact:** `get_callers` for Phronosis functions may return half the actual callers. Subsystem counts are inflated.\n\n**Fix:** Pending cleanup \u2014 remove the `app.src.*` entries from the call graph. Do not expose Phronosis's own index as a demo repo until this is resolved.\n\n---\n\n### Branch tools are untested\n`compare_branches` and `get_branch_conflicts` have no branch data in the current deployment. The tools compile and the schema supports branch tracking, but end-to-end correctness is not verified.\n\n**Impact:** If a user tries these tools, they will return empty results or errors.\n\n**Recommendation:** Document as \"requires branch tracking setup\" in Phase 17 docs. Do not feature them on the landing page.\n\n---\n\n### `estimate_index` requires server-side file access\nThe tool accepts an absolute path on the Phronosis server filesystem, not a remote path. Users on local machines cannot use it without either SSHing in or uploading files first.\n\n**Impact:** The \"how much will this cost?\" pre-flight check doesn't work for remote clients.\n\n**Fix:** Accept file contents inline (like `index_changes`) instead of a path. Low priority.\n\n---\n\n## Scale ceilings\n\n| Constraint | Current limit | Notes |\n|---|---|---|\n| asyncpg connection pool | max=10 | Raise to 50 before high-concurrency load |\n| HNSW index | Not applied | Apply before >100K embeddings for query performance |\n| enrich_summaries per job | 2,000 functions cap | Prevents runaway LLM costs; configurable |\n| RQ job queue | 1 concurrent job per user | Redis rate key per user_id |\n| Django index size | 42,988 nodes, 189,763 edges | Largest demo repo; `get_project_home` returns 141KB \u2014 hits inline MCP result limit |\n\n---\n\n## False positive patterns by detector\n\n### n_plus_one\n- **False positive:** Loops over a small fixed-size collection (e.g. `for col in [\"a\", \"b\", \"c\"]`) that happens to call a DB function. Cardinality gate doesn't catch it if the collection literal isn't recognized.\n- **False positive:** Test setup functions that insert rows in a loop \u2014 intentional, not a performance concern.\n\n### external_call_in_loop\n- **False positive:** Batch API clients that are designed to be called in a loop (e.g. OpenAI SDK with automatic retry \u2014 each call is independent and can't be batched further).\n- **False negative:** Loops hidden inside generator expressions (`sum(f(x) for x in data)` where `f` makes an HTTP call).\n\n### sequential_awaits\n- **False positive:** Sequential awaits that are intentionally ordered (e.g. \"first acquire lock, then use resource\"). The detector does not model dependencies between awaits.\n\n### quadratic_expansion (embedding-based)\n- Requires function embeddings to be indexed. Returns no findings if embeddings are empty.\n- Similarity threshold is calibrated on Python web service code. May over-flag scientific computing code where O(n\u00b2) operations are intentional (numpy outer products, pairwise distance matrices).\n\n---\n\n## Unsupported language patterns\n\n### Python\n- Decorators that change function signatures are not modeled (the decorator is tracked as a call edge, but parameter names reflect the wrapped function)\n- `__getattr__`-based dynamic dispatch is invisible to the call graph\n- Metaclass-generated methods are not indexed\n\n### JavaScript / TypeScript\n- Anonymous functions (arrow functions, `function()`) are indexed but have auto-generated IDs that may not match between index runs if the file changes significantly\n- Dynamic `require()` calls are not resolved to their target module\n\n### Generic fallback parsers (Zig, Groovy, Perl, etc.)\n- Body text is captured but call edges are not extracted (no tree-sitter grammar). `get_callers` / `get_callees` returns empty for these functions.\n- Structural layer is `\"generic\"` \u2014 use this to filter results when precision matters.\n\n---\n\n## What a paying user might hit first\n\n1. **\"get_decision_history returns nothing\"** \u2014 see decision memory section above\n2. **\"query_similar_functions returns unrelated results\"** \u2014 happens when functions have no docstrings and enrichment hasn't been run; body text embeddings are lower quality\n3. **\"check_performance says my test helpers are N+1\"** \u2014 default now excludes test files, but may still occur for test files outside a `tests/` directory\n4. **\"list_external_dependencies returns empty\"** \u2014 SCIP not run; guidance note explains\n5. **\"get_project_home returns 141KB for django\"** \u2014 hits MCP inline result limit; jq extraction is the workaround\n"}, {"id": "auth-workflow", "title": "Auth Workflow", "content": "# Auth Workflow\n\nComplete reference for everything authentication and authorization in Phronosis.\nCovers the full path from key creation through enforcement at every layer.\n\n---\n\n## Database schema\n\n```sql\n-- One record per human or service account\nCREATE TABLE users (\n    id         TEXT PRIMARY KEY,   -- UUID\n    email      TEXT UNIQUE NOT NULL,\n    plan       TEXT NOT NULL DEFAULT 'free',  -- 'free' | 'paid'\n    created_at TEXT NOT NULL\n);\n\n-- One or more keys per user. Raw key is never stored.\nCREATE TABLE api_keys (\n    id         TEXT PRIMARY KEY,   -- UUID\n    user_id    TEXT NOT NULL REFERENCES users(id),\n    key_hash   TEXT NOT NULL UNIQUE,  -- SHA-256 of raw key\n    name       TEXT NOT NULL DEFAULT '',  -- human label (\"dev laptop\")\n    created_at TEXT NOT NULL,\n    last_used  TEXT\n);\n\n-- Which users can access which private projects, and at what level\nCREATE TABLE project_access (\n    user_id    TEXT NOT NULL REFERENCES users(id),\n    project_id TEXT NOT NULL,\n    role       TEXT NOT NULL,  -- 'owner' | 'viewer'\n    PRIMARY KEY (user_id, project_id)\n);\n\n-- Projects in this table are readable by any authenticated user, never writable\nCREATE TABLE demo_projects (\n    project_id    TEXT PRIMARY KEY,\n    display_name  TEXT NOT NULL,\n    repo_url      TEXT NOT NULL,\n    last_indexed  TEXT,\n    auto_update   INTEGER NOT NULL DEFAULT 0,\n    added_at      TEXT NOT NULL\n);\n```\n\n---\n\n## Key lifecycle\n\n### Creating a user and issuing a key\n\n```bash\n# From the server, inside the venv\npython scripts/create_user.py cole@example.com --name \"dev laptop\" --plan paid --project myapp --role owner\n```\n\n**What this does:**\n1. Inserts a row in `users` (UUID id, email, plan, created_at)\n2. Optionally inserts a row in `project_access` (user_id, project_id, role)\n3. Generates a raw key via `secrets.token_urlsafe(32)` \u2014 32 bytes = 43 characters of URL-safe base64\n4. Computes `key_hash = SHA-256(raw_key)`\n5. Inserts into `api_keys` (id, user_id, key_hash, name, created_at)\n6. **Prints the raw key once and discards it** \u2014 not stored anywhere\n\nThe printed output instructs the user to add it to their Claude Code MCP config:\n```json\n\"headers\": {\"X-API-Key\": \"<raw_key>\"}\n```\n\n### Key format\n\nRaw keys are `secrets.token_urlsafe(32)` output \u2014 URL-safe base64, 43 characters, no prefix. Example: `xK9mP2vQwRtYbNcDfGhJkLmNeOpQrSt`.\n\nThere is no `ph_` prefix in the current implementation.\n\n### Key lookup (every authenticated request)\n\n```python\n# src/call_graph/storage.py \u2014 get_user_by_key()\nkey_hash = hashlib.sha256(raw_key.encode()).hexdigest()\nrow = await db.execute(\n    \"SELECT u.id, u.email, u.plan, u.created_at\n     FROM api_keys k JOIN users u ON u.id = k.user_id\n     WHERE k.key_hash = ?\",\n    (key_hash,)\n)\n# On hit: updates api_keys.last_used, returns user dict\n# On miss: returns None\n```\n\nNo timing attack concern from the hash comparison because the WHERE clause does an exact indexed lookup \u2014 there is no constant-time comparison loop in Python.\n\n---\n\n## Two authentication paths\n\nThe server has two distinct callers: the MCP protocol (Claude Code) and HTTP (web UI + scripts). They use different auth mechanisms because MCP middleware doesn't fire on raw HTTP requests.\n\n### Path A: MCP tools (Claude Code)\n\n```\nClaude Code \u2500\u2500X-API-Key header\u2500\u2500\u25ba FastMCP\n                                     \u2502\n                              AuthMiddleware.on_message()\n                                     \u2502 extracts X-API-Key\n                                     \u2502 calls get_user_by_key()\n                                     \u2502 sets _current_user ContextVar\n                                     \u25bc\n                              @mcp.tool() handler\n                                     \u2502\n                              get_current_user()  \u2190 reads ContextVar\n                                     \u2502\n                              check_permission(user, project_id, \"write\", db)\n                                     \u2502 calls check_project_access()\n                                     \u25bc\n                              tool logic runs\n```\n\n**`AuthMiddleware`** fires on every MCP protocol message via `on_message`. It:\n1. Extracts `X-API-Key` from the HTTP request headers using `get_http_request()` (suppresses exceptions if no HTTP context)\n2. Calls `db.get_user_by_key(raw_key)` \u2014 returns user dict or None\n3. Sets `_current_user` ContextVar to the user (or None if unauthenticated/invalid)\n4. Calls `call_next()` to let the tool handler run\n5. Resets the ContextVar after the handler returns\n\n**`check_permission()`** is called inside write tools:\n```python\nawait check_permission(get_current_user(), project_id, \"write\", svcs.db)\n```\n- If user is None \u2192 raises `HTTPException(401)`\n- If user can't access project \u2192 raises `HTTPException(403)`\n- Otherwise \u2192 returns None, tool proceeds\n\n**Which MCP tools require auth:**\n- `index_project` \u2014 write (indexes new project data)\n- `index_changes` \u2014 write\n- `reembed_project` \u2014 write\n- `enrich_summaries` \u2014 write (triggers LLM spend)\n- `log_decision` \u2014 write\n- `create_contract`, `approve_contract` \u2014 write\n- All read tools (`query_similar_functions`, `get_callers`, etc.) \u2014 **no auth required**\n\n---\n\n### Path B: HTTP endpoints (web UI + scripts)\n\nMCP middleware does **not** fire for Starlette custom routes. Write endpoints call `_require_valid_key()` directly:\n\n```\nWeb UI / curl \u2500\u2500X-API-Key header\u2500\u2500\u25ba Starlette HTTP route\n                                          \u2502\n                                   _require_valid_key(request, db)\n                                          \u2502 reads request.headers.get(\"X-API-Key\")\n                                          \u2502 calls db.get_user_by_key()\n                                          \u2502 raises HTTPException(401) if missing/invalid\n                                          \u25bc\n                                   handler logic runs\n```\n\n```python\n# src/server.py\nasync def _require_valid_key(request: Request, db: CallGraphDB) -> dict:\n    key = request.headers.get(\"X-API-Key\")\n    if not key:\n        raise HTTPException(status_code=401, detail=\"Authentication required \u2014 include X-API-Key header\")\n    user = await db.get_user_by_key(key)\n    if not user:\n        raise HTTPException(status_code=401, detail=\"Invalid API key\")\n    return user\n```\n\nNote: `_require_valid_key` only validates that the key exists and belongs to a real user. It does **not** check project-level access (unlike `check_permission`). This is intentional \u2014 HTTP write endpoints operate at the admin level (creating contracts, triggering re-embeds) where project-scoped permission checks would require a project_id that isn't always available.\n\n**HTTP endpoints protected by `_require_valid_key`:**\n| Endpoint | Reason |\n|---|---|\n| `POST /api/index-bulk` | Arbitrary data injection |\n| `POST /api/enrich-summaries/{id}` | Triggers LLM spend |\n| `POST /api/reembed/{id}` | Triggers embedding run |\n| `POST /api/contracts` | Creates contracts |\n| `PUT /api/contracts/{id}` | Modifies contract examples |\n| `POST /api/contracts/{id}/approve` | Activates enforcement |\n| `POST /api/contracts/{id}/deactivate` | Disables enforcement |\n\n**Intentionally unauthenticated HTTP endpoints:**\n| Endpoint | Why |\n|---|---|\n| `POST /index` | Post-commit git hook \u2014 runs on developer machines with no user credentials |\n| `POST /api/decisions` | Same \u2014 git hook logs decisions |\n| All `GET /api/*` | Read-only, no secrets at risk |\n| `GET /` (web UI) | Static page |\n| `POST /api/signup` | Creates a new account \u2014 no key yet |\n\n---\n\n## Project-level access control\n\n`check_project_access(user_id, project_id, operation)` is the single source of truth for what a user may do to a project:\n\n```python\n# src/call_graph/storage.py\n\nasync def check_project_access(self, user_id, project_id, operation) -> bool:\n    # 1. Demo project check (overrides everything)\n    is_demo = await db.execute(\"SELECT 1 FROM demo_projects WHERE project_id = ?\", (project_id,))\n    if is_demo:\n        return operation == \"read\"   # read: always yes, write: always no\n\n    # 2. Private project \u2014 check project_access table\n    row = await db.execute(\n        \"SELECT role FROM project_access WHERE user_id = ? AND project_id = ?\",\n        (user_id, project_id)\n    )\n    if not row:\n        return False          # no access row \u2192 denied\n\n    role = row[\"role\"]\n    if role == \"owner\":\n        return True           # owners can read and write\n    if role == \"viewer\":\n        return operation == \"read\"   # viewers can only read\n    return False\n```\n\n**Access matrix:**\n\n| User type | Demo project | Own project (owner) | Shared project (viewer) | No access |\n|---|---|---|---|---|\n| Read (get_callers, query_similar\u2026) | \u2705 | \u2705 | \u2705 | \u274c 401/403 |\n| Write (index_project, log_decision\u2026) | \u274c 403 | \u2705 | \u274c 403 | \u274c 401/403 |\n\n---\n\n## Web UI auth\n\nThe web UI is a single-page app served from `GET /`. It has no server-side session. API key is stored client-side.\n\n```javascript\n// Loaded from localStorage on page init\nlet _apiKey = localStorage.getItem('phronosis_api_key') || '';\n\n// All write requests use this\nfunction writeHeaders(extra) {\n    const h = {'Content-Type': 'application/json'};\n    if (_apiKey) h['X-API-Key'] = _apiKey;\n    return Object.assign(h, extra || {});\n}\n\n// Called before the first write if no key is stored\nfunction promptApiKey(action) {\n    const key = prompt('Enter your Phronosis API key to ' + action + ':\\n(It will be saved in your browser for this session)');\n    if (key) {\n        _apiKey = key.trim();\n        localStorage.setItem('phronosis_api_key', _apiKey);\n    }\n    return !!key;\n}\n```\n\n**Web UI write flow:**\n1. User clicks \"generate examples\" (contract creation)\n2. JS checks `if (!_apiKey && !promptApiKey('create a contract')) return`\n3. If no key stored: shows browser `prompt()`, user pastes key, key saved to localStorage\n4. Fetch fires with `headers: writeHeaders()` \u2192 includes `X-API-Key`\n5. Server calls `_require_valid_key(request, db)` \u2192 validates \u2192 proceeds\n\n**Security note:** localStorage is visible to any JS on the same origin. Since the web UI is served from the Phronosis server itself (no external scripts), this is acceptable. Don't use this pattern if the web UI ever loads third-party scripts.\n\n---\n\n## Signup flow (POST /api/signup)\n\nFor Phase 17, `POST /api/signup` provides a self-service entry point:\n\n```\nUser POSTs {email} to /api/signup\n    \u2502\n    \u25bc\nServer creates user (db.create_user)\n    \u2502\n    \u25bc\nServer creates API key (db.create_api_key)\n    \u2502\n    \u25bc\nServer calls email_sender(email, raw_key)\n    \u2502   Real sender: Resend API (when RESEND_API_KEY is set)\n    \u2502   Test sender: prints to stdout\n    \u25bc\nReturns {\"status\": \"ok\"} \u2014 key is NOT in the response body\n```\n\nThe key is sent by email only. It is never returned in the HTTP response. `GET /api/me` lets an authenticated user view their account and projects.\n\n---\n\n## Authentication gaps to address before Phase 17\n\n1. **No key revocation via web UI** \u2014 revocation requires direct DB access (`UPDATE api_keys SET revoked_at = NOW() ...`). The `revoked_at` column is not currently checked in `get_user_by_key`. It exists in the schema but the lookup query doesn't filter on it.\n\n2. **No rate limiting on auth attempts** \u2014 a brute-force attack on valid key hashes is not feasible (SHA-256 preimage), but repeated failed requests aren't throttled.\n\n3. **POST /index and POST /api/decisions are public** \u2014 documented and intentional, but must be network-restricted before public launch (see ops-runbook.md).\n\n4. **Web UI API key prompt is abrupt** \u2014 first write attempt shows a raw `prompt()`. Phase 17 should replace this with a proper login modal.\n"}];
+
+const icons = {
+  "tool-reference":    "⚙",
+  "architecture":      "⬡",
+  "ops-runbook":       "⚡",
+  "known-limitations": "⚠",
+  "auth-workflow":     "🔑",
+};
+
+let currentId = null;
+let rawHtml   = {};
+const isMobile = () => window.innerWidth <= 640;
+
+function openSidebar() {
+  document.body.classList.remove('sidebar-collapsed');
+}
+
+function closeSidebar() {
+  document.body.classList.add('sidebar-collapsed');
+}
+
+function toggleSidebar() {
+  document.body.classList.toggle('sidebar-collapsed');
+}
+
+// Auto-collapse on mobile; open on desktop
+function initSidebar() {
+  if (isMobile()) {
+    document.body.classList.add('sidebar-collapsed');
+  } else {
+    document.body.classList.remove('sidebar-collapsed');
+  }
+}
+
+// When a nav item is clicked on mobile, close the sidebar after navigation
+function onNavClick(id) {
+  showDoc(id);
+  if (isMobile()) closeSidebar();
+}
+
+// Close sidebar on resize to desktop if it was auto-collapsed
+window.addEventListener('resize', () => {
+  if (!isMobile() && document.body.classList.contains('sidebar-collapsed')) {
+    // Only auto-open if user hasn't explicitly closed it
+    if (!userCollapsed) openSidebar();
+  }
+});
+
+let userCollapsed = false;
+
+// Override open/close to track user intent
+const _closeSidebar = closeSidebar;
+const _openSidebar  = openSidebar;
+
+// Replace with intent-tracking versions
+function closeSidebar() {
+  if (!isMobile()) userCollapsed = true;
+  document.body.classList.add('sidebar-collapsed');
+}
+function openSidebar() {
+  userCollapsed = false;
+  document.body.classList.remove('sidebar-collapsed');
+}
+
+// Configure marked
+marked.setOptions({ breaks: false, gfm: true });
+
+const renderer = new marked.Renderer();
+renderer.code = (code, lang) => {
+  const language = (typeof code === 'object') ? (code.lang || '') : (lang || '');
+  const text     = (typeof code === 'object') ? code.text : code;
+  const highlighted = language && hljs.getLanguage(language)
+    ? hljs.highlight(text, {language}).value
+    : hljs.highlightAuto(text).value;
+  return `<pre><code class="hljs ${language ? 'language-' + language : ''}">${highlighted}</code></pre>`;
+};
+marked.use({ renderer });
+
+function buildNav() {
+  const nav = document.getElementById('nav');
+  DOCS.forEach(doc => {
+    const el = document.createElement('div');
+    el.className = 'nav-item';
+    el.dataset.id = doc.id;
+    el.innerHTML = `<span class="nav-icon">${icons[doc.id] || '·'}</span>${doc.title}`;
+    el.onclick = () => onNavClick(doc.id);
+    nav.appendChild(el);
+  });
+}
+
+function showDoc(id) {
+  currentId = id;
+  const doc = DOCS.find(d => d.id === id);
+  if (!doc) return;
+
+  document.querySelectorAll('.nav-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.id === id)
+  );
+
+  document.getElementById('doc-title').textContent = doc.title;
+
+  const html = marked.parse(doc.content);
+  rawHtml[id] = html;
+  document.getElementById('content').innerHTML = html;
+
+  document.getElementById('search').value = '';
+  document.getElementById('content-wrap').scrollTop = 0;
+}
+
+function applySearch(query) {
+  if (!currentId) return;
+  const doc = DOCS.find(d => d.id === currentId);
+  if (!doc) return;
+
+  if (!query.trim()) {
+    document.getElementById('content').innerHTML = rawHtml[currentId] || marked.parse(doc.content);
+    return;
+  }
+
+  let html = rawHtml[currentId] || marked.parse(doc.content);
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(${escaped})`, 'gi');
+  html = html.replace(/<[^>]+>|([^<]+)/g, (m, text) => {
+    if (!text) return m;
+    return text.replace(re, '<mark>$1</mark>');
+  });
+  document.getElementById('content').innerHTML = html;
+
+  const first = document.querySelector('mark');
+  if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+document.getElementById('search').addEventListener('input', e => applySearch(e.target.value));
+
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+    e.preventDefault();
+    document.getElementById('search').focus();
+  }
+  if (e.key === 'Escape') {
+    const s = document.getElementById('search');
+    if (document.activeElement === s) {
+      s.value = ''; applySearch(''); s.blur();
+    } else if (isMobile() && !document.body.classList.contains('sidebar-collapsed')) {
+      closeSidebar();
+    }
+  }
+});
+
+initSidebar();
+buildNav();
+showDoc(DOCS[0].id);
+</script>
+</body>
+</html>

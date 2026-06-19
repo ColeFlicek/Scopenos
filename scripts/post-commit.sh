@@ -5,6 +5,7 @@
 set -euo pipefail
 
 PHRONOSIS_URL="${PHRONOSIS_URL:-http://100.71.88.106:3004}"
+PHRONOSIS_API_KEY="${PHRONOSIS_API_KEY:-}"  # required — set in shell profile or CI secrets
 
 CHANGED=$(git diff-tree --no-commit-id -r --name-only HEAD 2>/dev/null || true)
 
@@ -84,6 +85,7 @@ else
   curl --silent --show-error --max-time 30 \
     -X POST "${PHRONOSIS_URL}/index" \
     -H "Content-Type: application/json" \
+    -H "X-API-Key: ${PHRONOSIS_API_KEY}" \
     -d "{\"changed_files\": ${FILES_JSON}, \"project_root\": \"${REPO_ROOT}\", \"project_id\": \"${PROJECT_ID}\"}" \
     > /dev/null
 

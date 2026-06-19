@@ -13,6 +13,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from fastmcp import FastMCP
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -161,7 +162,12 @@ async def list_projects() -> str:
     before calling scoped query tools.
     """
     svcs = await _get_services()
-    result = await svcs.db.list_projects()
+    user = get_current_user()
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    accessible = await svcs.db.get_accessible_project_ids(user["id"])
+    all_projects = await svcs.db.list_projects()
+    result = [p for p in all_projects if p["id"] in accessible]
     return json.dumps(result)
 
 
@@ -181,6 +187,8 @@ async def compare_branches(project_id_a: str, project_id_b: str) -> str:
     project_id_b: the head (e.g. "myapp/feature-x")
     """
     svcs = await _get_services()
+    await _check_read_access(project_id_a, svcs.db)
+    await _check_read_access(project_id_b, svcs.db)
     result = await svcs.db.compare_projects(project_id_a, project_id_b)
     return json.dumps(result)
 
@@ -212,6 +220,7 @@ async def get_branch_conflicts(
       summary: {total, branches, functions_with_main_drift}
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     result = await svcs.db.get_branch_conflicts(project_id, function_ids, current_branch)
     return json.dumps(result)
 
@@ -233,6 +242,7 @@ async def get_function_at_commit(
     Requires the git repo to be accessible at the project root on the server.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     pid = project_id or None
 
     # Resolve function → file path from the stored index.
@@ -498,6 +508,7 @@ async def get_callers(function_name: str, project_id: str = "") -> str:
     """
     from .guidance import compute_callers_guidance
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     results = await svcs.db.get_callers(function_name, project_id or None)
     contracts = await _contracts_for_name(svcs.db, function_name, project_id)
     out: dict = {"callers": results, "_guidance": compute_callers_guidance(results, function_name)}
@@ -517,6 +528,7 @@ async def get_callees(function_name: str, project_id: str = "") -> str:
     """
     from .guidance import compute_callees_guidance
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     results = await svcs.db.get_callees(function_name, project_id or None)
     contracts = await _contracts_for_name(svcs.db, function_name, project_id)
     out: dict = {"callees": results, "_guidance": compute_callees_guidance(results, function_name)}
@@ -539,6 +551,7 @@ async def get_impact_radius(
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     results = await svcs.db.get_impact_radius(function_name, depth, project_id or None)
     contracts = await _contracts_for_name(svcs.db, function_name, project_id)
     out: dict = {"impact_radius": results}
@@ -560,7 +573,15 @@ async def list_external_dependencies(project_id: str) -> str:
     parts of the codebase couple to a given library.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     results = await svcs.db.list_external_dependencies(project_id)
+    if not results:
+        return json.dumps({
+            "results": [],
+            "_guidance": "No external dependency data found. This tool requires SCIP augmentation — "
+                         "run index_scip (or index_project with scip-python installed) to populate "
+                         "external symbol tracking for this project.",
+        })
     return json.dumps(results)
 
 
@@ -582,6 +603,7 @@ async def get_dependency_fingerprint(project_id: str) -> str:
     on every index_project run, making dependency changes visible in git diff.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     row = await svcs.db.get_latest_dependency_fingerprint(project_id)
     if not row:
         return json.dumps({"status": "no fingerprint", "project_id": project_id,
@@ -606,6 +628,7 @@ async def list_dependency_fingerprint_history(
     full snapshot and diff for that point in time.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     results = await svcs.db.list_dependency_fingerprint_history(project_id, limit)
     return json.dumps(results)
 
@@ -621,6 +644,7 @@ async def get_dependency_fingerprint_at(fingerprint_id: str) -> str:
     identify which symbols were removed or changed between two index runs.
     """
     svcs = await _get_services()
+    await _check_read_access("", svcs.db)
     row = await svcs.db.get_dependency_fingerprint_by_id(fingerprint_id)
     if not row:
         return json.dumps({"status": "not found", "fingerprint_id": fingerprint_id})
@@ -645,7 +669,16 @@ async def get_library_dependents(library_name: str, project_id: str) -> str:
     project_id: required — scoped to a single project.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     results = await svcs.db.get_library_dependents(library_name, project_id)
+    if not results:
+        return json.dumps({
+            "results": [],
+            "_guidance": f"No internal functions found that call '{library_name}'. "
+                         "If this library is used, external dependency data may not be populated — "
+                         "run index_scip (or index_project with scip-python installed) to enable "
+                         "external symbol tracking.",
+        })
     return json.dumps(results)
 
 
@@ -668,6 +701,7 @@ async def compare_dependency_fingerprints(
     a that aren't in b are "removed".
     """
     svcs = await _get_services()
+    await _check_read_access("", svcs.db)
     row_a = await svcs.db.get_dependency_fingerprint_by_id(fingerprint_id_a)
     row_b = await svcs.db.get_dependency_fingerprint_by_id(fingerprint_id_b)
     if not row_a:
@@ -700,6 +734,7 @@ async def check_dependency(library_name: str, project_id: str) -> str:
     list_dependency_fingerprint_history to see the full change history.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     dependents = await svcs.db.get_library_dependents(library_name, project_id)
     fp_row = await svcs.db.get_latest_dependency_fingerprint(project_id)
     payload = fingerprint_payload(fp_row) if fp_row else None
@@ -728,6 +763,7 @@ async def query_similar_functions(
     project_id: limit results to a specific project. If omitted, searches across all projects.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     results = await svcs.embeddings.query_similar(snippet, top_k, project_id or None)
     if project_id and results:
         from .guidance import compute_guidance
@@ -786,6 +822,7 @@ async def get_decision_history(function_name: str, project_id: str = "") -> str:
     """
     from .guidance import compute_decision_guidance
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     results = await svcs.decisions.get_decision_history(
         function_name, project_id or None
     )
@@ -810,6 +847,7 @@ async def query_decisions(
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     results = await svcs.decisions.query_decisions(
         query_text, project_id=project_id or None
     )
@@ -919,6 +957,7 @@ async def get_project_home(project_id: str) -> str:
     Read() only for exact implementation of the function you are about to modify.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     result = await svcs.arch.get_project_home(project_id, max_age_seconds=300)
     return json.dumps(result)
 
@@ -949,6 +988,8 @@ async def create_contract(
         check_contracts only evaluates those functions instead of the whole project.
     """
     svcs = await _get_services()
+    for _pid in (project_ids or []):
+        await check_permission(get_current_user(), _pid, "write", svcs.db)
     result = await svcs.contracts.generate_draft(
         project_ids=project_ids or [],
         title=title,
@@ -975,6 +1016,13 @@ async def approve_contract(contract_id: str) -> str:
     every call to check_contracts() and via the post-commit hook.
     """
     svcs = await _get_services()
+    user = get_current_user()
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    _contract = await svcs.db.get_contract(contract_id)
+    if _contract:
+        for _pid in (_contract.get("project_ids") or []):
+            await check_permission(user, _pid, "write", svcs.db)
     result = await svcs.contracts.approve(contract_id)
     return json.dumps(result)
 
@@ -988,6 +1036,7 @@ async def list_contracts(project_id: str = "") -> str:
     returns all contracts across all projects.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     result = await svcs.contracts.list_contracts(project_id or None)
     return json.dumps(result)
 
@@ -1006,6 +1055,7 @@ async def check_contracts(project_id: str, semantic: bool = False) -> str:
     Expensive on large projects — use on small codebases or focused subsets.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     result = await svcs.contracts.check_project(project_id, semantic=semantic)
     return json.dumps(result)
 
@@ -1017,113 +1067,10 @@ async def check_contracts(project_id: str, semantic: bool = False) -> str:
 # the audit trail and prevents silent removal by agents or unauthenticated callers.
 
 
-# ── Agent Improvement Tools ───────────────────────────────────────────────────
-
-@mcp.tool()
-async def file_improvement(
-    title: str,
-    description: str,
-    severity: str = "medium",
-    project_id: str = "",
-    affected_functions: list[str] | None = None,
-    suggested_fix: str = "",
-    reproduction_steps: str = "",
-) -> str:
-    """
-    File a structured improvement report for Phronosis so another agent session can
-    implement it. Use this when you observe a bug, limitation, or enhancement
-    opportunity during a session that you cannot or should not fix yourself.
-
-    Write reports as if briefing a competent engineer who will pick this up cold:
-    - title: one line, imperative ("Fix X", "Add Y", "Improve Z performance")
-    - description: what is wrong or missing, why it matters, any relevant context
-      you have (call paths observed, data shapes, error messages). Be specific —
-      vague descriptions slow implementation.
-    - severity: "low" | "medium" | "high" | "critical"
-    - project_id: the Phronosis project_id this applies to (empty = Phronosis itself)
-    - affected_functions: list of fully-qualified function IDs from the call graph
-      (e.g. ["src.contracts.manager.ContractManager.check_project"]). Use
-      query_similar_functions() first to find exact IDs.
-    - suggested_fix: your best hypothesis for HOW to fix it. Even a rough sketch
-      helps. Include rejected alternatives if you considered them.
-    - reproduction_steps: exact steps or query that triggers the issue.
-
-    Returns the improvement ID — save it if you need to reference this report later.
-    """
-    import uuid
-    svcs = await _get_services()
-    improvement_id = str(uuid.uuid4())
-    result = await svcs.db.create_improvement(
-        improvement_id=improvement_id,
-        project_id=project_id,
-        title=title,
-        description=description,
-        affected_functions=affected_functions or [],
-        severity=severity,
-        suggested_fix=suggested_fix,
-        reproduction_steps=reproduction_steps,
-    )
-    return json.dumps(result)
-
-
-@mcp.tool()
-async def list_improvements(
-    project_id: str = "",
-    status: str = "open",
-) -> str:
-    """
-    List agent-filed improvement reports.
-
-    Call this at session start on any Phronosis project to see what prior agent
-    sessions flagged as needing work. Improvements are ordered newest-first.
-
-    project_id: filter to a specific project (empty = all projects)
-    status: "open" | "done" | "wont_fix" | "" (empty = all statuses)
-
-    Each result includes: id, title, description, severity, affected_functions,
-    suggested_fix, reproduction_steps, filed_at.
-    """
-    svcs = await _get_services()
-    result = await svcs.db.list_improvements(
-        project_id=project_id or None,
-        status=status or None,
-    )
-    return json.dumps(result)
-
-
-@mcp.tool()
-async def resolve_improvement(
-    improvement_id: str,
-    resolution_notes: str,
-    status: str = "done",
-) -> str:
-    """
-    Mark an agent improvement report as resolved.
-
-    Call this after implementing (or deciding not to implement) a filed improvement.
-    Write resolution_notes that tell the next agent what was done:
-    - Which files were modified
-    - What the root cause turned out to be
-    - Any trade-offs made during implementation
-    - Why 'wont_fix' if that is the chosen status
-
-    improvement_id: the ID returned by file_improvement()
-    resolution_notes: what was done and why
-    status: "done" | "wont_fix" (default: "done")
-    """
-    svcs = await _get_services()
-    result = await svcs.db.resolve_improvement(
-        improvement_id=improvement_id,
-        resolution_notes=resolution_notes,
-        status=status,
-    )
-    return json.dumps(result)
-
-
 # ── Performance detectors ─────────────────────────────────────────────────────
 
 @mcp.tool()
-async def check_performance(project_id: str) -> str:
+async def check_performance(project_id: str, exclude_test_files: bool = True) -> str:
     """
     Surface potential performance concerns in an indexed project.
 
@@ -1148,7 +1095,9 @@ async def check_performance(project_id: str) -> str:
     from .performance import check_performance as _check
     from .guidance import compute_performance_guidance
     svcs = await _get_services()
-    findings = await _check(svcs.db, project_id, embeddings=svcs.embeddings)
+    await _check_read_access(project_id, svcs.db)
+    findings = await _check(svcs.db, project_id, embeddings=svcs.embeddings,
+                            exclude_test_files=exclude_test_files)
     return json.dumps({
         "project_id": project_id,
         "total": len(findings),
@@ -1181,6 +1130,7 @@ async def validate_proposed_code(
     """
     from .validate import validate_proposed_code as _validate
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     result = await _validate(code, target_file, project_id, svcs.db)
     return json.dumps(result.to_dict(), indent=2)
 
@@ -1214,6 +1164,7 @@ async def preflight_architecture(project_id: str) -> str:
     from .architecture_preflight import run_preflight
 
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     findings = await _check_perf(svcs.db, project_id, embeddings=svcs.embeddings)
     preflight = await run_preflight(
         svcs.db,
@@ -1245,6 +1196,7 @@ async def dismiss_performance_concern(
     reason: why this pattern is intentional or acceptable
     """
     svcs = await _get_services()
+    await check_permission(get_current_user(), project_id, "write", svcs.db)
     result = await svcs.decisions.log_decision(
         type="Performance",
         description=reason,
@@ -1286,6 +1238,7 @@ async def check_solid_principles(project_id: str) -> str:
     """
     from .solid import check_solid as _check
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     findings = await _check(svcs.db, project_id)
     by_principle: dict[str, int] = {}
     for f in findings:
@@ -1322,6 +1275,7 @@ async def dismiss_solid_concern(
     reason: why this pattern is intentional or acceptable
     """
     svcs = await _get_services()
+    await check_permission(get_current_user(), project_id, "write", svcs.db)
     result = await svcs.decisions.log_decision(
         type="SOLID",
         description=reason,
@@ -1355,6 +1309,7 @@ async def index_schema_objects(project_id: str, include_db_tables: bool = False)
     """
     from .schema_objects import index_schema_objects as _index
     svcs = await _get_services()
+    await check_permission(get_current_user(), project_id, "write", svcs.db)
     result = await _index(
         svcs.db, svcs.embeddings, project_id,
         include_db_tables=include_db_tables,
@@ -1372,13 +1327,15 @@ async def http_get_functions_for_files(request: Request) -> JSONResponse:
     Used by the post-commit hook for function-level decision linkage.
     """
     try:
+        svcs_pre = await _get_services()
         data = await request.json()
+        _pid_ff = data.get("project_id", "")
+        await _require_http_read(request, svcs_pre.db, _pid_ff)
         files: list[str] = data.get("files", [])
         project_id: str | None = data.get("project_id") or None
         if not files:
             return JSONResponse({"function_ids": []})
-        svcs = await _get_services()
-        db = svcs.db
+        db = svcs_pre.db
         ids: list[str] = []
         for fp in files:
             nodes = await db.get_nodes_by_file(fp, project_id)
@@ -1398,14 +1355,15 @@ async def http_search(request: Request) -> JSONResponse:
     Used by the web dashboard search panel.
     """
     try:
+        svcs = await _get_services()
         data = await request.json()
         snippet    = data.get("snippet", "")
-        project_id = data.get("project_id") or None
+        project_id = data.get("project_id") or ""
         top_k      = int(data.get("top_k", 10))
+        await _require_http_read(request, svcs.db, project_id)
         if not snippet:
             return JSONResponse({"results": []})
-        svcs = await _get_services()
-        results = await svcs.embeddings.query_similar(snippet, top_k, project_id)
+        results = await svcs.embeddings.query_similar(snippet, top_k, project_id or None)
         return JSONResponse({"results": results})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -1418,10 +1376,43 @@ async def http_list_projects(request: Request) -> JSONResponse:
     """GET /api/projects — returns all registered projects with stats."""
     try:
         svcs = await _get_services()
-        projects = await svcs.db.list_projects()
+        _user = await _require_valid_key(request, svcs.db)
+        _accessible = await svcs.db.get_accessible_project_ids(_user["id"])
+        _all = await svcs.db.list_projects()
+        projects = [p for p in _all if p["id"] in _accessible]
         return JSONResponse({"projects": projects})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
+# ── HTTP auth helper (write endpoints only) ───────────────────────────────────────
+
+async def _require_valid_key(request: Request, db: "CallGraphDB") -> dict:
+    """Validate X-API-Key header for HTTP write endpoints. Raises 401 if missing/invalid."""
+    key = request.headers.get("X-API-Key")
+    if not key:
+        raise HTTPException(status_code=401, detail="Authentication required — include X-API-Key header")
+    user = await db.get_user_by_key(key)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return user
+
+
+async def _check_read_access(project_id: str, db: "CallGraphDB") -> None:
+    """Require a valid API key for all MCP reads; additionally enforce project access when project_id is given."""
+    user = get_current_user()
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if project_id:
+        await check_permission(user, project_id, "read", db)
+
+
+async def _require_http_read(request: Request, db: "CallGraphDB", project_id: str = "") -> dict:
+    """Validate X-API-Key for HTTP GET/read endpoints; check project read access when project_id given."""
+    user = await _require_valid_key(request, db)
+    if project_id:
+        await check_permission(user, project_id, "read", db)
+    return user
 
 
 # ── Bulk index HTTP endpoint (used by phronosis-import slash command) ──────────────
@@ -1438,13 +1429,15 @@ async def http_index_bulk(request: Request) -> JSONResponse:
     project_id is derived from project_root's basename if not provided.
     """
     try:
+        svcs = await _get_services()
+        _user = await _require_valid_key(request, svcs.db)
         data = await request.json()
         project_root: str = data.get("project_root", "")
         project_id: str = data.get("project_id", "") or _derive_project_id(project_root)
+        await check_permission(_user, project_id, "write", svcs.db)
         files: dict[str, str] = data.get("files", {})
         if not files:
             return JSONResponse({"status": "error", "detail": "no files provided"}, status_code=400)
-        svcs = await _get_services()
         result = await svcs.indexer.index_changes(
             list(files.keys()), files, project_root=project_root, project_id=project_id
         )
@@ -1471,6 +1464,8 @@ async def git_hook_index(request: Request) -> JSONResponse:
     project_id is derived from project_root's basename if not provided.
     """
     try:
+        svcs = await _get_services()
+        await _require_valid_key(request, svcs.db)
         data = await request.json()
         changed_files: list[str] = data.get("changed_files", [])
         project_root: str = data.get("project_root", "")
@@ -1486,11 +1481,12 @@ async def git_hook_index(request: Request) -> JSONResponse:
             except FileNotFoundError:
                 pass  # deleted file — will be purged by index_changes
 
-        svcs = await _get_services()
         result = await svcs.indexer.index_changes(
             changed_files, file_contents, project_root=project_root, project_id=project_id
         )
         return JSONResponse(result)
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1536,9 +1532,10 @@ async def http_log_decision(request: Request) -> JSONResponse:
 async def http_list_contracts(request: Request) -> JSONResponse:
     """GET /api/contracts?project_id=myapp"""
     try:
-        project_id = request.query_params.get("project_id") or None
+        project_id = request.query_params.get("project_id") or ""
         svcs = await _get_services()
-        result = await svcs.contracts.list_contracts(project_id)
+        await _require_http_read(request, svcs.db, project_id)
+        result = await svcs.contracts.list_contracts(project_id or None)
         return JSONResponse({"contracts": result})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -1548,8 +1545,11 @@ async def http_list_contracts(request: Request) -> JSONResponse:
 async def http_create_contract(request: Request) -> JSONResponse:
     """POST /api/contracts {title, natural_language, project_ids, function_ids}"""
     try:
-        data = await request.json()
         svcs = await _get_services()
+        _user = await _require_valid_key(request, svcs.db)
+        data = await request.json()
+        for _pid in data.get("project_ids") or []:
+            await check_permission(_user, _pid, "write", svcs.db)
         result = await svcs.contracts.generate_draft(
             project_ids=data.get("project_ids", []),
             title=data.get("title", ""),
@@ -1566,8 +1566,12 @@ async def http_update_contract(request: Request) -> JSONResponse:
     """PUT /api/contracts/{id} {violation_examples, compliance_examples}"""
     try:
         contract_id = request.path_params["contract_id"]
-        data = await request.json()
         svcs = await _get_services()
+        _user = await _require_valid_key(request, svcs.db)
+        _ct = await svcs.db.get_contract(contract_id)
+        for _pid in (_ct or {}).get("project_ids") or []:
+            await check_permission(_user, _pid, "write", svcs.db)
+        data = await request.json()
         result = await svcs.contracts.update_examples(
             contract_id,
             data.get("violation_examples", []),
@@ -1584,6 +1588,10 @@ async def http_approve_contract(request: Request) -> JSONResponse:
     try:
         contract_id = request.path_params["contract_id"]
         svcs = await _get_services()
+        _user = await _require_valid_key(request, svcs.db)
+        _ct = await svcs.db.get_contract(contract_id)
+        for _pid in (_ct or {}).get("project_ids") or []:
+            await check_permission(_user, _pid, "write", svcs.db)
         result = await svcs.contracts.approve(contract_id)
         return JSONResponse(result)
     except Exception as exc:
@@ -1602,6 +1610,10 @@ async def http_deactivate_contract(request: Request) -> JSONResponse:
     try:
         contract_id = request.path_params["contract_id"]
         svcs = await _get_services()
+        _user = await _require_valid_key(request, svcs.db)
+        _ct = await svcs.db.get_contract(contract_id)
+        for _pid in (_ct or {}).get("project_ids") or []:
+            await check_permission(_user, _pid, "write", svcs.db)
         await svcs.contracts.deactivate(contract_id)
         return JSONResponse({"status": "ok"})
     except Exception as exc:
@@ -1636,6 +1648,7 @@ async def http_project_home(request: Request) -> JSONResponse:
     try:
         project_id = request.path_params["project_id"]
         svcs = await _get_services()
+        await _require_http_read(request, svcs.db, project_id)
         result = await svcs.arch.get_project_home(project_id, max_age_seconds=1800)
         return JSONResponse(result)
     except Exception as exc:
@@ -1646,9 +1659,10 @@ async def http_project_home(request: Request) -> JSONResponse:
 async def http_list_violations(request: Request) -> JSONResponse:
     """GET /api/violations?project_id=myapp"""
     try:
-        project_id = request.query_params.get("project_id") or None
+        project_id = request.query_params.get("project_id") or ""
         svcs = await _get_services()
-        violations = await svcs.db.list_violations(project_id)
+        await _require_http_read(request, svcs.db, project_id)
+        violations = await svcs.db.list_violations(project_id or None)
         return JSONResponse({"violations": violations})
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
@@ -1680,6 +1694,7 @@ async def get_function_context(
     """
     import asyncio as _asyncio
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     db = svcs.db
     decisions = svcs.decisions
     embeddings = svcs.embeddings
@@ -1804,6 +1819,7 @@ async def find_dependents(
     file location, and signature — ordered nearest-first.
     """
     svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
     result = await svcs.db.get_impact_radius(symbol, depth, project_id or None)
     return json.dumps(result)
 
@@ -1829,6 +1845,7 @@ async def index_lsif(path: str, project_id: str = "") -> str:
     - Bootstrapping a project from an existing Sourcegraph or GitHub index export
     """
     svcs = await _get_services()
+    await check_permission(get_current_user(), project_id or "default", "write", svcs.db)
     result = await svcs.indexer.index_lsif(path, project_id=project_id)
     return json.dumps(result)
 
@@ -1850,6 +1867,7 @@ async def index_scip(path: str, project_id: str = "") -> str:
     project_id: namespace for the indexed symbols (defaults to the filename stem).
     """
     svcs = await _get_services()
+    await check_permission(get_current_user(), project_id or "default", "write", svcs.db)
     result = await svcs.indexer.index_scip(path, project_id=project_id)
     return json.dumps(result)
 
@@ -1862,6 +1880,8 @@ async def http_reembed_project(request: Request) -> JSONResponse:
     try:
         project_id = request.path_params["project_id"]
         svcs = await _get_services()
+        _user = await _require_valid_key(request, svcs.db)
+        await check_permission(_user, project_id, "write", svcs.db)
         result = await svcs.indexer.reembed_project(project_id)
         return JSONResponse(result)
     except Exception as exc:
@@ -1887,10 +1907,10 @@ async def http_enrich_summaries(request: Request) -> JSONResponse:
             pass
         limit: int = int(body.get("limit", 500))
         force: bool = bool(body.get("force", False))
-        raw_key = request.headers.get("X-API-Key")
         svcs = await _get_services()
-        user = await svcs.db.get_user_by_key(raw_key) if raw_key else None
-        user_id = user["id"] if user else "anon"
+        user = await _require_valid_key(request, svcs.db)
+        await check_permission(user, project_id, "write", svcs.db)
+        user_id = user["id"]
         try:
             job = _check_and_enqueue(user_id, run_enrich_summaries, project_id, limit, force, job_timeout=7200)
         except RuntimeError:
