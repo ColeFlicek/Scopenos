@@ -199,7 +199,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     key_hash   TEXT NOT NULL UNIQUE,
     name       TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
-    last_used  TEXT
+    last_used  TEXT,
+    revoked_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
@@ -251,3 +252,6 @@ CREATE TABLE IF NOT EXISTS module_patterns (
     computed_at        TEXT NOT NULL,
     PRIMARY KEY (project_id, module)
 );
+
+-- Migrations (safe to re-run — IF NOT EXISTS / IF EXISTS guards)
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoked_at TEXT;

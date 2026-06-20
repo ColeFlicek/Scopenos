@@ -58,6 +58,20 @@ async def test_get_user_by_invalid_key_returns_none(db):
 
 
 @pytest.mark.asyncio
+async def test_get_user_by_revoked_key_returns_none(db):
+    user = await db.create_user("revoked@example.com")
+    raw_key = await db.create_api_key(user["id"], name="revoked key")
+    import hashlib
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    async with db._pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE api_keys SET revoked_at = NOW()::text WHERE key_hash = $1", key_hash
+        )
+    result = await db.get_user_by_key(raw_key)
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_get_user_by_key_updates_last_used(db):
     user = await db.create_user("bob@example.com")
     raw_key = await db.create_api_key(user["id"])

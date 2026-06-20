@@ -60,7 +60,57 @@ def load_tasks(
             pass_to_pass=_parse_list(row["PASS_TO_PASS"]),
         ))
 
-    return sorted(tasks, key=lambda t: t.instance_id)
+    return sorted(tasks, key=lambda t: t.instance_id)  # stable for dedup; caller re-sorts by date
+
+
+def load_tasks_chronological(
+    repo: str = "pytest-dev/pytest",
+    cache_dir: str | None = None,
+) -> list[BenchmarkTask]:
+    """Load tasks sorted oldest→newest by created_at (for commit-stepping with index_changes)."""
+    from datasets import load_dataset
+
+    ds = load_dataset("princeton-nlp/SWE-bench_Lite", split="test", cache_dir=cache_dir)
+
+    tasks = []
+    seen_commits: set[str] = set()
+
+    for row in sorted(ds, key=lambda r: r.get("created_at", "")):
+        if row["repo"] != repo:
+            continue
+        commit = row["base_commit"]
+        if commit in seen_commits:
+            continue
+        seen_commits.add(commit)
+
+        fail = _parse_list(row["FAIL_TO_PASS"])
+        if not fail:
+            continue
+
+        tasks.append(BenchmarkTask(
+            instance_id=row["instance_id"],
+            repo=row["repo"],
+            base_commit=commit,
+            problem_statement=row["problem_statement"],
+            fail_to_pass=fail,
+            pass_to_pass=_parse_list(row["PASS_TO_PASS"]),
+        ))
+
+    return tasks
+
+
+def select_calibration_tasks(tasks: list[BenchmarkTask], n_hard: int = 3, n_random: int = 2) -> list[BenchmarkTask]:
+    """
+    Pick n_hard tasks with the most FAIL_TO_PASS tests (proxy for complexity)
+    plus n_random from the remainder.
+    """
+    import random
+    sorted_by_complexity = sorted(tasks, key=lambda t: len(t.fail_to_pass), reverse=True)
+    hard = sorted_by_complexity[:n_hard]
+    rest = [t for t in tasks if t not in hard]
+    random.seed(42)
+    easy = random.sample(rest, min(n_random, len(rest)))
+    return hard + easy
 
 
 def _parse_list(value) -> list[str]:

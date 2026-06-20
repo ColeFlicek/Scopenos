@@ -1440,6 +1440,9 @@ async def http_index_bulk(request: Request) -> JSONResponse:
         data = await request.json()
         project_root: str = data.get("project_root", "")
         project_id: str = data.get("project_id", "") or _derive_project_id(project_root)
+        # Auto-grant owner if this project has no owner yet (first index = you own it)
+        if not await svcs.db.has_any_owner(project_id):
+            await svcs.db.grant_project_access(_user["id"], project_id, "owner")
         await check_permission(_user, project_id, "write", svcs.db)
         files: dict[str, str] = data.get("files", {})
         if not files:
@@ -1521,6 +1524,7 @@ async def http_log_decision(request: Request) -> JSONResponse:
             return JSONResponse({"status": "error", "detail": "description required"}, status_code=400)
         project_id = data.get("project_id") or "default"
         svcs = await _get_services()
+        await _require_valid_key(request, svcs.db)
         result = await svcs.decisions.log_decision(
             type=data.get("type", "Patch"),
             description=description,

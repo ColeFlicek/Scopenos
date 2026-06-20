@@ -36,6 +36,7 @@ def evaluate(
     task: BenchmarkTask,
     agent_result: AgentResult,
     repo_path: str,
+    venv_python: str = "python",
 ) -> EvaluationResult:
     """
     Apply agent_result.patch to a clean checkout and run fail_to_pass tests.
@@ -80,7 +81,7 @@ def evaluate(
         subprocess.run(["git", "apply", patch_file], cwd=eval_path, check=True)
 
         # Run only the fail_to_pass tests — fast and focused
-        passed, failed = _run_tests(task.fail_to_pass, eval_path)
+        passed, failed = _run_tests(task.fail_to_pass, eval_path, venv_python)
 
     return EvaluationResult(
         instance_id=task.instance_id,
@@ -91,43 +92,49 @@ def evaluate(
     )
 
 
-def _run_tests(test_ids: list[str], repo_path: str) -> tuple[list[str], list[str]]:
+def _run_tests(test_ids: list[str], repo_path: str, python: str = "python") -> tuple[list[str], list[str]]:
     """Run a list of pytest node IDs and return (passed, failed)."""
     if not test_ids:
         return [], []
 
     result = subprocess.run(
-        ["python", "-m", "pytest", "--no-header", "-q", "--tb=no", *test_ids],
+        [python, "-m", "pytest", "--no-header", "-v", "--tb=no", *test_ids],
         cwd=repo_path,
         capture_output=True,
         text=True,
         timeout=120,
     )
 
-    passed = []
-    failed = []
+    return _parse_pytest_output(result.stdout + result.stderr, test_ids)
 
-    for line in result.stdout.splitlines():
+
+def _parse_pytest_output(output: str, test_ids: list[str]) -> tuple[list[str], list[str]]:
+    """Parse pytest -v output into (passed, failed) lists.
+
+    Handles both per-test lines from -v mode:
+      path::test_name PASSED   [33%]
+      path::test_name FAILED   [33%]
+    And the short test summary (present in both -q and -v):
+      FAILED path::test_name - reason
+    Tests not mentioned in either are marked failed (e.g. collection errors).
+    """
+    passed: list[str] = []
+    failed: list[str] = []
+
+    for line in output.splitlines():
         line = line.strip()
-        if " PASSED" in line or line.endswith("passed"):
+        if " PASSED" in line:
             for tid in test_ids:
-                if _test_id_in_line(tid, line) and tid not in passed:
+                if tid.split("::")[-1] in line and tid not in passed:
                     passed.append(tid)
-        elif " FAILED" in line or " ERROR" in line:
+        elif " FAILED" in line or line.startswith("FAILED ") or " ERROR" in line:
             for tid in test_ids:
-                if _test_id_in_line(tid, line) and tid not in failed:
+                if tid.split("::")[-1] in line and tid not in failed:
                     failed.append(tid)
 
-    # Any test not explicitly seen as passed is considered failed
     seen = set(passed) | set(failed)
     for tid in test_ids:
         if tid not in seen:
             failed.append(tid)
 
     return passed, failed
-
-
-def _test_id_in_line(test_id: str, line: str) -> bool:
-    # Match by the test function name (last :: component)
-    test_name = test_id.split("::")[-1]
-    return test_name in line

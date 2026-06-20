@@ -142,7 +142,7 @@ fi
 
 # ── Log decision ────────────────────────────────────────────────────────────────
 
-PHRONOSIS_PROJECT_ID="$PROJECT_ID" PHRONOSIS_URL="$PHRONOSIS_URL" REPO_ROOT="$REPO_ROOT" python3 - <<'PYEOF'
+PHRONOSIS_PROJECT_ID="$PROJECT_ID" PHRONOSIS_URL="$PHRONOSIS_URL" REPO_ROOT="$REPO_ROOT" PHRONOSIS_API_KEY="$PHRONOSIS_API_KEY" python3 - <<'PYEOF'
 import json, os, subprocess, sys
 try:
     from urllib.request import urlopen, Request as UReq
@@ -205,10 +205,11 @@ try:
         "project_id": project_id,
     }).encode()
 
+    api_key = os.environ.get("PHRONOSIS_API_KEY", "")
     req = UReq(
         f"{phronosis_url}/api/decisions",
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-API-Key": api_key},
         method="POST",
     )
     with urlopen(req, timeout=10) as r:

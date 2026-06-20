@@ -1,33 +1,35 @@
 #!/usr/bin/env python3
 """
-Run the Phronosis SWE-bench benchmark.
+Phronosis SWE-bench benchmark — setup and evaluation CLI.
+
+This script handles the deterministic parts of the benchmark:
+cloning repos, creating venvs, indexing with Phronosis, applying patches,
+running tests, and writing results.
+
+The Claude Code session handles spawning the actual agent subagents
+(Path A and Path B) and capturing their diffs.
 
 Usage:
-    # Dry run — show tasks without running agents
+    # Show what tasks would run
     python -m benchmark.run --dry-run
+    python -m benchmark.run --calibration --dry-run
 
-    # Run Path A (baseline) only
-    python -m benchmark.run --path a
+    # Set up a single task environment (called by the Claude Code orchestrator)
+    python -m benchmark.run setup <instance_id> [--path a|b] [--results-dir results]
 
-    # Run Path B (Phronosis) only
-    python -m benchmark.run --path b
+    # Evaluate a patch already written to results/{instance_id}/path_{a|b}/patch.diff
+    python -m benchmark.run evaluate <instance_id> --path a|b [--results-dir results]
 
-    # Run both paths (full benchmark)
-    python -m benchmark.run
+    # Print summary of completed results
+    python -m benchmark.run summary [--results-dir results]
 
-    # Limit to first N tasks
-    python -m benchmark.run --limit 3
-
-Options:
-    --repo REPO        SWE-bench repo to benchmark (default: pytest-dev/pytest)
-    --results-dir DIR  Output directory for results (default: results/)
-    --phronosis-url URL     Phronosis server URL for Path B (default: $PHRONOSIS_URL or http://localhost:3004)
-    --phronosis-dsn DSN     Postgres DSN for Phronosis indexing (default: $DATABASE_URL)
-    --keep-repos       Don't delete cloned repos after each task (useful for debugging)
+    # List tasks (for the orchestrator to iterate over)
+    python -m benchmark.run list [--calibration] [--repo pytest-dev/pytest]
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import tempfile
@@ -35,89 +37,164 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmark.loader import load_tasks
-from benchmark.repo_setup import setup_repo, cleanup_repo
-from benchmark.runner import run_agent
+from benchmark.loader import load_tasks_chronological, select_calibration_tasks
+from benchmark.repo_setup import setup_repo, cleanup_repo, RepoContext
+from benchmark.runner import capture_patch, save_patch, AgentResult
 from benchmark.evaluator import evaluate
 from benchmark.report import write_task_results, write_summary, print_summary
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Phronosis SWE-bench benchmark")
-    parser.add_argument("--repo", default="pytest-dev/pytest")
-    parser.add_argument("--path", choices=["a", "b", "both"], default="both")
-    parser.add_argument("--limit", type=int, default=0, help="Max tasks to run (0 = all)")
-    parser.add_argument("--results-dir", default="results")
-    parser.add_argument("--phronosis-url", default=os.getenv("PHRONOSIS_URL", "http://localhost:3004"))
-    parser.add_argument("--phronosis-dsn", default=os.getenv("DATABASE_URL", ""))
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--keep-repos", action="store_true")
-    args = parser.parse_args()
+# Global workdir shared across setup calls in one session
+_WORKDIR_FILE = Path("/tmp/phronosis-bench-workdir")
 
-    run_a = args.path in ("a", "both")
-    run_b = args.path in ("b", "both")
 
-    print("Loading SWE-bench tasks…")
-    tasks = load_tasks(repo=args.repo)
-    if args.limit:
-        tasks = tasks[:args.limit]
-    print(f"Tasks: {len(tasks)} ({args.repo})")
+def _get_or_create_workdir() -> str:
+    if _WORKDIR_FILE.exists():
+        wd = _WORKDIR_FILE.read_text().strip()
+        if Path(wd).exists():
+            return wd
+    wd = tempfile.mkdtemp(prefix="phronosis-bench-")
+    _WORKDIR_FILE.write_text(wd)
+    return wd
 
-    if args.dry_run:
-        for t in tasks:
-            print(f"  {t.instance_id}  base={t.base_commit[:8]}  tests={len(t.fail_to_pass)}")
-        return
 
-    Path(args.results_dir).mkdir(exist_ok=True)
-    workdir = tempfile.mkdtemp(prefix="phronosis-bench-repos-")
+def cmd_list(args) -> None:
+    tasks = load_tasks_chronological(repo=args.repo)
+    if args.calibration:
+        tasks = select_calibration_tasks(tasks)
+    for t in tasks:
+        print(json.dumps({
+            "instance_id": t.instance_id,
+            "base_commit": t.base_commit,
+            "fail_to_pass_count": len(t.fail_to_pass),
+        }))
 
-    for i, task in enumerate(tasks, 1):
-        print(f"\n[{i}/{len(tasks)}] {task.instance_id}")
 
-        # --- Path A setup (no Phronosis index needed) ---
-        ctx_a = setup_repo(task, phronosis_index=False, workdir=workdir)
+def cmd_setup(args) -> None:
+    tasks = load_tasks_chronological(repo=args.repo)
+    task = next((t for t in tasks if t.instance_id == args.instance_id), None)
+    if not task:
+        print(f"ERROR: task {args.instance_id!r} not found", file=sys.stderr)
+        sys.exit(1)
 
-        agent_a = None
-        eval_a = None
-        if run_a:
-            print("  Running Path A (baseline)…")
-            agent_a = run_agent(task, ctx_a, path="a")
-            print(f"  Path A: {len(agent_a.tool_calls)} tool calls, submitted={agent_a.submitted}")
-            eval_a = evaluate(task, agent_a, ctx_a.repo_path)
-            print(f"  Path A resolved: {eval_a.resolved}")
+    workdir = _get_or_create_workdir()
+    phronosis_index = args.path == "b"
 
-        # --- Path B setup (with Phronosis index) ---
-        agent_b = None
-        eval_b = None
-        if run_b:
-            ctx_b = setup_repo(
-                task,
-                phronosis_index=True,
-                phronosis_dsn=args.phronosis_dsn,
-                workdir=workdir,
-            )
-            print("  Running Path B (Phronosis)…")
-            agent_b = run_agent(task, ctx_b, path="b", phronosis_base_url=args.phronosis_url)
-            print(f"  Path B: {len(agent_b.tool_calls)} tool calls, submitted={agent_b.submitted}")
-            eval_b = evaluate(task, agent_b, ctx_b.repo_path)
-            print(f"  Path B resolved: {eval_b.resolved}")
+    ctx = setup_repo(
+        task,
+        phronosis_index=phronosis_index,
+        phronosis_dsn=os.getenv("DATABASE_URL", ""),
+        workdir=workdir,
+    )
 
-            if not args.keep_repos:
-                cleanup_repo(ctx_b)
+    # Write context for the orchestrator to consume
+    ctx_file = Path(args.results_dir) / task.instance_id / f"path_{args.path}" / "ctx.json"
+    ctx_file.parent.mkdir(parents=True, exist_ok=True)
+    ctx_file.write_text(json.dumps({
+        "instance_id": task.instance_id,
+        "path": args.path,
+        "repo_path": ctx.repo_path,
+        "venv_python": ctx.venv_python,
+        "project_id": ctx.project_id,
+        "phronosis_indexed": ctx.phronosis_indexed,
+        "fail_to_pass": task.fail_to_pass,
+    }, indent=2))
 
-        if not args.keep_repos:
-            cleanup_repo(ctx_a)
+    print(json.dumps({
+        "status": "ready",
+        "repo_path": ctx.repo_path,
+        "venv_python": ctx.venv_python,
+        "project_id": ctx.project_id,
+        "ctx_file": str(ctx_file),
+    }))
 
-        # Write results (skip if we only ran one path)
-        if agent_a and agent_b:
-            task_dir = write_task_results(
-                task, agent_a, eval_a, agent_b, eval_b,
-                results_dir=args.results_dir,
-            )
-            print(f"  Results: {task_dir}")
 
+def cmd_evaluate(args) -> None:
+    tasks = load_tasks_chronological(repo=args.repo)
+    task = next((t for t in tasks if t.instance_id == args.instance_id), None)
+    if not task:
+        print(f"ERROR: task {args.instance_id!r} not found", file=sys.stderr)
+        sys.exit(1)
+
+    path_dir = Path(args.results_dir) / task.instance_id / f"path_{args.path}"
+    ctx_file = path_dir / "ctx.json"
+    patch_file = path_dir / "patch.diff"
+
+    if not ctx_file.exists():
+        print(f"ERROR: ctx.json not found — run setup first", file=sys.stderr)
+        sys.exit(1)
+
+    ctx_data = json.loads(ctx_file.read_text())
+    patch = patch_file.read_text() if patch_file.exists() else ""
+
+    agent_result = AgentResult(
+        instance_id=task.instance_id,
+        path=args.path,
+        patch=patch,
+        tool_calls=[],  # filled in by orchestrator if desired
+        iterations=0,
+        submitted=bool(patch.strip()),
+    )
+
+    result = evaluate(
+        task,
+        agent_result,
+        ctx_data["repo_path"],
+        venv_python=ctx_data["venv_python"],
+    )
+
+    out = path_dir / "evaluation.json"
+    out.write_text(json.dumps({
+        "resolved": result.resolved,
+        "patch_applied": result.patch_applied,
+        "tests_passed": result.tests_passed,
+        "tests_failed": result.tests_failed,
+        "error": result.error,
+    }, indent=2))
+
+    print(json.dumps({
+        "resolved": result.resolved,
+        "tests_passed": result.tests_passed,
+        "tests_failed": result.tests_failed,
+        "error": result.error,
+    }))
+
+
+def cmd_summary(args) -> None:
     summary = write_summary(args.results_dir)
     print_summary(summary)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Phronosis SWE-bench benchmark CLI")
+    parser.add_argument("--repo", default="pytest-dev/pytest")
+    parser.add_argument("--results-dir", default="benchmark/results")
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_list = sub.add_parser("list", help="List tasks (JSON lines)")
+    p_list.add_argument("--calibration", action="store_true")
+
+    p_setup = sub.add_parser("setup", help="Clone + venv + index one task")
+    p_setup.add_argument("instance_id")
+    p_setup.add_argument("--path", choices=["a", "b"], required=True)
+
+    p_eval = sub.add_parser("evaluate", help="Apply patch and run tests")
+    p_eval.add_argument("instance_id")
+    p_eval.add_argument("--path", choices=["a", "b"], required=True)
+
+    sub.add_parser("summary", help="Print aggregate results")
+
+    args = parser.parse_args()
+
+    if args.command == "list":
+        cmd_list(args)
+    elif args.command == "setup":
+        cmd_setup(args)
+    elif args.command == "evaluate":
+        cmd_evaluate(args)
+    elif args.command == "summary":
+        cmd_summary(args)
 
 
 if __name__ == "__main__":

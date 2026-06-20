@@ -28,6 +28,7 @@ import os
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 PHRONOSIS_URL = os.environ.get("PHRONOSIS_URL", "http://100.71.88.106:3004")
+PHRONOSIS_API_KEY = os.environ.get("PHRONOSIS_API_KEY", "")
 DELAY_BETWEEN_CALLS = 0.5  # seconds — each call embeds via OpenAI/Ollama
 
 
@@ -114,7 +115,7 @@ def post_decision(payload: dict) -> dict:
     req = Request(
         f"{PHRONOSIS_URL}/api/decisions",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-API-Key": PHRONOSIS_API_KEY},
         method="POST",
     )
     with urlopen(req, timeout=30) as r:

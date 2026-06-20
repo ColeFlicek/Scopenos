@@ -1552,7 +1552,7 @@ class CallGraphDB:
         async with self._db.execute(
             """SELECT u.id, u.email, u.plan, u.created_at
                FROM api_keys k JOIN users u ON u.id = k.user_id
-               WHERE k.key_hash = ?""",
+               WHERE k.key_hash = ? AND k.revoked_at IS NULL""",
             (key_hash,),
         ) as cur:
             row = await cur.fetchone()
@@ -1578,6 +1578,26 @@ class CallGraphDB:
             async for row in cur:
                 ids.add(row[0])
         return ids
+
+    async def grant_project_access(
+        self, user_id: str, project_id: str, role: str = "owner"
+    ) -> None:
+        """Grant user_id the given role on project_id. No-op if already granted."""
+        await self._db.execute(
+            """INSERT INTO project_access (user_id, project_id, role)
+               VALUES (?, ?, ?)
+               ON CONFLICT (user_id, project_id) DO UPDATE SET role = excluded.role""",
+            (user_id, project_id, role),
+        )
+        await self._db.commit()
+
+    async def has_any_owner(self, project_id: str) -> bool:
+        """Return True if any user has owner access to this project."""
+        async with self._db.execute(
+            "SELECT 1 FROM project_access WHERE project_id = ? AND role = 'owner' LIMIT 1",
+            (project_id,),
+        ) as cur:
+            return await cur.fetchone() is not None
 
     async def check_project_access(
         self, user_id: str, project_id: str, operation: str
