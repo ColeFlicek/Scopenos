@@ -944,21 +944,26 @@ async def get_project_home(project_id: str) -> str:
     start of any session before reading files or forming an implementation plan.
 
     Returns in a single call:
-    - subsystems: module groups with function counts, anchor class, and what it does
-    - connections: which subsystems call which (the wiring diagram)
+    - subsystems: top-30 module groups, each with:
+        * function_count
+        * anchor: the most-called class (representative of the subsystem)
+        * anchor_summary: what the anchor does (80 chars)
+        * top_functions: top-5 functions by caller count — tells you what this
+          subsystem EXPORTS and does, without reading a file
+    - connections: top-30 cross-subsystem wiring pairs by call volume
     - chokepoints: functions everything depends on — touch carefully
     - entry_points: top of the call graph (nothing calls these)
     - risk_surface: high-churn AND high-impact functions — highest change risk
-    - health: contract compliance, top_knowledge_gaps (ranked by caller count), churn hotspots
+    - health: contract compliance, top_knowledge_gaps, churn hotspots
     - recent_decisions: what changed in this codebase recently and why
 
-    This replaces reading files for architectural understanding. After this call,
-    use query_similar_functions / get_impact_radius for specific functions, then
-    Read() only for exact implementation of the function you are about to modify.
-
-    subsystems and connections are capped at 30 entries each to keep the response
-    compact. Call get_subsystem_detail(project_id, subsystem_name) to get full
-    connection lists and all functions for any subsystem shown above.
+    HOW TO USE:
+    1. Scan top_functions in each subsystem to identify which subsystem contains
+       the code you need — no grep required.
+    2. Call get_subsystem_detail(project_id, subsystem_name) to get ALL functions
+       and connections for that one subsystem.
+    3. Use query_similar_functions for semantic search across all subsystems.
+    4. Read() only for the exact implementation of the function you will edit.
     """
     svcs = await _get_services()
     await _check_read_access(project_id, svcs.db)

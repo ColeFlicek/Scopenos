@@ -55,6 +55,9 @@ class ArchitectureAnalyzer:
     _SUBSYSTEM_OVERVIEW_LIMIT = 30
     _CONNECTION_OVERVIEW_LIMIT = 30
 
+    # Top functions to surface per subsystem in the compact overview.
+    _TOP_FUNCTIONS_PER_SUBSYSTEM = 5
+
     def _build_subsystems(self, data: GraphData, limit: int | None = None) -> list[dict]:
         subsystem_nodes: dict[str, list[dict]] = {}
         for n in data.nodes:
@@ -64,17 +67,35 @@ class ArchitectureAnalyzer:
         subsystems = []
         for s_name, nodes in sorted(subsystem_nodes.items(),
                                     key=lambda x: len(x[1]), reverse=True):
-            anchor = next(
-                (n for n in nodes if n["type"] in ("class", "ClassDef")), None
-            )
-            if anchor is None:
+            # Pick the most-called class as anchor (not just the first class found).
+            # First-found is usually alphabetical and rarely representative.
+            class_nodes = [n for n in nodes if n["type"] in ("class", "ClassDef")]
+            if class_nodes:
+                anchor = max(class_nodes, key=lambda n: data.caller_counts.get(n["id"], 0))
+            else:
                 anchor = max(nodes, key=lambda n: data.caller_counts.get(n["id"], 0))
+
+            # Top-N non-class functions by caller count — tells the agent what
+            # this subsystem does and what it exports, without reading a file.
+            fn_nodes = [n for n in nodes if n["type"] not in ("class", "ClassDef")]
+            top_fns = sorted(fn_nodes, key=lambda n: data.caller_counts.get(n["id"], 0), reverse=True)
+            top_fns = top_fns[:self._TOP_FUNCTIONS_PER_SUBSYSTEM]
+
             subsystems.append({
                 "name": s_name,
                 "function_count": len(nodes),
                 "anchor": anchor["id"],
                 # Compact summary for overview; full summary in get_subsystem_detail()
                 "anchor_summary": (anchor.get("summary") or "")[:80],
+                # Top functions by call frequency — the public interface of this subsystem
+                "top_functions": [
+                    {
+                        "name": n["name"],
+                        "id": n["id"],
+                        "callers": data.caller_counts.get(n["id"], 0),
+                    }
+                    for n in top_fns
+                ],
             })
 
         cap = limit if limit is not None else self._SUBSYSTEM_OVERVIEW_LIMIT
@@ -86,6 +107,7 @@ class ArchitectureAnalyzer:
                 "function_count": 0,
                 "anchor": "",
                 "anchor_summary": "Call get_subsystem_detail(name) for any subsystem above to see its full connections and functions.",
+                "top_functions": [],
             })
         return subsystems
 
@@ -134,24 +156,40 @@ class ArchitectureAnalyzer:
         """Full detail for one subsystem: all functions, all connections, full anchor summary."""
         nodes_in = [n for n in data.nodes if self._subsystem(n["id"]) == subsystem_name]
         if not nodes_in:
-            return {"error": f"No subsystem named {subsystem_name!r} found in this project."}
+            # Try prefix match for subsystems whose name is a prefix of the requested name
+            # (e.g. "django.db.models.sql" when stored as "django.db")
+            prefix_matches = {self._subsystem(n["id"]) for n in data.nodes
+                              if self._subsystem(n["id"]).startswith(subsystem_name)
+                              or subsystem_name.startswith(self._subsystem(n["id"]))}
+            hint = f" Did you mean one of: {sorted(prefix_matches)[:5]}?" if prefix_matches else ""
+            return {"error": f"No subsystem named {subsystem_name!r} found.{hint}"}
 
-        anchor = next(
-            (n for n in nodes_in if n["type"] in ("class", "ClassDef")), None
-        )
-        if anchor is None:
+        # Most-called class as anchor (same logic as overview for consistency)
+        class_nodes = [n for n in nodes_in if n["type"] in ("class", "ClassDef")]
+        if class_nodes:
+            anchor = max(class_nodes, key=lambda n: data.caller_counts.get(n["id"], 0))
+        else:
             anchor = max(nodes_in, key=lambda n: data.caller_counts.get(n["id"], 0))
 
-        # Top functions by caller count
-        top_fns = sorted(
-            nodes_in, key=lambda n: data.caller_counts.get(n["id"], 0), reverse=True
-        )[:50]
+        # All non-class functions sorted by caller count
+        fn_nodes = [n for n in nodes_in if n["type"] not in ("class", "ClassDef")]
+        top_fns = sorted(fn_nodes, key=lambda n: data.caller_counts.get(n["id"], 0), reverse=True)[:50]
+
+        # Synthesize a role description from anchor + top function names so the
+        # agent doesn't have to read source to understand what this subsystem does.
+        top_names = [n["name"] for n in top_fns[:8]]
+        anchor_summary = anchor.get("summary") or ""
+        role = (
+            f"{anchor_summary[:120]}  "
+            f"Key functions: {', '.join(top_names[:8])}."
+        ).strip()
 
         return {
             "subsystem": subsystem_name,
             "function_count": len(nodes_in),
             "anchor": anchor["id"],
-            "anchor_summary": anchor.get("summary") or "",
+            "anchor_summary": anchor_summary,
+            "role": role,
             "top_functions": [
                 {
                     "id": n["id"],
