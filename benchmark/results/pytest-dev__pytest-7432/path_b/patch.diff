@@ -1,0 +1,50 @@
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+index 7bd975e5a..c9bdfee89 100644
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -291,7 +291,7 @@ def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+             else:
+                 rep.outcome = "passed"
+                 rep.wasxfail = xfailed.reason
+-    elif (
++    if (
+         item._store.get(skipped_by_mark_key, True)
+         and rep.skipped
+         and type(rep.longrepr) is tuple
+diff --git a/testing/test_skipping.py b/testing/test_skipping.py
+index 0b1c0b49b..9b6d1b46b 100644
+--- a/testing/test_skipping.py
++++ b/testing/test_skipping.py
+@@ -219,6 +219,32 @@ class TestXFail:
+         assert str(callreport.longrepr) == "[XPASS(strict)] nope"
+         assert not hasattr(callreport, "wasxfail")
+ 
++    @pytest.mark.parametrize(
++        "test_input,expected",
++        [
++            (
++                ["-rs"],
++                ["SKIPPED [1] test_sample.py:2: unconditional skip", "*1 skipped*"],
++            ),
++            (
++                ["-rs", "--runxfail"],
++                ["SKIPPED [1] test_sample.py:2: unconditional skip", "*1 skipped*"],
++            ),
++        ],
++        ids=["test_input0-expected0", "test_input1-expected1"],
++    )
++    def test_xfail_run_with_skip_mark(self, testdir, test_input, expected):
++        testdir.makepyfile(
++            test_sample="""
++            import pytest
++            @pytest.mark.skip
++            def test_skip_location():
++                assert 0
++        """
++        )
++        result = testdir.runpytest(*test_input)
++        result.stdout.fnmatch_lines(expected)
++
+     def test_xfail_run_anyway(self, testdir):
+         testdir.makepyfile(
+             """

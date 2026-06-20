@@ -1,0 +1,97 @@
+diff --git a/django/db/backends/sqlite3/base.py b/django/db/backends/sqlite3/base.py
+index 24d07cc11a..bdab2a11e2 100644
+--- a/django/db/backends/sqlite3/base.py
++++ b/django/db/backends/sqlite3/base.py
+@@ -398,6 +398,26 @@ class SQLiteCursorWrapper(Database.Cursor):
+         return FORMAT_QMARK_REGEX.sub('?', query).replace('%%', '%')
+ 
+ 
++def _parse_tzname_to_tz(tzname):
++    """
++    Convert a timezone name string to a tzinfo object.
++
++    Timezone names of the form ``+HH:MM`` or ``-HH:MM`` (produced by
++    ``django.utils.timezone._get_timezone_name()`` for ``datetime.timezone``
++    instances) are not recognized by pytz, so they are parsed here and
++    converted to a ``datetime.timezone`` with the appropriate fixed offset.
++    """
++    if tzname and (tzname[0] == '+' or tzname[0] == '-'):
++        sign = 1 if tzname[0] == '+' else -1
++        try:
++            hh, mm = tzname[1:].split(':')
++            offset = datetime.timedelta(hours=int(hh), minutes=int(mm))
++            return datetime.timezone(sign * offset)
++        except (ValueError, IndexError):
++            pass
++    return pytz.timezone(tzname)
++
++
+ def _sqlite_datetime_parse(dt, tzname=None, conn_tzname=None):
+     if dt is None:
+         return None
+@@ -406,9 +426,9 @@ def _sqlite_datetime_parse(dt, tzname=None, conn_tzname=None):
+     except (TypeError, ValueError):
+         return None
+     if conn_tzname:
+-        dt = dt.replace(tzinfo=pytz.timezone(conn_tzname))
++        dt = dt.replace(tzinfo=_parse_tzname_to_tz(conn_tzname))
+     if tzname is not None and tzname != conn_tzname:
+-        dt = timezone.localtime(dt, pytz.timezone(tzname))
++        dt = timezone.localtime(dt, _parse_tzname_to_tz(tzname))
+     return dt
+ 
+ 
+diff --git a/django/utils/timezone.py b/django/utils/timezone.py
+index 58e92c1fa8..d1a12d4e7f 100644
+--- a/django/utils/timezone.py
++++ b/django/utils/timezone.py
+@@ -5,7 +5,7 @@ Timezone-related classes and functions.
+ import functools
+ import warnings
+ from contextlib import ContextDecorator
+-from datetime import datetime, timedelta, timezone, tzinfo
++from datetime import datetime, timedelta, timezone as _datetime_timezone, tzinfo
+ from threading import local
+ 
+ import pytz
+@@ -68,7 +68,7 @@ def get_fixed_timezone(offset):
+     sign = '-' if offset < 0 else '+'
+     hhmm = '%02d%02d' % divmod(abs(offset), 60)
+     name = sign + hhmm
+-    return timezone(timedelta(minutes=offset), name)
++    return _datetime_timezone(timedelta(minutes=offset), name)
+ 
+ 
+ # In order to avoid accessing settings at compile time,
+@@ -103,7 +103,30 @@ def get_current_timezone_name():
+ 
+ 
+ def _get_timezone_name(timezone):
+-    """Return the name of ``timezone``."""
++    """
++    Return the name of ``timezone``.
++
++    For ``datetime.timezone`` instances without an explicit name (where
++    ``tzname()`` returns ``UTC``, ``UTC+HH:MM``, or ``UTC-HH:MM``), return
++    the offset as ``+HH:MM`` or ``-HH:MM``. This avoids the ``UTC+HH:MM``
++    format that PostgreSQL interprets using POSIX convention (reversed sign).
++
++    Instances created with an explicit name (e.g.
++    ``datetime.timezone(timedelta(), 'myname')``) fall through to the
++    standard ``tzname()`` path so callers can use symbolic names.
++    """
++    if isinstance(timezone, _datetime_timezone):
++        name = timezone.tzname(None)
++        # Only apply the offset-format conversion when datetime.timezone
++        # generated the name automatically (``UTC``, ``UTC+HH:MM``,
++        # ``UTC-HH:MM``).  User-supplied names are left untouched.
++        if name == 'UTC' or (len(name) > 3 and name[:3] == 'UTC' and name[3] in ('+', '-')):
++            offset = timezone.utcoffset(None)
++            sign = '+' if offset.days >= 0 else '-'
++            seconds = abs(offset.days * 86400 + offset.seconds)
++            hours, seconds = divmod(seconds, 3600)
++            minutes = seconds // 60
++            return '%s%02d:%02d' % (sign, hours, minutes)
+     return timezone.tzname(None)
+ 
+ # Timezone selection functions.

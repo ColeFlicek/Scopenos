@@ -1,0 +1,59 @@
+diff --git a/src/_pytest/_code/code.py b/src/_pytest/_code/code.py
+index b19ee7c64..438df6823 100644
+--- a/src/_pytest/_code/code.py
++++ b/src/_pytest/_code/code.py
+@@ -238,7 +238,15 @@ class TracebackEntry:
+         return self.frame.f_locals
+ 
+     def getfirstlinesource(self) -> int:
+-        return self.frame.code.firstlineno
++        # In Python 3.9+, co_firstlineno points to the first decorator line
++        # rather than the def line. Advance past any decorator lines so that
++        # the source display starts at the actual function/class definition.
++        lineno = self.frame.code.firstlineno
++        source = self.frame.code.fullsource
++        if source is not None:
++            while lineno < len(source.lines) and source.lines[lineno].lstrip().startswith("@"):
++                lineno += 1
++        return lineno
+ 
+     def getsource(
+         self, astcache: Optional[Dict[Union[str, Path], ast.AST]] = None
+diff --git a/testing/code/test_source.py b/testing/code/test_source.py
+index 53e1bb985..1a8505853 100644
+--- a/testing/code/test_source.py
++++ b/testing/code/test_source.py
+@@ -641,3 +641,33 @@ def test_getstartingblock_multiline() -> None:
+     # fmt: on
+     values = [i for i in x.source.lines if i.strip()]
+     assert len(values) == 4
++
++
++def test_decorator() -> None:
++    """getfirstlinesource() must skip decorator lines (Python 3.9+ co_firstlineno issue)."""
++    import _pytest._code.code as _code
++
++    def simple_decorator(f):
++        return f
++
++    @simple_decorator
++    def decorated():
++        raise AssertionError("boom")
++
++    try:
++        decorated()
++    except AssertionError:
++        import sys
++        tb = sys.exc_info()[2]
++        # Walk to the innermost frame (inside decorated())
++        while tb.tb_next is not None:
++            tb = tb.tb_next
++        from _pytest._code.code import TracebackEntry
++        entry = TracebackEntry(tb)
++        first = entry.getfirstlinesource()
++        source = entry.frame.code.fullsource
++        assert source is not None
++        # The first source line must be the def line, not a decorator line
++        assert not source.lines[first].lstrip().startswith("@"), (
++            f"getfirstlinesource() returned a decorator line: {source.lines[first]!r}"
++        )

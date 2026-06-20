@@ -1,0 +1,9 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "testing/test_mark.py::TestFunctional::test_reevaluate_dynamic_expr"
+  ],
+  "tests_failed": [],
+  "error": null
+}

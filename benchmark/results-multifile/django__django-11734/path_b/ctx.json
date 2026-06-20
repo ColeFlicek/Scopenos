@@ -1,0 +1,11 @@
+{
+  "instance_id": "django__django-11734",
+  "path": "b",
+  "repo_path": "/tmp/claude-0/phronosis-bench-django-h3xxlu2v/django__django-11734",
+  "venv_python": "/tmp/claude-0/phronosis-bench-django-h3xxlu2v/django__django-11734/.bench-venv/bin/python",
+  "project_id": "django",
+  "phronosis_indexed": true,
+  "fail_to_pass": [
+    "test_subquery_exclude_outerref (queries.tests.ExcludeTests)"
+  ]
+}

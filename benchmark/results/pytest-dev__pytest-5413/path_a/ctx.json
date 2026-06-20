@@ -1,0 +1,11 @@
+{
+  "instance_id": "pytest-dev__pytest-5413",
+  "path": "a",
+  "repo_path": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-5413",
+  "venv_python": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-5413/.bench-venv/bin/python",
+  "project_id": "",
+  "phronosis_indexed": false,
+  "fail_to_pass": [
+    "testing/code/test_excinfo.py::test_excinfo_repr_str"
+  ]
+}

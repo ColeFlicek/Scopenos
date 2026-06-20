@@ -50,7 +50,12 @@ class ArchitectureAnalyzer:
         parts = node_id.split(".")
         return ".".join(parts[:2]) if len(parts) >= 2 else parts[0]
 
-    def _build_subsystems(self, data: GraphData) -> list[dict]:
+    # How many subsystems / connections to include in the compact overview.
+    # Full detail is available via get_subsystem_detail().
+    _SUBSYSTEM_OVERVIEW_LIMIT = 30
+    _CONNECTION_OVERVIEW_LIMIT = 30
+
+    def _build_subsystems(self, data: GraphData, limit: int | None = None) -> list[dict]:
         subsystem_nodes: dict[str, list[dict]] = {}
         for n in data.nodes:
             s = self._subsystem(n["id"])
@@ -68,16 +73,31 @@ class ArchitectureAnalyzer:
                 "name": s_name,
                 "function_count": len(nodes),
                 "anchor": anchor["id"],
-                "anchor_summary": (anchor.get("summary") or "")[:120],
+                # Compact summary for overview; full summary in get_subsystem_detail()
+                "anchor_summary": (anchor.get("summary") or "")[:80],
+            })
+
+        cap = limit if limit is not None else self._SUBSYSTEM_OVERVIEW_LIMIT
+        if cap and len(subsystems) > cap:
+            overflow = len(subsystems) - cap
+            subsystems = subsystems[:cap]
+            subsystems.append({
+                "name": f"... and {overflow} more subsystems",
+                "function_count": 0,
+                "anchor": "",
+                "anchor_summary": "Call get_subsystem_detail(name) for any subsystem above to see its full connections and functions.",
             })
         return subsystems
 
-    def _cross_subsystem_connections(self, data: GraphData) -> list[dict]:
-        # Only include connections between known internal subsystems.
-        # This filters out external library nodes (is_external=1), unresolved
-        # stdlib builtins (append, get, len), and any other bare names that
-        # don't map to a project module. External deps are surfaced separately
-        # via list_external_dependencies.
+    def _cross_subsystem_connections(
+        self, data: GraphData, limit: int | None = None, subsystem_filter: str | None = None
+    ) -> list[dict]:
+        """Return cross-subsystem connections.
+
+        subsystem_filter: if set, only return connections involving this subsystem.
+        limit: max entries to return (None = use _CONNECTION_OVERVIEW_LIMIT for overview,
+               or unlimited when called from get_subsystem_detail).
+        """
         internal = {self._subsystem(n["id"]) for n in data.nodes}
 
         conn_counts: dict[tuple[str, str], int] = {}
@@ -88,14 +108,63 @@ class ArchitectureAnalyzer:
                 continue
             if s_from not in internal or s_to not in internal:
                 continue
+            if subsystem_filter and subsystem_filter not in (s_from, s_to):
+                continue
             key = (s_from, s_to)
             conn_counts[key] = conn_counts.get(key, 0) + 1
 
-        return [
+        rows = [
             {"from": k[0], "to": k[1], "edge_count": v}
             for k, v in sorted(conn_counts.items(), key=lambda x: -x[1])
             if v >= 2
         ]
+
+        cap = limit if limit is not None else self._CONNECTION_OVERVIEW_LIMIT
+        if cap and len(rows) > cap:
+            total = len(rows)
+            rows = rows[:cap]
+            rows.append({
+                "from": "...",
+                "to": f"({total - cap} more connections omitted)",
+                "edge_count": 0,
+            })
+        return rows
+
+    def subsystem_detail(self, data: GraphData, subsystem_name: str) -> dict:
+        """Full detail for one subsystem: all functions, all connections, full anchor summary."""
+        nodes_in = [n for n in data.nodes if self._subsystem(n["id"]) == subsystem_name]
+        if not nodes_in:
+            return {"error": f"No subsystem named {subsystem_name!r} found in this project."}
+
+        anchor = next(
+            (n for n in nodes_in if n["type"] in ("class", "ClassDef")), None
+        )
+        if anchor is None:
+            anchor = max(nodes_in, key=lambda n: data.caller_counts.get(n["id"], 0))
+
+        # Top functions by caller count
+        top_fns = sorted(
+            nodes_in, key=lambda n: data.caller_counts.get(n["id"], 0), reverse=True
+        )[:50]
+
+        return {
+            "subsystem": subsystem_name,
+            "function_count": len(nodes_in),
+            "anchor": anchor["id"],
+            "anchor_summary": anchor.get("summary") or "",
+            "top_functions": [
+                {
+                    "id": n["id"],
+                    "name": n["name"],
+                    "caller_count": data.caller_counts.get(n["id"], 0),
+                    "summary": (n.get("summary") or "")[:200],
+                }
+                for n in top_fns
+            ],
+            "connections": self._cross_subsystem_connections(
+                data, limit=None, subsystem_filter=subsystem_name
+            ),
+        }
 
     def _chokepoints(self, data: GraphData) -> list[dict]:
         all_node_ids = {n["id"] for n in data.nodes}

@@ -1,0 +1,58 @@
+diff --git a/src/_pytest/_code/code.py b/src/_pytest/_code/code.py
+index b19ee7c64..78e52d62f 100644
+--- a/src/_pytest/_code/code.py
++++ b/src/_pytest/_code/code.py
+@@ -238,7 +238,15 @@ class TracebackEntry:
+         return self.frame.f_locals
+ 
+     def getfirstlinesource(self) -> int:
+-        return self.frame.code.firstlineno
++        # In Python 3.9, co_firstlineno can point to a decorator line rather
++        # than the def/class line. Advance past any decorator lines so that
++        # the source display and line_index calculations start at the def line.
++        firstlineno = self.frame.code.firstlineno
++        source = self.frame.code.fullsource
++        if source is not None:
++            while firstlineno < len(source.lines) and source.lines[firstlineno].lstrip().startswith("@"):
++                firstlineno += 1
++        return firstlineno
+ 
+     def getsource(
+         self, astcache: Optional[Dict[Union[str, Path], ast.AST]] = None
+diff --git a/testing/code/test_source.py b/testing/code/test_source.py
+index 53e1bb985..eb34b9828 100644
+--- a/testing/code/test_source.py
++++ b/testing/code/test_source.py
+@@ -493,6 +493,32 @@ def test_source_with_decorator() -> None:
+     )
+ 
+ 
++def test_decorator() -> None:
++    """Source display for a traceback entry should not include decorator lines."""
++    import _pytest._code
++
++    def mydecorator(f):
++        return f
++
++    @mydecorator
++    def func():
++        raise ValueError
++
++    try:
++        func()
++    except ValueError:
++        excinfo = _pytest._code.ExceptionInfo.from_current()
++
++    tb = excinfo.traceback
++    entry = tb[-1]
++    source = entry.getsource()
++    assert source is not None
++    # The decorator line should not be in the source output
++    source_str = str(source)
++    assert "@mydecorator" not in source_str
++    assert "def func():" in source_str
++
++
+ def test_single_line_else() -> None:
+     source = getstatement(1, "if False: 2\nelse: 3")
+     assert str(source) == "else: 3"

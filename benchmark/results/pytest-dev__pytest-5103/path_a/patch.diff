@@ -1,0 +1,180 @@
+diff --git a/src/_pytest/assertion/rewrite.py b/src/_pytest/assertion/rewrite.py
+index 2903b8995..af0c23bcf 100644
+--- a/src/_pytest/assertion/rewrite.py
++++ b/src/_pytest/assertion/rewrite.py
+@@ -712,8 +712,16 @@ class AssertionRewriter(ast.NodeVisitor):
+                     new = []
+                     for i, child in enumerate(field):
+                         if isinstance(child, ast.Assert):
+-                            # Transform assert.
+-                            new.extend(self.visit(child))
++                            # If assert all(genexpr) / assert any(genexpr), unroll
++                            # into a for-loop so the rewriter can provide a better
++                            # failure message for each individual element.
++                            unrolled = self._unroll_all_any(child)
++                            if unrolled is not None:
++                                new.append(unrolled)
++                                nodes.append(unrolled)
++                            else:
++                                # Transform assert.
++                                new.extend(self.visit(child))
+                         else:
+                             new.append(child)
+                             if isinstance(child, ast.AST):
+@@ -731,6 +739,115 @@ class AssertionRewriter(ast.NodeVisitor):
+     def is_rewrite_disabled(docstring):
+         return "PYTEST_DONT_REWRITE" in docstring
+ 
++    @staticmethod
++    def _is_builtin_call(node, name):
++        """Return True if *node* is a bare call to the builtin *name*."""
++        return (
++            isinstance(node, ast.Call)
++            and isinstance(node.func, ast.Name)
++            and node.func.id == name
++            and not node.keywords
++        )
++
++    def _unroll_all_any(self, assert_):
++        """If *assert_* is ``assert all(genexpr)`` or ``assert any(genexpr)``,
++        return an AST ``For``/``If`` node that unrolls the iteration so the
++        assertion rewriter can show which element caused the failure.
++
++        Returns ``None`` if the pattern does not match.
++        """
++        test = assert_.test
++        if not (
++            self._is_builtin_call(test, "all") or self._is_builtin_call(test, "any")
++        ):
++            return None
++        # Must have exactly one argument and it must be a GeneratorExp.
++        if len(test.args) != 1 or not isinstance(test.args[0], ast.GeneratorExp):
++            return None
++
++        func_name = test.func.id
++        genexpr = test.args[0]
++        # Only handle the simple case of a single generator with no nested
++        # generators (the common case that benefits from better messages).
++        if len(genexpr.generators) != 1:
++            return None
++
++        gen = genexpr.generators[0]
++        elt = genexpr.elt
++        target = gen.target
++        iter_ = gen.iter
++        ifs = gen.ifs
++
++        # Build the inner condition, possibly gated by the generator's `if`
++        # clauses: ``elt`` (for all) or ``not elt`` (for any's negation).
++        if ifs:
++            # chain ifs: if cond1 and cond2 and ...: assert elt
++            combined_if = ifs[0]
++            for extra in ifs[1:]:
++                combined_if = ast.BoolOp(ast.And(), [combined_if, extra])
++        else:
++            combined_if = None
++
++        if func_name == "all":
++            # for target in iter:
++            #     [if cond:]
++            #         assert elt
++            inner_assert = ast.Assert(test=elt, msg=assert_.msg)
++            if combined_if is not None:
++                body = [ast.If(test=combined_if, body=[inner_assert], orelse=[])]
++            else:
++                body = [inner_assert]
++        else:
++            # any: we want to fail if *none* of the elements satisfy the
++            # condition.  Produce:
++            #
++            #   for target in iter:
++            #       [if cond:]
++            #           if elt:
++            #               break
++            #   else:
++            #       assert elt   # always fails, gives a good message for
++            #                    # the *last* element
++            #
++            # The ``else`` clause of a for-loop runs only when the loop
++            # exhausted without hitting a ``break``.
++            if_elt_break = ast.If(
++                test=elt,
++                body=[ast.Break()],
++                orelse=[],
++            )
++            if combined_if is not None:
++                inner = ast.If(
++                    test=combined_if,
++                    body=[if_elt_break],
++                    orelse=[],
++                )
++            else:
++                inner = if_elt_break
++
++            # The orelse (else-clause) of the for-loop: fire the assertion.
++            inner_assert = ast.Assert(test=elt, msg=assert_.msg)
++            body = [inner]
++            for_orelse = [inner_assert]
++
++        if func_name == "all":
++            result = ast.For(
++                target=target,
++                iter=iter_,
++                body=body,
++                orelse=[],
++            )
++        else:
++            result = ast.For(
++                target=target,
++                iter=iter_,
++                body=body,
++                orelse=for_orelse,
++            )
++
++        set_location(result, assert_.lineno, assert_.col_offset)
++        return result
++
+     def variable(self):
+         """Get a new variable."""
+         # Use a character invalid in python identifiers to avoid clashing.
+diff --git a/testing/test_assertrewrite.py b/testing/test_assertrewrite.py
+index 87dada213..9a4171462 100644
+--- a/testing/test_assertrewrite.py
++++ b/testing/test_assertrewrite.py
+@@ -671,6 +671,36 @@ class TestAssertionRewrite(object):
+         assert "UnicodeDecodeError" not in msg
+         assert "UnicodeEncodeError" not in msg
+ 
++    def test_unroll_expression(self):
++        """Test that all() / any() assertions are unrolled to give useful failure
++        messages showing which element caused the failure."""
++
++        # all() with a failing element should show the specific failing value
++        def f():
++            assert all(x > 0 for x in [1, 2, -1])
++
++        msg = getmsg(f)
++        assert "-1 > 0" in msg
++
++        # all() with passing elements should not raise
++        def g():
++            assert all(x > 0 for x in [1, 2, 3])
++
++        getmsg(g, must_pass=True)
++
++        # any() with no passing elements should still raise an AssertionError
++        def h():
++            assert any(x > 5 for x in [1, 2, 3])
++
++        msg = getmsg(h)
++        assert "AssertionError" in msg or "assert" in msg
++
++        # any() with a passing element should not raise
++        def k():
++            assert any(x > 2 for x in [1, 2, 3])
++
++        getmsg(k, must_pass=True)
++
+ 
+ class TestRewriteOnImport(object):
+     def test_pycache_is_a_file(self, testdir):

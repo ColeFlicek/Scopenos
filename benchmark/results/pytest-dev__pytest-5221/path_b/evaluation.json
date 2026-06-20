@@ -1,0 +1,12 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "testing/python/fixtures.py::TestShowFixtures::test_show_fixtures",
+    "testing/python/fixtures.py::TestShowFixtures::test_show_fixtures_verbose"
+  ],
+  "tests_failed": [],
+  "error": null,
+  "agent_tokens": 38830,
+  "tool_call_count": 32
+}

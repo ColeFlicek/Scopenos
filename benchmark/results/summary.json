@@ -1,0 +1,207 @@
+{
+  "total_tasks": 17,
+  "path_a": {
+    "resolved": 17,
+    "resolve_rate": 1.0,
+    "total_tokens": 170851,
+    "total_tool_calls": 134
+  },
+  "path_b": {
+    "resolved": 17,
+    "resolve_rate": 1.0,
+    "total_tokens": 153757,
+    "total_tool_calls": 103
+  },
+  "token_savings": 17094,
+  "token_savings_pct": 10.0,
+  "phronosis_advantage_tasks": 0,
+  "tasks": [
+    {
+      "instance_id": "pytest-dev__pytest-11143",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-11148",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-5103",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-5221",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 35981,
+      "path_b_tokens": 38830,
+      "path_a_tools": 27,
+      "path_b_tools": 32,
+      "token_savings": -2849
+    },
+    {
+      "instance_id": "pytest-dev__pytest-5227",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 34199,
+      "path_b_tokens": 33455,
+      "path_a_tools": 21,
+      "path_b_tools": 21,
+      "token_savings": 744
+    },
+    {
+      "instance_id": "pytest-dev__pytest-5413",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 27285,
+      "path_b_tokens": 26931,
+      "path_a_tools": 19,
+      "path_b_tools": 20,
+      "token_savings": 354
+    },
+    {
+      "instance_id": "pytest-dev__pytest-5495",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-5692",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-6116",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-7168",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 41444,
+      "path_b_tokens": 27478,
+      "path_a_tools": 46,
+      "path_b_tools": 10,
+      "token_savings": 13966
+    },
+    {
+      "instance_id": "pytest-dev__pytest-7220",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-7373",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-7432",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-7490",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-8365",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    },
+    {
+      "instance_id": "pytest-dev__pytest-8906",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 31942,
+      "path_b_tokens": 27063,
+      "path_a_tools": 21,
+      "path_b_tools": 20,
+      "token_savings": 4879
+    },
+    {
+      "instance_id": "pytest-dev__pytest-9359",
+      "path_a_resolved": true,
+      "path_b_resolved": true,
+      "phronosis_advantage": false,
+      "path_a_tokens": 0,
+      "path_b_tokens": 0,
+      "path_a_tools": 0,
+      "path_b_tools": 0,
+      "token_savings": 0
+    }
+  ]
+}

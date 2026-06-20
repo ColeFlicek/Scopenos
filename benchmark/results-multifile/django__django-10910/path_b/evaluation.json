@@ -1,0 +1,11 @@
+{
+  "resolved": true,
+  "passed": [
+    "test_extract_func_with_timezone (db_functions.datetime.test_extract_trunc.DateFunctionWithTimeZoneTests)"
+  ],
+  "failed": [],
+  "error": null,
+  "patch_applied": true,
+  "agent_tokens": 53524,
+  "tool_call_count": 45
+}

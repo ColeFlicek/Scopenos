@@ -1,0 +1,104 @@
+diff --git a/src/_pytest/_code/code.py b/src/_pytest/_code/code.py
+index 7b17d7612..48884ed5b 100644
+--- a/src/_pytest/_code/code.py
++++ b/src/_pytest/_code/code.py
+@@ -575,6 +575,7 @@ class ExceptionInfo(Generic[_E]):
+         funcargs: bool = False,
+         truncate_locals: bool = True,
+         chain: bool = True,
++        basedir=None,
+     ) -> Union["ReprExceptionInfo", "ExceptionChainRepr"]:
+         """
+         Return str()able representation of this exception info.
+@@ -600,6 +601,9 @@ class ExceptionInfo(Generic[_E]):
+ 
+         :param bool chain: if chained exceptions in Python 3 should be shown.
+ 
++        :param basedir: if not None, paths in the traceback will be made relative to this
++            directory instead of the current working directory.
++
+         .. versionchanged:: 3.9
+ 
+             Added the ``chain`` parameter.
+@@ -622,6 +626,7 @@ class ExceptionInfo(Generic[_E]):
+             funcargs=funcargs,
+             truncate_locals=truncate_locals,
+             chain=chain,
++            basedir=basedir,
+         )
+         return fmt.repr_excinfo(self)
+ 
+@@ -656,6 +661,7 @@ class FormattedExcinfo:
+     truncate_locals = attr.ib(type=bool, default=True)
+     chain = attr.ib(type=bool, default=True)
+     astcache = attr.ib(default=attr.Factory(dict), init=False, repr=False)
++    basedir = attr.ib(default=None)
+ 
+     def _getindent(self, source: "Source") -> int:
+         # figure out indent for given source
+@@ -791,7 +797,10 @@ class FormattedExcinfo:
+     def _makepath(self, path):
+         if not self.abspath:
+             try:
+-                np = py.path.local().bestrelpath(path)
++                if self.basedir is not None:
++                    np = self.basedir.bestrelpath(path)
++                else:
++                    np = py.path.local().bestrelpath(path)
+             except OSError:
+                 return path
+             if len(np) < len(str(path)):
+diff --git a/src/_pytest/nodes.py b/src/_pytest/nodes.py
+index 4a79bc861..a23a522a7 100644
+--- a/src/_pytest/nodes.py
++++ b/src/_pytest/nodes.py
+@@ -374,6 +374,7 @@ class Node(metaclass=NodeMeta):
+             style=style,
+             tbfilter=False,  # pruned already, or in --fulltrace mode.
+             truncate_locals=truncate_locals,
++            basedir=self.config.rootdir,
+         )
+ 
+     def repr_failure(
+diff --git a/testing/test_nodes.py b/testing/test_nodes.py
+index dbb3e2e8f..147260134 100644
+--- a/testing/test_nodes.py
++++ b/testing/test_nodes.py
+@@ -1,3 +1,5 @@
++import os
++
+ import py
+ 
+ import pytest
+@@ -58,3 +60,31 @@ def test__check_initialpaths_for_relpath():
+ 
+     outside = py.path.local("/outside")
+     assert nodes._check_initialpaths_for_relpath(FakeSession, outside) is None
++
++
++def test_failure_with_changed_cwd(testdir, tmpdir):
++    """Test that failure report paths are relative to rootdir even when cwd is changed in a fixture."""
++    testdir.makepyfile(
++        """
++        import os
++        import pytest
++
++        @pytest.fixture
++        def changed_cwd(tmpdir):
++            os.chdir(tmpdir)
++
++        def test_with_changed_cwd(changed_cwd):
++            assert False
++        """
++    )
++    result = testdir.runpytest()
++    # The path in the failure report should be relative to rootdir (testdir.tmpdir),
++    # not an absolute path or path relative to the changed cwd.
++    result.stdout.fnmatch_lines(["FAILED test_failure_with_changed_cwd.py::test_with_changed_cwd*"])
++    # Ensure the path shown is not absolute (it should be rootdir-relative)
++    lines = result.stdout.lines
++    for line in lines:
++        if "test_failure_with_changed_cwd.py" in line and line.startswith("FAILED"):
++            assert not os.path.isabs(line.split("FAILED ")[-1].split("::")[0]), (
++                "Path in failure report should be relative to rootdir, not absolute: %r" % line
++            )

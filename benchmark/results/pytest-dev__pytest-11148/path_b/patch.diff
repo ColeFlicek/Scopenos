@@ -1,0 +1,100 @@
+diff --git a/src/_pytest/pathlib.py b/src/_pytest/pathlib.py
+index e43310ef0..492759ac1 100644
+--- a/src/_pytest/pathlib.py
++++ b/src/_pytest/pathlib.py
+@@ -524,6 +524,9 @@ def import_path(
+     if mode is ImportMode.importlib:
+         module_name = module_name_from_path(path, root)
+ 
++        with contextlib.suppress(KeyError):
++            return sys.modules[module_name]
++
+         for meta_importer in sys.meta_path:
+             spec = meta_importer.find_spec(module_name, [str(path.parent)])
+             if spec is not None:
+diff --git a/testing/acceptance_test.py b/testing/acceptance_test.py
+index 453e26972..0467b8487 100644
+--- a/testing/acceptance_test.py
++++ b/testing/acceptance_test.py
+@@ -1306,6 +1306,34 @@ def test_no_brokenpipeerror_message(pytester: Pytester) -> None:
+     popen.stderr.close()
+ 
+ 
++def test_doctest_and_normal_imports_with_importlib(pytester: Pytester) -> None:
++    """Test that modules imported via importlib mode are not re-executed when also collected for --doctest-modules.
++
++    Regression test: with --import-mode=importlib, a module was executed twice —
++    once for normal test collection and once for doctest collection. This caused
++    module-level side effects to run twice.
++    """
++    pytester.makepyfile(
++        """
++        '''
++        >>> 1 + 1
++        2
++        '''
++
++        import_counter = []
++        import_counter.append(1)
++
++        def test_import_counter():
++            assert len(import_counter) == 1, (
++                f"Module was imported {len(import_counter)} times (expected 1)"
++            )
++    """
++    )
++    result = pytester.runpytest("--doctest-modules", "--import-mode=importlib")
++    result.stdout.fnmatch_lines(["*passed*"])
++    assert result.ret == 0
++
++
+ def test_function_return_non_none_warning(pytester: Pytester) -> None:
+     pytester.makepyfile(
+         """
+diff --git a/testing/test_pathlib.py b/testing/test_pathlib.py
+index c15a81ea1..6ec9d1296 100644
+--- a/testing/test_pathlib.py
++++ b/testing/test_pathlib.py
+@@ -301,10 +301,20 @@ class TestImportPath:
+     def test_importmode_twice_is_different_module(
+         self, simple_module: Path, tmp_path: Path
+     ) -> None:
+-        """`importlib` mode always returns a new module."""
++        """`importlib` mode returns the cached module on second import."""
+         module1 = import_path(simple_module, mode="importlib", root=tmp_path)
+         module2 = import_path(simple_module, mode="importlib", root=tmp_path)
+-        assert module1 is not module2
++        assert module1 is module2
++
++    def test_remembers_previous_imports(
++        self, simple_module: Path, tmp_path: Path
++    ) -> None:
++        """`importlib` mode caches the module in sys.modules and returns it on subsequent imports."""
++        module1 = import_path(simple_module, mode="importlib", root=tmp_path)
++        module2 = import_path(simple_module, mode="importlib", root=tmp_path)
++        assert module1 is module2
++        assert module1.__name__ in sys.modules
++        assert sys.modules[module1.__name__] is module1
+ 
+     def test_no_meta_path_found(
+         self, simple_module: Path, monkeypatch: MonkeyPatch, tmp_path: Path
+@@ -314,14 +324,17 @@ class TestImportPath:
+         module = import_path(simple_module, mode="importlib", root=tmp_path)
+         assert module.foo(2) == 42  # type: ignore[attr-defined]
+ 
+-        # mode='importlib' fails if no spec is found to load the module
++        # mode='importlib' fails if no spec is found to load a module not yet in sys.modules
+         import importlib.util
+ 
+         monkeypatch.setattr(
+             importlib.util, "spec_from_file_location", lambda *args: None
+         )
++        # Use a different (not yet imported) module to test the error path
++        other_module = tmp_path / "_src/tests/other_mymod.py"
++        other_module.write_text("def bar(x): return x", encoding="utf-8")
+         with pytest.raises(ImportError):
+-            import_path(simple_module, mode="importlib", root=tmp_path)
++            import_path(other_module, mode="importlib", root=tmp_path)
+ 
+ 
+ def test_resolve_package_path(tmp_path: Path) -> None:

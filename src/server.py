@@ -955,10 +955,38 @@ async def get_project_home(project_id: str) -> str:
     This replaces reading files for architectural understanding. After this call,
     use query_similar_functions / get_impact_radius for specific functions, then
     Read() only for exact implementation of the function you are about to modify.
+
+    subsystems and connections are capped at 30 entries each to keep the response
+    compact. Call get_subsystem_detail(project_id, subsystem_name) to get full
+    connection lists and all functions for any subsystem shown above.
     """
     svcs = await _get_services()
     await _check_read_access(project_id, svcs.db)
     result = await svcs.arch.get_project_home(project_id, max_age_seconds=300)
+    return json.dumps(result)
+
+
+@mcp.tool()
+async def get_subsystem_detail(project_id: str, subsystem_name: str) -> str:
+    """
+    [DRILL-DOWN TOOL — call after get_project_home to focus on one subsystem]
+
+    Full detail for a single subsystem identified in get_project_home:
+    - anchor with full (uncapped) summary
+    - top 50 functions by caller count with summaries
+    - ALL connections to/from this subsystem (no cap)
+
+    Use this when get_project_home showed a subsystem you need to work in
+    and you want the complete wiring picture for that area only.
+
+    project_id: same project_id used in get_project_home
+    subsystem_name: exact name from the subsystems list (e.g. "django.db.models.sql")
+    """
+    svcs = await _get_services()
+    await _check_read_access(project_id, svcs.db)
+    data = await svcs.db.fetch_graph_data(project_id)
+    from .analysis import ArchitectureAnalyzer
+    result = ArchitectureAnalyzer().subsystem_detail(data, subsystem_name)
     return json.dumps(result)
 
 

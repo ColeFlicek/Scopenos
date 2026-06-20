@@ -1,0 +1,11 @@
+{
+  "instance_id": "django__django-13530",
+  "repo": "django/django",
+  "base_commit": "ac6c4260074de43a978e5c6553ef89441e1d6748",
+  "problem_statement": "Using KeyTransform for JSONField produces invalid SQL in various places.\nDescription\n\t \n\t\t(last modified by Igor Jerosimi\u0107)\n\t \nUsing KeyTransform in ordering attribute of ArrayAgg function produces invalid SQL. I don't know if it matters but I'm using Postgres for DB.\n# sample model\nfrom django.db import models\nclass Parent(models.Model):\n\tname = models.CharField(default='test')\nclass Child(models.Model):\n\tparent = models.ForeignKey(\n\t\tParent,\n\t\ton_delete=models.SET_NULL,\n\t\trelated_name='children',\n\t)\n\tdata = models.JSONField(default=dict)\n# sample data\nparent = Parent.objects.create()\nChild.objects.create(parent=parent, data={'en': 'English', 'fr': 'French'})\n# error\nParent.objects.annotate(\n\t\tchildren_array=ArrayAgg(\n\t\t\t\tKeyTextTransform('en', 'children__data'),\n\t\t\t\tdistinct=True,\n\t\t\t\tordering=[KeyTransform('en', 'children__data')],\n\t\t),\n).all()\nProduces invalid SQL in the ORDER BY section:\nARRAY_AGG(DISTINCT (\"children\".\"data\" ->> 'default') ORDER BY None(\"children\".\"data\"))\nNOTE: This was working fine before Django 3.1.\n",
+  "fail_to_pass": [
+    "test_expression_wrapper_key_transform (model_fields.test_jsonfield.TestQuerying)",
+    "test_key_in (model_fields.test_jsonfield.TestQuerying)",
+    "test_key_iregex (model_fields.test_jsonfield.TestQuerying)"
+  ]
+}

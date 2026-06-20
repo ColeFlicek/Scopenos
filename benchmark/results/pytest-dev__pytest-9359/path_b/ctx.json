@@ -1,0 +1,11 @@
+{
+  "instance_id": "pytest-dev__pytest-9359",
+  "path": "b",
+  "repo_path": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-9359",
+  "venv_python": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-9359/.bench-venv/bin/python",
+  "project_id": "pytest",
+  "phronosis_indexed": true,
+  "fail_to_pass": [
+    "testing/code/test_source.py::test_decorator"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "testing/logging/test_reporting.py::test_log_cli_enabled_disabled[True]",
+    "testing/logging/test_reporting.py::test_log_cli_default_level",
+    "testing/logging/test_reporting.py::test_sections_single_new_line_after_test_outcome"
+  ],
+  "tests_failed": [],
+  "error": null,
+  "agent_tokens": 34199,
+  "tool_call_count": 21
+}

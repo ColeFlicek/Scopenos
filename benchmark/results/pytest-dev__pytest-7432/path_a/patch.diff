@@ -1,0 +1,56 @@
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+index 7bd975e5a..c9bdfee89 100644
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -291,7 +291,7 @@ def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+             else:
+                 rep.outcome = "passed"
+                 rep.wasxfail = xfailed.reason
+-    elif (
++    if (
+         item._store.get(skipped_by_mark_key, True)
+         and rep.skipped
+         and type(rep.longrepr) is tuple
+diff --git a/testing/test_skipping.py b/testing/test_skipping.py
+index 0b1c0b49b..613dcdeb3 100644
+--- a/testing/test_skipping.py
++++ b/testing/test_skipping.py
+@@ -519,6 +519,38 @@ class TestXFail:
+         result.stdout.fnmatch_lines(["*1 failed*" if strict else "*1 xpassed*"])
+         assert result.ret == (1 if strict else 0)
+ 
++    @pytest.mark.parametrize(
++        "test_input,expected",
++        [
++            pytest.param(
++                """
++                import pytest
++                @pytest.mark.xfail(reason="xfail")
++                @pytest.mark.skip(reason="skip")
++                def test_skip():
++                    pass
++                """,
++                "*SKIP*test_one.py*skip*",
++                id="test_input0-expected0",
++            ),
++            pytest.param(
++                """
++                import pytest
++                @pytest.mark.skip(reason="skip")
++                @pytest.mark.xfail(reason="xfail")
++                def test_skip():
++                    pass
++                """,
++                "*SKIP*test_one.py*skip*",
++                id="test_input1-expected1",
++            ),
++        ],
++    )
++    def test_xfail_run_with_skip_mark(self, testdir, test_input, expected):
++        p = testdir.makepyfile(test_one=test_input)
++        result = testdir.runpytest(p, "--runxfail", "-rs")
++        result.stdout.fnmatch_lines([expected])
++
+ 
+ class TestXFailwithSetupTeardown:
+     def test_failing_setup_issue9(self, testdir):

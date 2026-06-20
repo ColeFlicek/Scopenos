@@ -1,0 +1,261 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+index 13918467ee..5500004c7c 100644
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -1083,10 +1083,14 @@ class Subquery(Expression):
+     contains_aggregate = False
+ 
+     def __init__(self, queryset, output_field=None, **extra):
+-        self.query = queryset.query
++        self.query = getattr(queryset, 'query', queryset)
++        self.query.subquery = True
+         self.extra = extra
+         # Prevent the QuerySet from being evaluated.
+-        self.queryset = queryset._chain(_result_cache=[], prefetch_done=True)
++        if hasattr(queryset, '_chain'):
++            self.queryset = queryset._chain(_result_cache=[], prefetch_done=True)
++        else:
++            self.queryset = queryset
+         super().__init__(output_field)
+ 
+     def __getstate__(self):
+diff --git a/django/db/models/lookups.py b/django/db/models/lookups.py
+index 576ff400c4..ad334f3079 100644
+--- a/django/db/models/lookups.py
++++ b/django/db/models/lookups.py
+@@ -12,6 +12,7 @@ from django.db.models.query_utils import RegisterLookupMixin
+ from django.utils.datastructures import OrderedSet
+ from django.utils.deprecation import RemovedInDjango40Warning
+ from django.utils.functional import cached_property
++from django.utils.hashable import make_hashable
+ 
+ 
+ class Lookup:
+@@ -143,6 +144,18 @@ class Lookup:
+     def is_summary(self):
+         return self.lhs.is_summary or getattr(self.rhs, 'is_summary', False)
+ 
++    @cached_property
++    def identity(self):
++        return self.__class__, self.lhs, make_hashable(self.rhs)
++
++    def __eq__(self, other):
++        if not isinstance(other, Lookup):
++            return NotImplemented
++        return self.identity == other.identity
++
++    def __hash__(self):
++        return hash(self.identity)
++
+ 
+ class Transform(RegisterLookupMixin, Func):
+     """
+diff --git a/django/db/models/sql/datastructures.py b/django/db/models/sql/datastructures.py
+index c2c347b3cf..6e9b21713b 100644
+--- a/django/db/models/sql/datastructures.py
++++ b/django/db/models/sql/datastructures.py
+@@ -123,9 +123,25 @@ class Join:
+             (not with_filtered_relation or self.filtered_relation == other.filtered_relation)
+         )
+ 
++    @property
++    def identity(self):
++        return (
++            self.__class__,
++            self.table_name,
++            self.parent_alias,
++            self.table_alias,
++            self.join_type,
++            self.join_field,
++            self.nullable,
++            self.filtered_relation,
++        )
++
+     def __eq__(self, other):
+         return self.equals(other, with_filtered_relation=True)
+ 
++    def __hash__(self):
++        return hash(self.identity)
++
+     def demote(self):
+         new = self.relabeled_clone({})
+         new.join_type = INNER
+@@ -166,3 +182,13 @@ class BaseTable:
+             self.table_name == other.table_name and
+             self.table_alias == other.table_alias
+         )
++
++    @property
++    def identity(self):
++        return self.__class__, self.table_name, self.table_alias
++
++    def __eq__(self, other):
++        return self.equals(other, with_filtered_relation=True)
++
++    def __hash__(self):
++        return hash(self.identity)
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index ee98984826..8983f7172b 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -23,7 +23,7 @@ from django.core.exceptions import (
+ from django.db import DEFAULT_DB_ALIAS, NotSupportedError, connections
+ from django.db.models.aggregates import Count
+ from django.db.models.constants import LOOKUP_SEP
+-from django.db.models.expressions import BaseExpression, Col, F, OuterRef, Ref
++from django.db.models.expressions import BaseExpression, Col, Exists, F, OuterRef, Ref, ResolvedOuterRef
+ from django.db.models.fields import Field
+ from django.db.models.fields.related_lookups import MultiColSource
+ from django.db.models.lookups import Lookup
+@@ -270,6 +270,25 @@ class Query(BaseExpression):
+         memo[id(self)] = result
+         return result
+ 
++    @cached_property
++    def identity(self):
++        from django.utils.hashable import make_hashable
++        return (
++            self.__class__,
++            self.model,
++            make_hashable(self.alias_map),
++            self.where,
++            self.distinct,
++        )
++
++    def __eq__(self, other):
++        if not isinstance(other, Query):
++            return NotImplemented
++        return self.identity == other.identity
++
++    def __hash__(self):
++        return hash(self.identity)
++
+     def get_compiler(self, using=None, connection=None):
+         if using is None and connection is None:
+             raise ValueError("Need either using or connection")
+@@ -1756,8 +1775,8 @@ class Query(BaseExpression):
+         filters in the original query.
+ 
+         We will turn this into equivalent of:
+-            WHERE NOT (pk IN (SELECT parent_id FROM thetable
+-                              WHERE name = 'foo' AND parent_id IS NOT NULL))
++            WHERE NOT EXISTS (SELECT 1 FROM thetable WHERE name = 'foo'
++                              AND parent_id = outertable.pk)
+ 
+         It might be worth it to consider using WHERE NOT EXISTS as that has
+         saner null handling, and is easier for the backend's optimizer to
+@@ -1800,6 +1819,33 @@ class Query(BaseExpression):
+                                   pk.get_col(alias))
+             query.where.add(lookup, AND)
+             query.external_aliases[alias] = True
++        else:
++            # Correlate the inner query to the outer query via NOT EXISTS.
++            # The inner query's select[0] is the FK column that correlates
++            # with the outer query via trimmed_prefix. Use ResolvedOuterRef
++            # with the full trimmed_prefix so that resolve_ref can traverse
++            # any intermediate joins when resolving against the outer query.
++            if not isinstance(filter_rhs, (OuterRef, F)):
++                lookup_class = select_field.get_lookup('exact')
++                lookup = lookup_class(
++                    query.select[0],
++                    ResolvedOuterRef(trimmed_prefix),
++                )
++                query.where.add(lookup, AND)
++                exists_expr = Exists(query)
++                # Resolve OuterRef references in the inner query against the
++                # outer query (self) so correlated column references are set up.
++                exists_expr = exists_expr.resolve_expression(
++                    self, allow_joins=True, reuse=can_reuse,
++                )
++                condition = self.where_class()
++                condition.add(exists_expr, AND)
++                if contains_louter:
++                    or_null_condition, _ = self.build_filter(
++                        ('%s__isnull' % trimmed_prefix, True),
++                        current_negated=True, branch_negated=True, can_reuse=can_reuse)
++                    condition.add(or_null_condition, OR)
++                return condition, []
+ 
+         condition, needed_inner = self.build_filter(
+             ('%s__in' % trimmed_prefix, query),
+diff --git a/tests/lookup/test_lookups.py b/tests/lookup/test_lookups.py
+index c3aa48ddad..88c7866e99 100644
+--- a/tests/lookup/test_lookups.py
++++ b/tests/lookup/test_lookups.py
+@@ -1,7 +1,7 @@
+ from datetime import datetime
+ 
+-from django.db.models import DateTimeField, Value
+-from django.db.models.lookups import YearLookup
++from django.db.models import DateTimeField, IntegerField, Value
++from django.db.models.lookups import Exact, GreaterThan, YearLookup
+ from django.test import SimpleTestCase
+ 
+ 
+@@ -14,3 +14,23 @@ class YearLookupTests(SimpleTestCase):
+         msg = 'subclasses of YearLookup must provide a get_bound_params() method'
+         with self.assertRaisesMessage(NotImplementedError, msg):
+             look_up.get_bound_params(datetime(2010, 1, 1, 0, 0, 0), datetime(2010, 1, 1, 23, 59, 59))
++
++
++class LookupTests(SimpleTestCase):
++    def test_equality(self):
++        lhs = Value(1, output_field=IntegerField())
++        rhs = Value(2, output_field=IntegerField())
++        lookup1 = Exact(lhs, rhs)
++        lookup2 = Exact(lhs, rhs)
++        self.assertEqual(lookup1, lookup2)
++        lookup3 = GreaterThan(lhs, rhs)
++        self.assertNotEqual(lookup1, lookup3)
++
++    def test_hash(self):
++        lhs = Value(1, output_field=IntegerField())
++        rhs = Value(2, output_field=IntegerField())
++        lookup1 = Exact(lhs, rhs)
++        lookup2 = Exact(lhs, rhs)
++        self.assertEqual(hash(lookup1), hash(lookup2))
++        lookup3 = GreaterThan(lhs, rhs)
++        self.assertNotEqual(hash(lookup1), hash(lookup3))
+diff --git a/tests/queries/test_query.py b/tests/queries/test_query.py
+index 523fa607f0..e360ff0ccb 100644
+--- a/tests/queries/test_query.py
++++ b/tests/queries/test_query.py
+@@ -150,3 +150,17 @@ class TestQuery(SimpleTestCase):
+         msg = 'Cannot filter against a non-conditional expression.'
+         with self.assertRaisesMessage(TypeError, msg):
+             query.build_where(Func(output_field=CharField()))
++
++    def test_equality(self):
++        q1 = Query(Author)
++        q2 = Query(Author)
++        self.assertEqual(q1, q2)
++        q3 = Query(Item)
++        self.assertNotEqual(q1, q3)
++
++    def test_hash(self):
++        q1 = Query(Author)
++        q2 = Query(Author)
++        self.assertEqual(hash(q1), hash(q2))
++        q3 = Query(Item)
++        self.assertNotEqual(hash(q1), hash(q3))
+diff --git a/tests/queries/tests.py b/tests/queries/tests.py
+index c98a6adeba..5fc6cfc2b7 100644
+--- a/tests/queries/tests.py
++++ b/tests/queries/tests.py
+@@ -2884,6 +2884,16 @@ class ExcludeTests(TestCase):
+             [number],
+         )
+ 
++    def test_exclude_multivalued_exists(self):
++        self.assertQuerysetEqual(
++            Job.objects.exclude(responsibilities__description='Playing golf'),
++            ['<Job: Programmer>'],
++        )
++        self.assertIn(
++            'EXISTS',
++            str(Job.objects.exclude(responsibilities__description='Playing golf').query),
++        )
++
+ 
+ class ExcludeTest17600(TestCase):
+     """

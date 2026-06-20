@@ -1,0 +1,11 @@
+{
+  "instance_id": "pytest-dev__pytest-7432",
+  "path": "a",
+  "repo_path": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-7432",
+  "venv_python": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-7432/.bench-venv/bin/python",
+  "project_id": "",
+  "phronosis_indexed": false,
+  "fail_to_pass": [
+    "testing/test_skipping.py::TestXFail::test_xfail_run_with_skip_mark[test_input1-expected1]"
+  ]
+}

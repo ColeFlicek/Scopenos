@@ -1,0 +1,12 @@
+{
+  "instance_id": "pytest-dev__pytest-11148",
+  "path": "a",
+  "repo_path": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-11148",
+  "venv_python": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-11148/.bench-venv/bin/python",
+  "project_id": "",
+  "phronosis_indexed": false,
+  "fail_to_pass": [
+    "testing/test_pathlib.py::TestImportPath::test_remembers_previous_imports",
+    "testing/acceptance_test.py::test_doctest_and_normal_imports_with_importlib"
+  ]
+}

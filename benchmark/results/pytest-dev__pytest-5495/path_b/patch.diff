@@ -1,0 +1,63 @@
+diff --git a/src/_pytest/assertion/util.py b/src/_pytest/assertion/util.py
+index 762e5761d..90eccff0a 100644
+--- a/src/_pytest/assertion/util.py
++++ b/src/_pytest/assertion/util.py
+@@ -82,13 +82,17 @@ def _format_lines(lines):
+ 
+ 
+ def issequence(x):
+-    return isinstance(x, Sequence) and not isinstance(x, str)
++    return isinstance(x, Sequence) and not isinstance(x, (str, bytes))
+ 
+ 
+ def istext(x):
+     return isinstance(x, str)
+ 
+ 
++def isbytes(x):
++    return isinstance(x, bytes)
++
++
+ def isdict(x):
+     return isinstance(x, dict)
+ 
+@@ -127,6 +131,8 @@ def assertrepr_compare(config, op, left, right):
+         if op == "==":
+             if istext(left) and istext(right):
+                 explanation = _diff_text(left, right, verbose)
++            elif isbytes(left) and isbytes(right):
++                explanation = _diff_text(left, right, verbose)
+             else:
+                 if issequence(left) and issequence(right):
+                     explanation = _compare_eq_sequence(left, right, verbose)
+diff --git a/testing/test_assertion.py b/testing/test_assertion.py
+index 0fcfd9f27..bfee8ff2c 100644
+--- a/testing/test_assertion.py
++++ b/testing/test_assertion.py
+@@ -576,6 +576,26 @@ class TestAssert_reprcompare:
+     def test_format_nonascii_explanation(self):
+         assert util.format_explanation("λ")
+ 
++    def test_bytes_diff_normal(self):
++        """Bytes diff should not show integer values for each byte."""
++        left = b""
++        right = b"42"
++        expl = callequal(left, right)
++        assert expl is not None
++        # Should not contain confusing integer ASCII codes
++        assert "52" not in "\n".join(expl)
++        assert "Right contains" not in "\n".join(expl)
++
++    def test_bytes_diff_verbose(self):
++        """Bytes diff in verbose mode should show a readable diff."""
++        left = b""
++        right = b"42"
++        expl = callequal(left, right, verbose=True)
++        assert expl is not None
++        # Should not contain confusing integer ASCII codes
++        assert "52" not in "\n".join(expl)
++        assert "Right contains" not in "\n".join(expl)
++
+     def test_mojibake(self):
+         # issue 429
+         left = b"e"

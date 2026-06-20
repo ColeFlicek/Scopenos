@@ -1,0 +1,63 @@
+diff --git a/src/_pytest/mark/evaluate.py b/src/_pytest/mark/evaluate.py
+index 759191668..25f5920e7 100644
+--- a/src/_pytest/mark/evaluate.py
++++ b/src/_pytest/mark/evaluate.py
+@@ -21,13 +21,15 @@ evalcache_key = StoreKey[Dict[str, Any]]()
+ def cached_eval(config: Config, expr: str, d: Dict[str, object]) -> Any:
+     default = {}  # type: Dict[str, object]
+     evalcache = config._store.setdefault(evalcache_key, default)
++    module_name = d.get("__name__", "")
++    cache_key = (module_name, expr)
+     try:
+-        return evalcache[expr]
++        return evalcache[cache_key]
+     except KeyError:
+         import _pytest._code
+ 
+         exprcode = _pytest._code.compile(expr, mode="eval")
+-        evalcache[expr] = x = eval(exprcode, d)
++        evalcache[cache_key] = x = eval(exprcode, d)
+         return x
+ 
+ 
+diff --git a/testing/test_mark.py b/testing/test_mark.py
+index cdd4df9dd..6845100c9 100644
+--- a/testing/test_mark.py
++++ b/testing/test_mark.py
+@@ -706,6 +706,36 @@ class TestFunctional:
+         reprec = testdir.inline_run()
+         reprec.assertoutcome(skipped=1)
+ 
++    def test_reevaluate_dynamic_expr(self, testdir):
++        """Ensure skipif/xfail string conditions are re-evaluated per module.
++
++        cached_eval must include the module name in the cache key so that
++        the same expression string can yield different results in different
++        modules that define the same variable with different values.
++        """
++        testdir.makepyfile(
++            test_mod1="""
++            import pytest
++
++            skip_condition = True
++
++            @pytest.mark.skipif("skip_condition")
++            def test_should_be_skipped():
++                pass
++        """,
++            test_mod2="""
++            import pytest
++
++            skip_condition = False
++
++            @pytest.mark.skipif("skip_condition")
++            def test_should_not_be_skipped():
++                pass
++        """,
++        )
++        reprec = testdir.inline_run()
++        reprec.assertoutcome(passed=1, skipped=1)
++
+ 
+ class TestKeywordSelection:
+     def test_select_simple(self, testdir):

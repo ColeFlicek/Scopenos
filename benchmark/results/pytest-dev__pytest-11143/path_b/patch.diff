@@ -1,0 +1,41 @@
+diff --git a/src/_pytest/assertion/rewrite.py b/src/_pytest/assertion/rewrite.py
+index 157903faf..9bf79f1e1 100644
+--- a/src/_pytest/assertion/rewrite.py
++++ b/src/_pytest/assertion/rewrite.py
+@@ -676,6 +676,7 @@ class AssertionRewriter(ast.NodeVisitor):
+                 expect_docstring
+                 and isinstance(item, ast.Expr)
+                 and isinstance(item.value, ast.Constant)
++                and isinstance(item.value.value, str)
+             ):
+                 doc = item.value.value
+                 if self.is_rewrite_disabled(doc):
+diff --git a/testing/test_assertrewrite.py b/testing/test_assertrewrite.py
+index d01803204..db1ef5a01 100644
+--- a/testing/test_assertrewrite.py
++++ b/testing/test_assertrewrite.py
+@@ -1524,6 +1524,24 @@ class TestIssue11028:
+         result.stdout.fnmatch_lines(["*assert 4 > 5", "*where 5 = add_one(4)"])
+ 
+ 
++class TestIssue11140:
++    def test_constant_not_picked_as_module_docstring(
++        self, pytester: Pytester
++    ) -> None:
++        """A numeric literal as the first statement of a module should not be
++        mistaken for a module docstring during assertion rewriting (#11140)."""
++        pytester.makepyfile(
++            """
++            1
++
++            def test_something():
++                assert 1 == 1
++        """
++        )
++        result = pytester.runpytest()
++        assert result.ret == 0
++
++
+ @pytest.mark.skipif(
+     sys.maxsize <= (2**31 - 1), reason="Causes OverflowError on 32bit systems"
+ )

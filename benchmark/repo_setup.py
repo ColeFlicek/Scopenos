@@ -176,22 +176,37 @@ def _create_venv(repo_path: str) -> str:
         subprocess.run([python, "-m", "pip", "install", "--quiet", "pytest"], cwd=repo_path, capture_output=True)
         return python
 
+    is_django = os.path.exists(os.path.join(repo_path, "tests", "runtests.py"))
+
     print(f"[setup] creating venv with {_BENCH_PYTHON}…")
     subprocess.run([_BENCH_PYTHON, "-m", "venv", venv_dir], check=True)
-    subprocess.run(
-        [python, "-m", "pip", "install", "--quiet", "-e", ".[dev,testing]"],
-        cwd=repo_path, capture_output=True,
-    )
-    subprocess.run(
-        [python, "-m", "pip", "install", "--quiet", "pytest"],
-        cwd=repo_path, capture_output=True,
-    )
-    # Older SWE-bench repos (pre-2022) used hypothesis hooks not compatible
-    # with hypothesis>=6 (which added 'collection_path' to pytest_ignore_collect).
-    subprocess.run(
-        [python, "-m", "pip", "install", "--quiet", "hypothesis<6"],
-        cwd=repo_path, capture_output=True,
-    )
+
+    if is_django:
+        # Django: install the package itself + test deps
+        subprocess.run(
+            [python, "-m", "pip", "install", "--quiet", "-e", "."],
+            cwd=repo_path, capture_output=True,
+        )
+        subprocess.run(
+            [python, "-m", "pip", "install", "--quiet",
+             "pytest", "pytest-django", "asgiref", "sqlparse", "pytz"],
+            cwd=repo_path, capture_output=True,
+        )
+    else:
+        subprocess.run(
+            [python, "-m", "pip", "install", "--quiet", "-e", ".[dev,testing]"],
+            cwd=repo_path, capture_output=True,
+        )
+        subprocess.run(
+            [python, "-m", "pip", "install", "--quiet", "pytest"],
+            cwd=repo_path, capture_output=True,
+        )
+        # Older SWE-bench repos (pre-2022) used hypothesis hooks not compatible
+        # with hypothesis>=6 (which added 'collection_path' to pytest_ignore_collect).
+        subprocess.run(
+            [python, "-m", "pip", "install", "--quiet", "hypothesis<6"],
+            cwd=repo_path, capture_output=True,
+        )
     return python
 
 

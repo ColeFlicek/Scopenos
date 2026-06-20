@@ -37,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmark.loader import load_tasks_chronological, select_calibration_tasks
+from benchmark.loader import load_tasks_chronological, load_multifile_tasks, select_calibration_tasks
 from benchmark.repo_setup import setup_repo, cleanup_repo, RepoContext
 from benchmark.runner import capture_patch, save_patch, AgentResult
 from benchmark.evaluator import evaluate
@@ -59,12 +59,16 @@ def _get_or_create_workdir() -> str:
 
 
 def cmd_list(args) -> None:
-    tasks = load_tasks_chronological(repo=args.repo)
-    if args.calibration:
-        tasks = select_calibration_tasks(tasks)
+    if getattr(args, "multifile", False):
+        tasks = load_multifile_tasks(max_tasks=args.max_tasks)
+    else:
+        tasks = load_tasks_chronological(repo=args.repo)
+        if args.calibration:
+            tasks = select_calibration_tasks(tasks)
     for t in tasks:
         print(json.dumps({
             "instance_id": t.instance_id,
+            "repo": t.repo,
             "base_commit": t.base_commit,
             "fail_to_pass_count": len(t.fail_to_pass),
         }))
@@ -127,13 +131,25 @@ def cmd_evaluate(args) -> None:
     ctx_data = json.loads(ctx_file.read_text())
     patch = patch_file.read_text() if patch_file.exists() else ""
 
+    # Read metrics written by orchestrator (token counts, tool call counts)
+    metrics_file = path_dir / "metrics.json"
+    metrics = json.loads(metrics_file.read_text()) if metrics_file.exists() else {}
+
+    tool_calls_raw = metrics.get("tool_calls", [])
+    if isinstance(tool_calls_raw, int):
+        # stored as count (from `metrics` subcommand) — reconstruct minimal list
+        tool_calls_list = [{"name": "tool"} for _ in range(tool_calls_raw)]
+    else:
+        tool_calls_list = [{"name": n} for n in tool_calls_raw]
+
     agent_result = AgentResult(
         instance_id=task.instance_id,
         path=args.path,
         patch=patch,
-        tool_calls=[],  # filled in by orchestrator if desired
-        iterations=0,
+        tool_calls=tool_calls_list,
+        iterations=metrics.get("iterations", 0),
         submitted=bool(patch.strip()),
+        agent_tokens=metrics.get("agent_tokens", 0),
     )
 
     result = evaluate(
@@ -150,6 +166,8 @@ def cmd_evaluate(args) -> None:
         "tests_passed": result.tests_passed,
         "tests_failed": result.tests_failed,
         "error": result.error,
+        "agent_tokens": agent_result.agent_tokens,
+        "tool_call_count": len(agent_result.tool_calls),
     }, indent=2))
 
     print(json.dumps({
@@ -158,6 +176,19 @@ def cmd_evaluate(args) -> None:
         "tests_failed": result.tests_failed,
         "error": result.error,
     }))
+
+
+def cmd_metrics(args) -> None:
+    """Write agent metrics (tokens, tool calls) for one path so evaluate can pick them up."""
+    path_dir = Path(args.results_dir) / args.instance_id / f"path_{args.path}"
+    path_dir.mkdir(parents=True, exist_ok=True)
+    metrics = {
+        "agent_tokens": args.tokens,
+        "tool_calls": args.tool_calls,
+        "iterations": args.iterations,
+    }
+    (path_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+    print(json.dumps({"written": str(path_dir / "metrics.json")}))
 
 
 def cmd_summary(args) -> None:
@@ -174,6 +205,8 @@ def main() -> None:
 
     p_list = sub.add_parser("list", help="List tasks (JSON lines)")
     p_list.add_argument("--calibration", action="store_true")
+    p_list.add_argument("--multifile", action="store_true", help="Load multi-file tasks from SWE-bench Full")
+    p_list.add_argument("--max-tasks", type=int, default=20)
 
     p_setup = sub.add_parser("setup", help="Clone + venv + index one task")
     p_setup.add_argument("instance_id")
@@ -185,6 +218,13 @@ def main() -> None:
 
     sub.add_parser("summary", help="Print aggregate results")
 
+    p_metrics = sub.add_parser("metrics", help="Record agent token/tool metrics before evaluate")
+    p_metrics.add_argument("instance_id")
+    p_metrics.add_argument("--path", choices=["a", "b"], required=True)
+    p_metrics.add_argument("--tokens", type=int, default=0)
+    p_metrics.add_argument("--tool-calls", type=int, default=0, dest="tool_calls")
+    p_metrics.add_argument("--iterations", type=int, default=0)
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -193,6 +233,8 @@ def main() -> None:
         cmd_setup(args)
     elif args.command == "evaluate":
         cmd_evaluate(args)
+    elif args.command == "metrics":
+        cmd_metrics(args)
     elif args.command == "summary":
         cmd_summary(args)
 

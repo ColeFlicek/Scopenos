@@ -1,0 +1,12 @@
+{
+  "instance_id": "django__django-11030",
+  "path": "a",
+  "repo_path": "/tmp/claude-0/phronosis-bench-django-h3xxlu2v/django__django-11030",
+  "venv_python": "/tmp/claude-0/phronosis-bench-django-h3xxlu2v/django__django-11030/.bench-venv/bin/python",
+  "project_id": "",
+  "phronosis_indexed": false,
+  "fail_to_pass": [
+    "test_missing_alias (expressions.test_deprecation.GetGroupByColsTest)",
+    "Subquery annotations are excluded from the GROUP BY if they are"
+  ]
+}

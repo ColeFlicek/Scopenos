@@ -1,0 +1,10 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "testing/test_assertion.py::TestAssert_reprcompare::test_bytes_diff_normal",
+    "testing/test_assertion.py::TestAssert_reprcompare::test_bytes_diff_verbose"
+  ],
+  "tests_failed": [],
+  "error": null
+}

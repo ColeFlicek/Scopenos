@@ -1,0 +1,92 @@
+diff --git a/src/_pytest/junitxml.py b/src/_pytest/junitxml.py
+index 15c630b1d..ad1e9b138 100644
+--- a/src/_pytest/junitxml.py
++++ b/src/_pytest/junitxml.py
+@@ -8,9 +8,11 @@ Based on initial code from Ross Lawley.
+ Output conforms to https://github.com/jenkinsci/xunit-plugin/blob/master/
+ src/main/resources/org/jenkinsci/plugins/xunit/types/model/xsd/junit-10.xsd
+ """
++import datetime
+ import functools
+ import os
+ import re
++import socket
+ import sys
+ import time
+ 
+@@ -666,6 +668,8 @@ class LogXML:
+             skipped=self.stats["skipped"],
+             tests=numtests,
+             time="%.3f" % suite_time_delta,
++            hostname=socket.gethostname(),
++            timestamp=datetime.datetime.now().isoformat(),
+         )
+         logfile.write(Junit.testsuites([suite_node]).unicode(indent=0))
+         logfile.close()
+diff --git a/testing/test_junitxml.py b/testing/test_junitxml.py
+index 3196f0ebd..ba873b9e4 100644
+--- a/testing/test_junitxml.py
++++ b/testing/test_junitxml.py
+@@ -1,4 +1,6 @@
++import datetime
+ import os
++import socket
+ from xml.dom import minidom
+ 
+ import py
+@@ -157,6 +159,31 @@ class TestPython:
+         val = tnode["time"]
+         assert round(float(val), 2) >= 0.03
+ 
++    def test_hostname_in_xml(self, testdir):
++        testdir.makepyfile(
++            """
++            def test_pass():
++                pass
++        """
++        )
++        result, dom = runandparse(testdir)
++        node = dom.find_first_by_tag("testsuite")
++        hostname = node["hostname"]
++        assert hostname == socket.gethostname()
++
++    def test_timestamp_in_xml(self, testdir):
++        testdir.makepyfile(
++            """
++            def test_pass():
++                pass
++        """
++        )
++        result, dom = runandparse(testdir)
++        node = dom.find_first_by_tag("testsuite")
++        timestamp = node["timestamp"]
++        # Verify it is a valid ISO 8601 datetime string
++        datetime.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%f")
++
+     @pytest.mark.parametrize("duration_report", ["call", "total"])
+     def test_junit_duration_report(self, testdir, monkeypatch, duration_report):
+ 
+@@ -694,6 +721,23 @@ class TestPython:
+         assert "hello-stdout call" in systemout.toxml()
+         assert "hello-stdout teardown" in systemout.toxml()
+ 
++    def test_hostname_in_xml(self, testdir):
++        testdir.makepyfile("def test_pass(): pass")
++        result, dom = runandparse(testdir)
++        node = dom.find_first_by_tag("testsuite")
++        import socket
++        assert node["hostname"] == socket.gethostname()
++
++    def test_timestamp_in_xml(self, testdir):
++        testdir.makepyfile("def test_pass(): pass")
++        result, dom = runandparse(testdir)
++        node = dom.find_first_by_tag("testsuite")
++        import datetime
++        ts = node["timestamp"]
++        assert ts is not None
++        # Should parse without error as an ISO 8601 datetime
++        datetime.datetime.fromisoformat(ts)
++
+ 
+ def test_mangle_test_address():
+     from _pytest.junitxml import mangle_test_address

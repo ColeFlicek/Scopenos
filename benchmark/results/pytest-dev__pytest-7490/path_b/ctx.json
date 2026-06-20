@@ -1,0 +1,12 @@
+{
+  "instance_id": "pytest-dev__pytest-7490",
+  "path": "b",
+  "repo_path": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-7490",
+  "venv_python": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-7490/.bench-venv/bin/python",
+  "project_id": "pytest",
+  "phronosis_indexed": true,
+  "fail_to_pass": [
+    "testing/test_skipping.py::TestXFail::test_dynamic_xfail_set_during_runtest_failed",
+    "testing/test_skipping.py::TestXFail::test_dynamic_xfail_set_during_runtest_passed_strict"
+  ]
+}

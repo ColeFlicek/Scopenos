@@ -1,0 +1,11 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "test_subquery_exclude_outerref (queries.tests.ExcludeTests)"
+  ],
+  "tests_failed": [],
+  "error": null,
+  "agent_tokens": 32566,
+  "tool_call_count": 23
+}

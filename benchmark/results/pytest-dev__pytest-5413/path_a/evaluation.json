@@ -1,0 +1,11 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "testing/code/test_excinfo.py::test_excinfo_repr_str"
+  ],
+  "tests_failed": [],
+  "error": null,
+  "agent_tokens": 27285,
+  "tool_call_count": 19
+}

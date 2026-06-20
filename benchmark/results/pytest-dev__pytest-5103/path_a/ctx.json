@@ -1,0 +1,11 @@
+{
+  "instance_id": "pytest-dev__pytest-5103",
+  "path": "a",
+  "repo_path": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-5103",
+  "venv_python": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-5103/.bench-venv/bin/python",
+  "project_id": "",
+  "phronosis_indexed": false,
+  "fail_to_pass": [
+    "testing/test_assertrewrite.py::TestAssertionRewrite::test_unroll_expression"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "testing/test_junitxml.py::TestPython::test_hostname_in_xml",
+    "testing/test_junitxml.py::TestPython::test_timestamp_in_xml"
+  ],
+  "tests_failed": [],
+  "error": null
+}

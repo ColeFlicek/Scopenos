@@ -1,0 +1,12 @@
+{
+  "instance_id": "pytest-dev__pytest-6116",
+  "path": "a",
+  "repo_path": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-6116",
+  "venv_python": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-6116/.bench-venv/bin/python",
+  "project_id": "",
+  "phronosis_indexed": false,
+  "fail_to_pass": [
+    "testing/test_collection.py::TestCustomConftests::test_pytest_fs_collect_hooks_are_seen",
+    "testing/test_collection.py::TestCustomConftests::test_pytest_collect_file_from_sister_dir"
+  ]
+}

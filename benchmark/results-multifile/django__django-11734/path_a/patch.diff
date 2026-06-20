@@ -1,0 +1,46 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 35f3c5e1ea..8a977a51f0 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -1702,7 +1702,7 @@ class Query(BaseExpression):
+         handle.
+         """
+         filter_lhs, filter_rhs = filter_expr
+-        if isinstance(filter_rhs, F):
++        if isinstance(filter_rhs, F) and not isinstance(filter_rhs, OuterRef):
+             filter_expr = (filter_lhs, OuterRef(filter_rhs.name))
+         # Generate the inner query.
+         query = Query(self.model)
+diff --git a/tests/queries/tests.py b/tests/queries/tests.py
+index 8339c52a02..cd10d29359 100644
+--- a/tests/queries/tests.py
++++ b/tests/queries/tests.py
+@@ -6,7 +6,7 @@ from operator import attrgetter
+ 
+ from django.core.exceptions import EmptyResultSet, FieldError
+ from django.db import DEFAULT_DB_ALIAS, connection
+-from django.db.models import Count, F, Q
++from django.db.models import Count, Exists, F, OuterRef, Q
+ from django.db.models.sql.constants import LOUTER
+ from django.db.models.sql.where import NothingNode, WhereNode
+ from django.test import SimpleTestCase, TestCase, skipUnlessDBFeature
+@@ -2810,6 +2810,19 @@ class ExcludeTests(TestCase):
+     def test_exclude_with_circular_fk_relation(self):
+         self.assertEqual(ObjectB.objects.exclude(objecta__objectb__name=F('name')).count(), 0)
+ 
++    def test_subquery_exclude_outerref(self):
++        # Using OuterRef inside Exists with exclude() should work the same as filter()
++        qs = Number.objects.annotate(
++            foo=Exists(Item.objects.filter(tags__category_id=OuterRef('pk')))
++        ).filter(foo=True)
++        self.assertSequenceEqual(qs, [])
++
++        # This was broken: OuterRef used wrong model in exclude()
++        qs = Number.objects.annotate(
++            foo=Exists(Item.objects.exclude(tags__category_id=OuterRef('pk')))
++        ).filter(foo=True)
++        self.assertSequenceEqual(qs, [])
++
+ 
+ class ExcludeTest17600(TestCase):
+     """

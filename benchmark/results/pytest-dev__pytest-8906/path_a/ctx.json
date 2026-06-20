@@ -1,0 +1,11 @@
+{
+  "instance_id": "pytest-dev__pytest-8906",
+  "path": "a",
+  "repo_path": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-8906",
+  "venv_python": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-8906/.bench-venv/bin/python",
+  "project_id": "",
+  "phronosis_indexed": false,
+  "fail_to_pass": [
+    "testing/test_skipping.py::test_module_level_skip_error"
+  ]
+}

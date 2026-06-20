@@ -113,6 +113,81 @@ def select_calibration_tasks(tasks: list[BenchmarkTask], n_hard: int = 3, n_rand
     return hard + easy
 
 
+INDEXED_REPOS = {
+    "django/django": "django",
+    "scikit-learn/scikit-learn": "scikit-learn",
+    "matplotlib/matplotlib": "matplotlib",
+    "pydata/xarray": "xarray",
+    "sphinx-doc/sphinx": "sphinx",
+    "mwaskom/seaborn": "seaborn",
+    "pylint-dev/pylint": "pylint",
+    "pytest-dev/pytest": "pytest",
+}
+
+
+def load_multifile_tasks(
+    repos: list[str] | None = None,
+    min_files: int = 2,
+    max_tasks: int = 20,
+    cache_dir: str | None = None,
+) -> list[BenchmarkTask]:
+    """
+    Load SWE-bench Full tasks where the ground-truth patch touches ≥ min_files files.
+    Restricts to repos already indexed in Phronosis (best Phronosis advantage).
+
+    These are the tasks most likely to reveal Path B > Path A:
+    - Multi-file patches require understanding cross-file relationships
+    - Phronosis call graph / impact_radius surfaces root causes across files
+    - Grep-based Path A tends to patch the symptom file, not the root cause
+    """
+    from datasets import load_dataset
+
+    target_repos = set(repos) if repos else set(INDEXED_REPOS.keys())
+
+    try:
+        ds = load_dataset("princeton-nlp/SWE-bench", split="test", cache_dir=cache_dir)
+    except Exception:
+        ds = load_dataset("princeton-nlp/SWE-bench_Lite", split="test", cache_dir=cache_dir)
+
+    tasks = []
+    seen: set[str] = set()
+
+    for row in ds:
+        if row["repo"] not in target_repos:
+            continue
+        if row["instance_id"] in seen:
+            continue
+
+        fail = _parse_list(row["FAIL_TO_PASS"])
+        if not fail:
+            continue
+
+        patch = row.get("patch", "")
+        files_changed = _count_patch_files(patch)
+        if files_changed < min_files:
+            continue
+
+        seen.add(row["instance_id"])
+        tasks.append(BenchmarkTask(
+            instance_id=row["instance_id"],
+            repo=row["repo"],
+            base_commit=row["base_commit"],
+            problem_statement=row["problem_statement"],
+            fail_to_pass=fail,
+            pass_to_pass=_parse_list(row["PASS_TO_PASS"]),
+        ))
+
+        if len(tasks) >= max_tasks:
+            break
+
+    return tasks
+
+
+def _count_patch_files(patch: str) -> int:
+    """Count how many files a unified diff touches."""
+    return sum(1 for line in patch.splitlines() if line.startswith("diff --git "))
+
+
 def _parse_list(value) -> list[str]:
     """Normalise FAIL_TO_PASS / PASS_TO_PASS — may be JSON string or list."""
     if isinstance(value, str):

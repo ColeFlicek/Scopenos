@@ -1,0 +1,11 @@
+{
+  "instance_id": "pytest-dev__pytest-7220",
+  "path": "a",
+  "repo_path": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-7220",
+  "venv_python": "/tmp/claude-0/phronosis-bench-wrmfmbr5/pytest-dev__pytest-7220/.bench-venv/bin/python",
+  "project_id": "",
+  "phronosis_indexed": false,
+  "fail_to_pass": [
+    "testing/test_nodes.py::test_failure_with_changed_cwd"
+  ]
+}

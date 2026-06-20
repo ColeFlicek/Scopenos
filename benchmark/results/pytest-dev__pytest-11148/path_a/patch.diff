@@ -1,0 +1,88 @@
+diff --git a/src/_pytest/pathlib.py b/src/_pytest/pathlib.py
+index e43310ef0..d4031d60e 100644
+--- a/src/_pytest/pathlib.py
++++ b/src/_pytest/pathlib.py
+@@ -524,6 +524,11 @@ def import_path(
+     if mode is ImportMode.importlib:
+         module_name = module_name_from_path(path, root)
+ 
++        # If the module has already been imported under this name, return it
++        # directly to avoid importing the same file twice as separate module objects.
++        with contextlib.suppress(KeyError):
++            return sys.modules[module_name]
++
+         for meta_importer in sys.meta_path:
+             spec = meta_importer.find_spec(module_name, [str(path.parent)])
+             if spec is not None:
+diff --git a/testing/acceptance_test.py b/testing/acceptance_test.py
+index 453e26972..981cee252 100644
+--- a/testing/acceptance_test.py
++++ b/testing/acceptance_test.py
+@@ -1315,3 +1315,36 @@ def test_function_return_non_none_warning(pytester: Pytester) -> None:
+     )
+     res = pytester.runpytest()
+     res.stdout.fnmatch_lines(["*Did you mean to use `assert` instead of `return`?*"])
++
++
++def test_doctest_and_normal_imports_with_importlib(pytester: Pytester) -> None:
++    """
++    Regression test for #10811: previously import_path with ImportMode.importlib would
++    not return a module if already in sys.modules, resulting in modules being imported
++    multiple times, which causes problems with modules that have import side effects.
++    """
++    pytester.makepyfile(
++        **{
++            "pmxbot/commands.py": "from . import logging",
++            "pmxbot/logging.py": "",
++            "tests/__init__.py": "",
++            "tests/test_commands.py": """
++                import importlib
++                from pmxbot import logging
++
++                class TestCommands:
++                    def test_boo(self):
++                        assert importlib.import_module('pmxbot.logging') is logging
++                """,
++        }
++    )
++    pytester.makeini(
++        """
++        [pytest]
++        addopts=
++            --doctest-modules
++            --import-mode importlib
++        """
++    )
++    result = pytester.runpytest_subprocess()
++    result.stdout.fnmatch_lines("*1 passed*")
+diff --git a/testing/test_pathlib.py b/testing/test_pathlib.py
+index c15a81ea1..1f4d4ed31 100644
+--- a/testing/test_pathlib.py
++++ b/testing/test_pathlib.py
+@@ -298,13 +298,13 @@ class TestImportPath:
+         assert "_src" in sys.modules
+         assert "_src.tests" in sys.modules
+ 
+-    def test_importmode_twice_is_different_module(
++    def test_remembers_previous_imports(
+         self, simple_module: Path, tmp_path: Path
+     ) -> None:
+-        """`importlib` mode always returns a new module."""
++        """`importlib` mode remembers previous imports (#10341, #10811)."""
+         module1 = import_path(simple_module, mode="importlib", root=tmp_path)
+         module2 = import_path(simple_module, mode="importlib", root=tmp_path)
+-        assert module1 is not module2
++        assert module1 is module2
+ 
+     def test_no_meta_path_found(
+         self, simple_module: Path, monkeypatch: MonkeyPatch, tmp_path: Path
+@@ -317,6 +317,9 @@ class TestImportPath:
+         # mode='importlib' fails if no spec is found to load the module
+         import importlib.util
+ 
++        # Force module to be re-imported so we can test the error path.
++        del sys.modules[module.__name__]
++
+         monkeypatch.setattr(
+             importlib.util, "spec_from_file_location", lambda *args: None
+         )

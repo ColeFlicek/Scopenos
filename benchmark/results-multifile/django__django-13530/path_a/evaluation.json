@@ -1,0 +1,13 @@
+{
+  "resolved": true,
+  "passed": [
+    "test_expression_wrapper_key_transform (model_fields.test_jsonfield.TestQuerying)",
+    "test_key_in (model_fields.test_jsonfield.TestQuerying)",
+    "test_key_iregex (model_fields.test_jsonfield.TestQuerying)"
+  ],
+  "failed": [],
+  "error": null,
+  "patch_applied": true,
+  "agent_tokens": 67160,
+  "tool_call_count": 64
+}

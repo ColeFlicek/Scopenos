@@ -1,0 +1,73 @@
+diff --git a/src/_pytest/mark/evaluate.py b/src/_pytest/mark/evaluate.py
+index 759191668..837371c83 100644
+--- a/src/_pytest/mark/evaluate.py
++++ b/src/_pytest/mark/evaluate.py
+@@ -21,13 +21,19 @@ evalcache_key = StoreKey[Dict[str, Any]]()
+ def cached_eval(config: Config, expr: str, d: Dict[str, object]) -> Any:
+     default = {}  # type: Dict[str, object]
+     evalcache = config._store.setdefault(evalcache_key, default)
++    # Include the module name in the cache key so that the same expression
++    # string evaluates independently per module (different modules may have
++    # different globals, e.g. a local variable with the same name but a
++    # different value).
++    module_name = d.get("__name__", "")
++    cache_key = (expr, module_name)
+     try:
+-        return evalcache[expr]
++        return evalcache[cache_key]
+     except KeyError:
+         import _pytest._code
+ 
+         exprcode = _pytest._code.compile(expr, mode="eval")
+-        evalcache[expr] = x = eval(exprcode, d)
++        evalcache[cache_key] = x = eval(exprcode, d)
+         return x
+ 
+ 
+diff --git a/testing/test_mark.py b/testing/test_mark.py
+index cdd4df9dd..1dca6c549 100644
+--- a/testing/test_mark.py
++++ b/testing/test_mark.py
+@@ -706,6 +706,42 @@ class TestFunctional:
+         reprec = testdir.inline_run()
+         reprec.assertoutcome(skipped=1)
+ 
++    def test_reevaluate_dynamic_expr(self, testdir):
++        """The cache key for string conditions must include the module so that
++        the same expression string evaluates independently per module.
++
++        If module A defines ``myvar = 1`` and module B defines ``myvar = 2``,
++        the condition ``"myvar == 1"`` should be True in A and False in B.
++        Without a module-aware cache key the result from A would be
++        incorrectly reused for B.
++        """
++        testdir.makepyfile(
++            test_module_a="""
++            import pytest
++
++            myvar = 1
++
++            @pytest.mark.skipif("myvar == 1", reason="skip in module a")
++            def test_a():
++                pass
++        """
++        )
++        testdir.makepyfile(
++            test_module_b="""
++            import pytest
++
++            myvar = 2
++
++            @pytest.mark.skipif("myvar == 1", reason="skip in module b")
++            def test_b():
++                pass
++        """
++        )
++        reprec = testdir.inline_run()
++        # test_a should be skipped (myvar == 1 is True in module A)
++        # test_b should pass (myvar == 1 is False in module B)
++        reprec.assertoutcome(passed=1, skipped=1)
++
+ 
+ class TestKeywordSelection:
+     def test_select_simple(self, testdir):

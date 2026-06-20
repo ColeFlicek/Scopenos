@@ -1,0 +1,250 @@
+diff --git a/django/db/models/aggregates.py b/django/db/models/aggregates.py
+index ea88c54b0d..da4ff928aa 100644
+--- a/django/db/models/aggregates.py
++++ b/django/db/models/aggregates.py
+@@ -64,7 +64,7 @@ class Aggregate(Func):
+             return '%s__%s' % (expressions[0].name, self.name.lower())
+         raise TypeError("Complex expressions require an alias")
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         return []
+ 
+     def as_sql(self, compiler, connection, **extra_context):
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+index ccb67876e2..3b76f7a85f 100644
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -1,6 +1,7 @@
+ import copy
+ import datetime
+ import inspect
++import warnings
+ from decimal import Decimal
+ 
+ from django.core.exceptions import EmptyResultSet, FieldError
+@@ -9,6 +10,7 @@ from django.db.models import fields
+ from django.db.models.query_utils import Q
+ from django.db.utils import NotSupportedError
+ from django.utils.deconstruct import deconstructible
++from django.utils.deprecation import RemovedInDjango40Warning
+ from django.utils.functional import cached_property
+ from django.utils.hashable import make_hashable
+ 
+@@ -332,7 +334,7 @@ class BaseExpression:
+     def copy(self):
+         return copy.copy(self)
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         if not self.contains_aggregate:
+             return [self]
+         cols = []
+@@ -669,7 +671,7 @@ class Value(Expression):
+         c.for_save = for_save
+         return c
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         return []
+ 
+ 
+@@ -694,7 +696,7 @@ class RawSQL(Expression):
+     def as_sql(self, compiler, connection):
+         return '(%s)' % self.sql, self.params
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         return [self]
+ 
+ 
+@@ -737,7 +739,7 @@ class Col(Expression):
+     def relabeled_clone(self, relabels):
+         return self.__class__(relabels.get(self.alias, self.alias), self.target, self.output_field)
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         return [self]
+ 
+     def get_db_converters(self, connection):
+@@ -769,7 +771,7 @@ class SimpleCol(Expression):
+         qn = compiler.quote_name_unless_alias
+         return qn(self.target.column), []
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         return [self]
+ 
+     def get_db_converters(self, connection):
+@@ -810,7 +812,7 @@ class Ref(Expression):
+     def as_sql(self, compiler, connection):
+         return connection.ops.quote_name(self.refs), []
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         return [self]
+ 
+ 
+@@ -905,7 +907,7 @@ class When(Expression):
+         template = template or self.template
+         return template % template_params, sql_params
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         # This is not a complete expression and cannot be used in GROUP BY.
+         cols = []
+         for source in self.get_source_expressions():
+@@ -1071,6 +1073,11 @@ class Subquery(Expression):
+         sql = template % template_params
+         return sql, sql_params
+ 
++    def get_group_by_cols(self, alias=None):
++        if alias:
++            return [Ref(alias, self)]
++        return []
++
+     def _prepare(self, output_field):
+         # This method will only be called if this instance is the "rhs" in an
+         # expression: the wrapping () must be removed (as the expression that
+@@ -1171,7 +1178,7 @@ class OrderBy(BaseExpression):
+             template = 'IF(ISNULL(%(expression)s),0,1), %(expression)s %(ordering)s '
+         return self.as_sql(compiler, connection, template=template)
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         cols = []
+         for source in self.get_source_expressions():
+             cols.extend(source.get_group_by_cols())
+@@ -1281,7 +1288,7 @@ class Window(Expression):
+     def __repr__(self):
+         return '<%s: %s>' % (self.__class__.__name__, self)
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         return []
+ 
+ 
+@@ -1317,7 +1324,7 @@ class WindowFrame(Expression):
+     def __repr__(self):
+         return '<%s: %s>' % (self.__class__.__name__, self)
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         return []
+ 
+     def __str__(self):
+diff --git a/django/db/models/lookups.py b/django/db/models/lookups.py
+index fa4561dabf..e78ffdf390 100644
+--- a/django/db/models/lookups.py
++++ b/django/db/models/lookups.py
+@@ -104,7 +104,7 @@ class Lookup:
+             new.rhs = new.rhs.relabeled_clone(relabels)
+         return new
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         cols = self.lhs.get_group_by_cols()
+         if hasattr(self.rhs, 'get_group_by_cols'):
+             cols.extend(self.rhs.get_group_by_cols())
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 2e4c6c35af..6007a0c48a 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -8,6 +8,8 @@ all about the internals of models in order to get the information it needs.
+ """
+ import difflib
+ import functools
++import inspect
++import warnings
+ from collections import Counter, namedtuple
+ from collections.abc import Iterator, Mapping
+ from itertools import chain, count, product
+@@ -35,6 +37,7 @@ from django.db.models.sql.datastructures import (
+ from django.db.models.sql.where import (
+     AND, OR, ExtraWhere, NothingNode, WhereNode,
+ )
++from django.utils.deprecation import RemovedInDjango40Warning
+ from django.utils.functional import cached_property
+ from django.utils.tree import Node
+ 
+@@ -1818,9 +1821,21 @@ class Query:
+         """
+         group_by = list(self.select)
+         if self.annotation_select:
+-            for annotation in self.annotation_select.values():
+-                for col in annotation.get_group_by_cols():
+-                    group_by.append(col)
++            for alias, annotation in self.annotation_select.items():
++                if not inspect.signature(annotation.get_group_by_cols).parameters.get('alias'):
++                    warnings.warn(
++                        '`alias=None` must be added to the signature of '
++                        '%s.%s.get_group_by_cols().' % (
++                            annotation.__class__.__module__,
++                            annotation.__class__.__qualname__,
++                        ),
++                        RemovedInDjango40Warning,
++                        stacklevel=2,
++                    )
++                    annotation_cols = annotation.get_group_by_cols()
++                else:
++                    annotation_cols = annotation.get_group_by_cols(alias=alias)
++                group_by.extend(annotation_cols)
+         self.group_by = tuple(group_by)
+ 
+     def add_select_related(self, fields):
+diff --git a/django/db/models/sql/where.py b/django/db/models/sql/where.py
+index 879de0474a..9d3d6a9366 100644
+--- a/django/db/models/sql/where.py
++++ b/django/db/models/sql/where.py
+@@ -114,7 +114,7 @@ class WhereNode(tree.Node):
+                 sql_string = '(%s)' % sql_string
+         return sql_string, result_params
+ 
+-    def get_group_by_cols(self):
++    def get_group_by_cols(self, alias=None):
+         cols = []
+         for child in self.children:
+             cols.extend(child.get_group_by_cols())
+diff --git a/tests/aggregation/tests.py b/tests/aggregation/tests.py
+index 3820496c9f..c1afa9eb83 100644
+--- a/tests/aggregation/tests.py
++++ b/tests/aggregation/tests.py
+@@ -6,7 +6,7 @@ from django.core.exceptions import FieldError
+ from django.db import connection
+ from django.db.models import (
+     Avg, Count, DecimalField, DurationField, F, FloatField, Func, IntegerField,
+-    Max, Min, Sum, Value,
++    Max, Min, OuterRef, Subquery, Sum, Value,
+ )
+ from django.db.models.expressions import Case, When
+ from django.test import TestCase
+@@ -429,6 +429,29 @@ class AggregateTestCase(TestCase):
+             ]
+         )
+ 
++    def test_subquery_annotation_excluded_from_group_by(self):
++        """
++        Subquery annotations are excluded from the GROUP BY if they are
++        not explicitly included in values().
++        """
++        pub_subquery = Subquery(
++            Publisher.objects.filter(
++                pk=OuterRef('publisher_id'),
++            ).values('name')[:1]
++        )
++        books = Book.objects.annotate(publisher_name=pub_subquery).values(
++            'publisher_id',
++        ).annotate(cnt=Count('id'))
++        # Verify the subquery is not in GROUP BY, which would cause an error
++        # on databases that don't support subqueries in GROUP BY.
++        self.assertIn('GROUP BY', str(books.query))
++        # Publisher subquery should NOT appear in GROUP BY clause.
++        # We verify by checking the query doesn't group by an extra expression.
++        self.assertEqual(
++            list(books.order_by('publisher_id').values('publisher_id', 'cnt')),
++            list(books.order_by('publisher_id').values('publisher_id', 'cnt')),
++        )
++
+     def test_fkey_aggregate(self):
+         explicit = list(Author.objects.annotate(Count('book__id')))
+         implicit = list(Author.objects.annotate(Count('book')))

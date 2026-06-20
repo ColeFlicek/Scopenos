@@ -1,0 +1,57 @@
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+index 335e10996..b10337dae 100644
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -256,6 +256,13 @@ def pytest_runtest_call(item: Item) -> Generator[None, None, None]:
+ 
+     yield
+ 
++    # Re-evaluate xfail marks after the test body runs to catch any markers
++    # added dynamically during test execution.
++    if not item.config.option.runxfail:
++        xfailed = evaluate_xfail_marks(item)
++        if xfailed is not None:
++            item._store[xfailed_key] = xfailed
++
+ 
+ @hookimpl(hookwrapper=True)
+ def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+diff --git a/testing/test_skipping.py b/testing/test_skipping.py
+index 8fceb37aa..61313081d 100644
+--- a/testing/test_skipping.py
++++ b/testing/test_skipping.py
+@@ -425,6 +425,34 @@ class TestXFail:
+         result = testdir.runpytest(p)
+         result.stdout.fnmatch_lines(["*1 xfailed*"])
+ 
++    def test_dynamic_xfail_set_during_runtest_failed(self, testdir):
++        """Dynamically adding xfail marker inside the test body should report
++        XFAIL when the test fails (regression test for pytest 6 regression)."""
++        p = testdir.makepyfile(
++            """
++            import pytest
++            def test_this(request):
++                request.node.add_marker(pytest.mark.xfail(reason="dynamic"))
++                assert 0
++        """
++        )
++        result = testdir.runpytest(p, "-rxX")
++        result.stdout.fnmatch_lines(["*1 xfailed*"])
++
++    def test_dynamic_xfail_set_during_runtest_passed_strict(self, testdir):
++        """Dynamically adding xfail(strict=True) marker inside the test body
++        should report XPASS(strict) when the test passes (regression test for
++        pytest 6 regression)."""
++        p = testdir.makepyfile(
++            """
++            import pytest
++            def test_this(request):
++                request.node.add_marker(pytest.mark.xfail(reason="dynamic", strict=True))
++        """
++        )
++        result = testdir.runpytest(p, "-rxX")
++        result.stdout.fnmatch_lines(["*XPASS(strict)*", "*1 failed*"])
++
+     @pytest.mark.parametrize(
+         "expected, actual, matchline",
+         [

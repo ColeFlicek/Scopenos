@@ -1,0 +1,44 @@
+diff --git a/src/_pytest/tmpdir.py b/src/_pytest/tmpdir.py
+index 29c7e19d7..9aeace8da 100644
+--- a/src/_pytest/tmpdir.py
++++ b/src/_pytest/tmpdir.py
+@@ -111,7 +111,7 @@ class TempPathFactory:
+         else:
+             from_env = os.environ.get("PYTEST_DEBUG_TEMPROOT")
+             temproot = Path(from_env or tempfile.gettempdir()).resolve()
+-            user = get_user() or "unknown"
++            user = re.sub(r"[^\w\-]", "_", get_user() or "unknown")
+             # use a sub-directory in the temproot to speed-up
+             # make_numbered_dir() call
+             rootdir = temproot.joinpath(f"pytest-of-{user}")
+diff --git a/testing/test_tmpdir.py b/testing/test_tmpdir.py
+index d123287aa..6b910e830 100644
+--- a/testing/test_tmpdir.py
++++ b/testing/test_tmpdir.py
+@@ -246,6 +246,26 @@ def test_get_user(monkeypatch):
+     assert get_user() is None
+ 
+ 
++def test_tmp_path_factory_handles_invalid_dir_characters(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """Test that getbasetemp() sanitizes usernames with illegal path characters (#8342).
++
++    Windows domain usernames like 'DOMAIN\\user' contain backslashes which are
++    invalid in directory names on some platforms.
++    """
++    monkeypatch.setenv("USERNAME", "contoso\\john")
++    monkeypatch.setenv("USER", "contoso\\john")
++    config = cast(Config, FakeConfig(None))
++    # Point PYTEST_DEBUG_TEMPROOT at our tmp_path so the test doesn't pollute /tmp
++    monkeypatch.setenv("PYTEST_DEBUG_TEMPROOT", str(tmp_path))
++    t = TempPathFactory.from_config(config, _ispytest=True)
++    basetemp = t.getbasetemp()
++    # The path must exist and must not contain a backslash in the leaf name
++    assert basetemp.exists()
++    assert "\\" not in basetemp.parent.name
++
++
+ class TestNumberedDir:
+     PREFIX = "fun-"
+ 

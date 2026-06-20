@@ -1,0 +1,15 @@
+{
+  "resolved": true,
+  "passed": [
+    "test_equality (lookup.test_lookups.LookupTests)",
+    "test_hash (lookup.test_lookups.LookupTests)",
+    "test_equality (queries.test_query.TestQuery)",
+    "test_hash (queries.test_query.TestQuery)",
+    "test_exclude_multivalued_exists (queries.tests.ExcludeTests)"
+  ],
+  "failed": [],
+  "error": null,
+  "patch_applied": true,
+  "agent_tokens": 186562,
+  "tool_call_count": 192
+}

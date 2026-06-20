@@ -75,6 +75,10 @@ def write_summary(results_dir: str = "results") -> dict:
     results_path = Path(results_dir)
     tasks_a_resolved = 0
     tasks_b_resolved = 0
+    total_a_tokens = 0
+    total_b_tokens = 0
+    total_a_tools = 0
+    total_b_tools = 0
     total = 0
 
     rows = []
@@ -89,16 +93,30 @@ def write_summary(results_dir: str = "results") -> dict:
         total += 1
         a_ok = eval_a.get("resolved", False) if eval_a else False
         b_ok = eval_b.get("resolved", False) if eval_b else False
+        a_tokens = eval_a.get("agent_tokens", 0) if eval_a else 0
+        b_tokens = eval_b.get("agent_tokens", 0) if eval_b else 0
+        a_tools = eval_a.get("tool_call_count", 0) if eval_a else 0
+        b_tools = eval_b.get("tool_call_count", 0) if eval_b else 0
+
         if a_ok:
             tasks_a_resolved += 1
         if b_ok:
             tasks_b_resolved += 1
+        total_a_tokens += a_tokens
+        total_b_tokens += b_tokens
+        total_a_tools += a_tools
+        total_b_tools += b_tools
 
         rows.append({
             "instance_id": task_dir.name,
             "path_a_resolved": a_ok,
             "path_b_resolved": b_ok,
             "phronosis_advantage": b_ok and not a_ok,
+            "path_a_tokens": a_tokens,
+            "path_b_tokens": b_tokens,
+            "path_a_tools": a_tools,
+            "path_b_tools": b_tools,
+            "token_savings": a_tokens - b_tokens,
         })
 
     summary = {
@@ -106,11 +124,17 @@ def write_summary(results_dir: str = "results") -> dict:
         "path_a": {
             "resolved": tasks_a_resolved,
             "resolve_rate": round(tasks_a_resolved / total, 4) if total else 0,
+            "total_tokens": total_a_tokens,
+            "total_tool_calls": total_a_tools,
         },
         "path_b": {
             "resolved": tasks_b_resolved,
             "resolve_rate": round(tasks_b_resolved / total, 4) if total else 0,
+            "total_tokens": total_b_tokens,
+            "total_tool_calls": total_b_tools,
         },
+        "token_savings": total_a_tokens - total_b_tokens,
+        "token_savings_pct": round((total_a_tokens - total_b_tokens) / total_a_tokens * 100, 1) if total_a_tokens else 0,
         "phronosis_advantage_tasks": sum(1 for r in rows if r["phronosis_advantage"]),
         "tasks": rows,
     }
@@ -123,13 +147,23 @@ def print_summary(summary: dict) -> None:
     total = summary["total_tasks"]
     a = summary["path_a"]
     b = summary["path_b"]
-    print(f"\n{'='*50}")
+    tok_save = summary.get("token_savings", 0)
+    tok_pct = summary.get("token_savings_pct", 0)
+    print(f"\n{'='*56}")
     print(f"  Benchmark Results ({total} tasks)")
-    print(f"{'='*50}")
-    print(f"  Baseline (Path A): {a['resolved']}/{total} resolved ({a['resolve_rate']*100:.1f}%)")
-    print(f"  Phronosis    (Path B): {b['resolved']}/{total} resolved ({b['resolve_rate']*100:.1f}%)")
-    print(f"  Phronosis advantage:    {summary['phronosis_advantage_tasks']} tasks Path B fixed that A couldn't")
-    print(f"{'='*50}\n")
+    print(f"{'='*56}")
+    print(f"  {'Metric':<28} {'Path A':>10} {'Path B':>10}")
+    print(f"  {'-'*48}")
+    print(f"  {'Resolved':<28} {a['resolved']:>9}/{total} {b['resolved']:>9}/{total}")
+    if a['total_tokens'] or b['total_tokens']:
+        print(f"  {'Total tokens':<28} {a['total_tokens']:>10,} {b['total_tokens']:>10,}")
+        print(f"  {'Token savings (B vs A)':<28} {tok_save:>+10,} ({tok_pct:+.1f}%)")
+    if a['total_tool_calls'] or b['total_tool_calls']:
+        tool_delta = b['total_tool_calls'] - a['total_tool_calls']
+        print(f"  {'Total tool calls':<28} {a['total_tool_calls']:>10,} {b['total_tool_calls']:>10,}  ({tool_delta:+d})")
+    print(f"  {'-'*48}")
+    print(f"  Phronosis advantage: {summary['phronosis_advantage_tasks']} task(s) Path B resolved that A could not")
+    print(f"{'='*56}\n")
 
 
 def _load_eval(path: Path) -> dict | None:

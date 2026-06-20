@@ -1,0 +1,12 @@
+{
+  "resolved": true,
+  "passed": [
+    "test_missing_alias (expressions.test_deprecation.GetGroupByColsTest)",
+    "Subquery annotations are excluded from the GROUP BY if they are"
+  ],
+  "failed": [],
+  "error": null,
+  "patch_applied": true,
+  "agent_tokens": 62904,
+  "tool_call_count": 97
+}

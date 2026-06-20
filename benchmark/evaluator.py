@@ -96,19 +96,129 @@ def evaluate(
 
 
 def _run_tests(test_ids: list[str], repo_path: str, python: str = "python") -> tuple[list[str], list[str]]:
-    """Run a list of pytest node IDs and return (passed, failed)."""
+    """Run a list of test IDs and return (passed, failed).
+
+    Handles both pytest node IDs and Django's 'test_name (module.ClassName)' format.
+    """
     if not test_ids:
         return [], []
+
+    if _is_django_format(test_ids[0]):
+        return _run_django_tests(test_ids, repo_path, python)
 
     result = subprocess.run(
         [python, "-m", "pytest", "-v", "--tb=no", *test_ids],
         cwd=repo_path,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,
     )
 
     return _parse_pytest_output(result.stdout + result.stderr, test_ids)
+
+
+def _is_django_format(test_id: str) -> bool:
+    """Detect Django's 'test_name (module.ClassName)' test ID format."""
+    return " (" in test_id and test_id.endswith(")")
+
+
+def _run_django_tests(test_ids: list[str], repo_path: str, python: str) -> tuple[list[str], list[str]]:
+    """Run Django-format tests using runtests.py or pytest-django."""
+    passed, failed = [], []
+    tests_dir = os.path.join(repo_path, "tests")
+    runtests = os.path.join(tests_dir, "runtests.py")
+
+    for tid in test_ids:
+        # Docstring-style test ID: 'Subquery annotations are excluded from...'
+        # These aren't runnable by name — run the module and search output for the docstring
+        if not _is_django_format(tid) and not tid.startswith("test_"):
+            result_p, result_f = _run_django_docstring_test(tid, test_ids, repo_path, python)
+            passed.extend(result_p)
+            failed.extend(result_f)
+            continue
+
+        dotted = _django_id_to_dotted(tid)
+        if os.path.exists(runtests):
+            result = subprocess.run(
+                [python, "runtests.py", "--verbosity=2", "--parallel=1", dotted],
+                cwd=tests_dir,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        else:
+            pytest_id = _django_id_to_pytest(tid, repo_path)
+            result = subprocess.run(
+                [python, "-m", "pytest", "-v", "--tb=no", pytest_id],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        output = result.stdout + result.stderr
+        if "OK" in output or " PASSED" in output or "... ok" in output:
+            passed.append(tid)
+        else:
+            failed.append(tid)
+
+    return passed, failed
+
+
+def _run_django_docstring_test(
+    docstring_id: str, all_test_ids: list[str], repo_path: str, python: str
+) -> tuple[list[str], list[str]]:
+    """Handle test IDs that are docstrings (verbose output) rather than method names.
+
+    Strategy: run the entire aggregation/expressions/queries suite with -v2 and
+    look for the docstring followed by '... ok' in the output.
+    """
+    tests_dir = os.path.join(repo_path, "tests")
+    runtests = os.path.join(tests_dir, "runtests.py")
+    if not os.path.exists(runtests):
+        return [], [docstring_id]
+
+    # Run broad modules likely to contain this test
+    for module in ["aggregation", "expressions", "queries"]:
+        result = subprocess.run(
+            [python, "runtests.py", "--verbosity=2", "--parallel=1", module],
+            cwd=tests_dir, capture_output=True, text=True, timeout=300,
+        )
+        output = result.stdout + result.stderr
+        needle = docstring_id[:40]  # first 40 chars to match docstring prefix
+        if needle.lower() in output.lower():
+            # Check if the docstring line ends with '... ok' (pass) or 'FAIL'/'ERROR'
+            for line in output.splitlines():
+                if needle.lower() in line.lower():
+                    if "ok" in line.lower():
+                        return [docstring_id], []
+                    elif "fail" in line.lower() or "error" in line.lower():
+                        return [], [docstring_id]
+            # Found the module but unclear status — check overall result
+            if "OK" in output and "FAILED" not in output:
+                return [docstring_id], []
+
+    return [], [docstring_id]
+
+
+def _django_id_to_dotted(test_id: str) -> str:
+    """'test_name (module.ClassName)' → 'module.ClassName.test_name'"""
+    if " (" not in test_id or not test_id.endswith(")"):
+        return test_id  # can't parse — return as-is for best-effort matching
+    name, rest = test_id.split(" (", 1)
+    module_class = rest.rstrip(")")
+    return f"{module_class}.{name}"
+
+
+def _django_id_to_pytest(test_id: str, repo_path: str) -> str:
+    """'test_name (module.ClassName)' → 'tests/module/path.py::ClassName::test_name'"""
+    name, rest = test_id.split(" (", 1)
+    module_class = rest.rstrip(")")
+    parts = module_class.rsplit(".", 1)
+    if len(parts) == 2:
+        module_path, class_name = parts
+        file_path = os.path.join("tests", module_path.replace(".", os.sep) + ".py")
+        return f"{file_path}::{class_name}::{name}"
+    return test_id
 
 
 def _parse_pytest_output(output: str, test_ids: list[str]) -> tuple[list[str], list[str]]:

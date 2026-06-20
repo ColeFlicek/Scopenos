@@ -1,0 +1,10 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "testing/test_pathlib.py::TestImportPath::test_remembers_previous_imports",
+    "testing/acceptance_test.py::test_doctest_and_normal_imports_with_importlib"
+  ],
+  "tests_failed": [],
+  "error": null
+}

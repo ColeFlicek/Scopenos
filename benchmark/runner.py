@@ -28,6 +28,7 @@ class AgentResult:
     submitted: bool
     notes: str = ""           # agent's self-reported summary
     error: str | None = None
+    agent_tokens: int = 0     # subagent_tokens from Agent tool completion notification
 
 
 def build_prompt_a(task: BenchmarkTask, ctx: RepoContext) -> str:

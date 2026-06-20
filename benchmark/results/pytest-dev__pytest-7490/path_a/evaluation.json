@@ -1,0 +1,10 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "testing/test_skipping.py::TestXFail::test_dynamic_xfail_set_during_runtest_failed",
+    "testing/test_skipping.py::TestXFail::test_dynamic_xfail_set_during_runtest_passed_strict"
+  ],
+  "tests_failed": [],
+  "error": null
+}
