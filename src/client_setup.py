@@ -90,15 +90,10 @@ try:
             sys.exit(0)
         print(f"[Phronosis] Architectural context — {pid} ({home.get('function_count','?')} functions)")
         print(f"  Chokepoints : {_fmt(home.get('chokepoints',[]))}")
-        print(f"  Risk surface: {_fmt(home.get('risk_surface',[]))}")
-        print(f"  Entry points: {_fmt(home.get('entry_points',[]))}")
         ssl = home.get("since_last_session")
         if ssl and any(ssl.get(k) for k in ("functions_added","functions_modified","functions_removed")):
             print(f"  Since last session: +{len(ssl.get('functions_added',[]))} "
                   f"~{len(ssl.get('functions_modified',[]))} -{len(ssl.get('functions_removed',[]))} functions")
-        gaps = home.get("health",{}).get("top_knowledge_gaps",[])
-        if gaps:
-            print(f"  Top knowledge gap: {gaps[0].get('id','').split('.')[-1]} ({gaps[0].get('caller_count',0)} callers)")
         print(f"\n[Phronosis] Context loaded. Retry your Read — gate valid for {GATE_TTL//60} min.")
         _write_gate(pid)
         sys.exit(2)
@@ -117,10 +112,6 @@ try:
             fid = cp.get("id","")
             if mod and (mod in fid or fid.startswith(mod)):
                 warnings.append(f"  CHOKEPOINT  {'.'.join(fid.split('.')[-2:])}  ({cp['caller_count']} callers)")
-        for rs in home.get("risk_surface",[]):
-            fid = rs.get("id","")
-            if mod and (mod in fid or fid.startswith(mod)):
-                warnings.append(f"  RISK SURFACE  {'.'.join(fid.split('.')[-2:])}  ({rs['churn']} patches · {rs['caller_count']} callers)")
         if warnings:
             print(f"[Phronosis] High-risk edit in {os.path.basename(path)}:")
             for w in warnings: print(w)

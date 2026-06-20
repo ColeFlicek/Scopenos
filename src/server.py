@@ -948,13 +948,9 @@ async def get_project_home(project_id: str) -> str:
         * function_count
         * anchor: the most-called class (representative of the subsystem)
         * anchor_summary: what the anchor does (80 chars)
-        * top_functions: top-5 functions by caller count — tells you what this
-          subsystem EXPORTS and does, without reading a file
-    - connections: top-30 cross-subsystem wiring pairs by call volume
-    - chokepoints: functions everything depends on — touch carefully
-    - entry_points: top of the call graph (nothing calls these)
-    - risk_surface: high-churn AND high-impact functions — highest change risk
-    - health: contract compliance, top_knowledge_gaps, churn hotspots
+        * top_functions: top-3 functions by caller count
+    - connections: top-30 cross-subsystem wiring pairs (from, to, edge_count)
+    - chokepoints: top-5 functions by caller count — touch carefully
     - recent_decisions: what changed in this codebase recently and why
 
     HOW TO USE:

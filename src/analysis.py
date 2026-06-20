@@ -29,10 +29,7 @@ class ArchitectureAnalyzer:
     _ADAPTIVE_DEPTH_THRESHOLD = 300
 
     # How many functions to surface per subsystem in the compact overview
-    _TOP_FUNCTIONS_PER_SUBSYSTEM = 5
-
-    # How many representative callers to show per cross-subsystem connection
-    _CONNECTION_VIA_LIMIT = 2
+    _TOP_FUNCTIONS_PER_SUBSYSTEM = 3
 
     def __init__(self, http_patterns: tuple[str, ...] = DEFAULT_HTTP_PATTERNS) -> None:
         self._http_patterns = http_patterns
@@ -87,9 +84,6 @@ class ArchitectureAnalyzer:
         subsystems = self._build_subsystems(data, subsystem_map, external_callee_counts)
         connections = self._cross_subsystem_connections(data, subsystem_map)
         chokepoints = self._chokepoints(data)
-        entry_points = self._entry_points(data)
-        risk_surface, risk_mode = self._risk_surface(data)
-        health = self._health(data, risk_mode)
         since = self._since_last_session(data)
 
         return ArchitectureSnapshot(
@@ -98,9 +92,6 @@ class ArchitectureAnalyzer:
             subsystems=subsystems,
             connections=connections,
             chokepoints=chokepoints,
-            entry_points=entry_points,
-            risk_surface=risk_surface,
-            health=health,
             recent_decisions=data.recent_decisions,
             since_last_session=since,
         )
@@ -150,15 +141,8 @@ class ArchitectureAnalyzer:
 
             fn_nodes = [n for n in nodes if n["type"] not in ("class", "ClassDef")]
 
-            # Top functions by total caller count (what this subsystem exports)
             top_fns = sorted(fn_nodes, key=lambda n: data.caller_counts.get(n["id"], 0), reverse=True)
             top_fns = top_fns[:self._TOP_FUNCTIONS_PER_SUBSYSTEM]
-
-            # Improvement 3: public API count — functions called from other subsystems
-            public_fn_count = sum(1 for n in fn_nodes if external_callee_counts.get(n["id"], 0) > 0)
-
-            # Improvement 4: churn — how many decisions touch this subsystem
-            subsystem_churn = sum(data.churn.get(n["id"], 0) for n in nodes)
 
             subsystems.append({
                 "name": s_name,
@@ -173,10 +157,6 @@ class ArchitectureAnalyzer:
                     }
                     for n in top_fns
                 ],
-                # How many of this subsystem's functions are called from outside
-                "public_functions": public_fn_count,
-                # Total decisions logged against functions in this subsystem
-                "churn": subsystem_churn,
             })
 
         cap = limit if limit is not None else self._SUBSYSTEM_OVERVIEW_LIMIT
@@ -189,8 +169,6 @@ class ArchitectureAnalyzer:
                 "anchor": "",
                 "anchor_summary": "Call get_subsystem_detail(project_id, name) for any subsystem above.",
                 "top_functions": [],
-                "public_functions": 0,
-                "churn": 0,
             })
         return subsystems
 
@@ -205,18 +183,9 @@ class ArchitectureAnalyzer:
     ) -> list[dict]:
         if subsystem_map is None:
             subsystem_map = self._build_subsystem_map(data)
-        """Cross-subsystem connections with edge counts and representative callers.
-
-        Improvement 2: each connection includes a `via` list — the top-N caller
-        function names responsible for the bulk of the cross-subsystem calls.
-        This turns raw edge counts into interpretable dependency descriptions.
-        """
         internal = set(subsystem_map.values())
-        node_names: dict[str, str] = {n["id"]: n["name"] for n in data.nodes}
 
         conn_counts: dict[tuple[str, str], int] = defaultdict(int)
-        # caller_id -> count per (from, to) pair, to find representative callers
-        conn_via: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
         for caller_id, callee_id in data.edges:
             s_from = self._subsystem(caller_id, subsystem_map)
@@ -227,24 +196,13 @@ class ArchitectureAnalyzer:
                 continue
             if subsystem_filter and subsystem_filter not in (s_from, s_to):
                 continue
-            key = (s_from, s_to)
-            conn_counts[key] += 1
-            conn_via[key][caller_id] += 1
+            conn_counts[(s_from, s_to)] += 1
 
         rows = []
         for key, count in sorted(conn_counts.items(), key=lambda x: -x[1]):
             if count < 2:
                 continue
-            # Top-N callers by call volume — show just the short function name
-            top_callers = sorted(conn_via[key].items(), key=lambda x: -x[1])
-            via = [node_names.get(cid, cid.split(".")[-1])
-                   for cid, _ in top_callers[:self._CONNECTION_VIA_LIMIT]]
-            rows.append({
-                "from": key[0],
-                "to": key[1],
-                "edge_count": count,
-                "via": via,
-            })
+            rows.append({"from": key[0], "to": key[1], "edge_count": count})
 
         cap = limit if limit is not None else self._CONNECTION_OVERVIEW_LIMIT
         if cap and len(rows) > cap:
@@ -252,9 +210,8 @@ class ArchitectureAnalyzer:
             rows = rows[:cap]
             rows.append({
                 "from": "...",
-                "to": f"({total - cap} more connections — use get_subsystem_detail for full list)",
+                "to": f"({total - cap} more — use get_subsystem_detail for full list)",
                 "edge_count": 0,
-                "via": [],
             })
         return rows
 
@@ -374,91 +331,6 @@ class ArchitectureAnalyzer:
             ],
             key=lambda x: -x["caller_count"],
         )[:5]
-
-    def _entry_points(self, data: GraphData) -> list[dict]:
-        callee_ids = {callee for _, callee in data.edges}
-        entry_points = []
-        for n in data.nodes:
-            if n["type"] in ("class", "ClassDef"):
-                continue
-            decs = json.loads(n.get("decorators") or "[]")
-            http_kind = any(
-                any(p in d for p in self._http_patterns)
-                for d in decs
-            )
-            if n["id"] not in callee_ids or http_kind:
-                entry_points.append({
-                    "id": n["id"],
-                    "name": n["name"],
-                    "kind": "http" if http_kind else "static",
-                    "decorators": decs,
-                })
-        entry_points.sort(key=lambda x: (0 if x["kind"] == "http" else 1, x["id"]))
-        return entry_points[:20]
-
-    def _risk_surface(self, data: GraphData) -> tuple[list[dict], str]:
-        risk = [
-            {
-                "id": fid,
-                "churn": ch,
-                "caller_count": data.caller_counts.get(fid, 0),
-            }
-            for fid, ch in data.churn.items()
-            if ch >= 3 and data.caller_counts.get(fid, 0) >= 3
-        ]
-        risk.sort(key=lambda x: -(x["churn"] * x["caller_count"]))
-        risk = risk[:5]
-
-        if risk:
-            return risk, "churn_and_callers"
-
-        structural = sorted(
-            [
-                {"id": n["id"], "churn": 0, "caller_count": data.caller_counts.get(n["id"], 0)}
-                for n in data.nodes
-                if n["type"] not in ("class", "ClassDef")
-                and data.caller_counts.get(n["id"], 0) >= 2
-            ],
-            key=lambda x: -x["caller_count"],
-        )[:5]
-
-        mode = "structural_heuristic_no_decisions" if structural else "insufficient_data"
-        return structural, mode
-
-    def _health(self, data: GraphData, risk_detection_mode: str) -> dict:
-        documented = set(data.churn.keys())
-        top_knowledge_gaps = sorted(
-            [
-                {
-                    "id": n["id"],
-                    "name": n["name"],
-                    "module": n["module"],
-                    "caller_count": data.caller_counts.get(n["id"], 0),
-                }
-                for n in data.nodes
-                if not n.get("summary") and not n.get("docstring")
-                and n["id"] not in documented
-                and n["type"] not in ("class", "ClassDef")
-            ],
-            key=lambda x: -x["caller_count"],
-        )[:10]
-
-        churn_hotspots = sorted(
-            [{"id": fid, "decision_count": cnt} for fid, cnt in data.churn.items()],
-            key=lambda x: -x["decision_count"],
-        )[:5]
-
-        return {
-            "top_knowledge_gaps": top_knowledge_gaps,
-            "churn_hotspots": churn_hotspots,
-            "active_contract_count": len(data.contracts),
-            "active_contracts": [
-                {"id": c["id"], "title": c["title"], "rule": c.get("natural_language", "")}
-                for c in data.contracts
-            ],
-            "recent_violation_count": data.recent_violation_count,
-            "risk_detection_mode": risk_detection_mode,
-        }
 
     def _since_last_session(self, data: GraphData) -> dict | None:
         if not data.prev_snapshot:

@@ -29,8 +29,5 @@ class ArchitectureSnapshot:
     subsystems: list[dict]
     connections: list[dict]
     chokepoints: list[dict]
-    entry_points: list[dict]
-    risk_surface: list[dict]
-    health: dict
     recent_decisions: list[dict]
     since_last_session: dict | None
