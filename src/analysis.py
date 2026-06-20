@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 
 from .call_graph.models import ArchitectureSnapshot, GraphData
 
@@ -19,12 +20,72 @@ class ArchitectureAnalyzer:
     No I/O — all heuristics are sync and deterministic given the same input.
     """
 
+    # Overview limits — full detail available via get_subsystem_detail()
+    _SUBSYSTEM_OVERVIEW_LIMIT = 30
+    _CONNECTION_OVERVIEW_LIMIT = 30
+
+    # Subsystem with more than this many functions gets a 3-part prefix
+    # (e.g. "django.db" at 3817 fns splits into "django.db.models", etc.)
+    _ADAPTIVE_DEPTH_THRESHOLD = 300
+
+    # How many functions to surface per subsystem in the compact overview
+    _TOP_FUNCTIONS_PER_SUBSYSTEM = 5
+
+    # How many representative callers to show per cross-subsystem connection
+    _CONNECTION_VIA_LIMIT = 2
+
     def __init__(self, http_patterns: tuple[str, ...] = DEFAULT_HTTP_PATTERNS) -> None:
         self._http_patterns = http_patterns
 
+    # ── Subsystem membership (computed once, shared by all methods) ───────────
+
+    def _build_subsystem_map(self, data: GraphData) -> dict[str, str]:
+        """Map node_id → subsystem_name using adaptive depth.
+
+        Two-pass: first count 2-part prefix sizes, then promote oversized
+        prefixes to 3-part paths so large packages don't collapse into one blob.
+        """
+        # Pass 1 — count 2-part prefix sizes
+        counts_2: dict[str, int] = defaultdict(int)
+        for n in data.nodes:
+            counts_2[self._prefix(n["id"], 2)] += 1
+
+        large_2 = frozenset(
+            k for k, cnt in counts_2.items() if cnt > self._ADAPTIVE_DEPTH_THRESHOLD
+        )
+
+        # Pass 2 — assign membership, using 3-part for large prefixes
+        result: dict[str, str] = {}
+        for n in data.nodes:
+            nid = n["id"]
+            prefix_2 = self._prefix(nid, 2)
+            if prefix_2 in large_2:
+                result[nid] = self._prefix(nid, 3)
+            else:
+                result[nid] = prefix_2
+        return result
+
+    @staticmethod
+    def _prefix(node_id: str, depth: int) -> str:
+        parts = node_id.split(".")
+        return ".".join(parts[:depth]) if len(parts) >= depth else node_id
+
+    def _subsystem(self, node_id: str, subsystem_map: dict[str, str] | None = None) -> str:
+        if subsystem_map is not None:
+            return subsystem_map.get(node_id, self._prefix(node_id, 2))
+        return self._prefix(node_id, 2)
+
+    # ── Main entry point ──────────────────────────────────────────────────────
+
     def snapshot(self, data: GraphData) -> ArchitectureSnapshot:
-        subsystems = self._build_subsystems(data)
-        connections = self._cross_subsystem_connections(data)
+        # Compute subsystem membership once; every sub-method uses the same map.
+        subsystem_map = self._build_subsystem_map(data)
+
+        # Pre-compute cross-subsystem callee sets for public API (improvement 3)
+        external_callee_counts = self._external_callee_counts(data, subsystem_map)
+
+        subsystems = self._build_subsystems(data, subsystem_map, external_callee_counts)
+        connections = self._cross_subsystem_connections(data, subsystem_map)
         chokepoints = self._chokepoints(data)
         entry_points = self._entry_points(data)
         risk_surface, risk_mode = self._risk_surface(data)
@@ -44,50 +105,66 @@ class ArchitectureAnalyzer:
             since_last_session=since,
         )
 
-    # ── Heuristics ────────────────────────────────────────────────────────
+    # ── Subsystems ────────────────────────────────────────────────────────────
 
-    def _subsystem(self, node_id: str) -> str:
-        parts = node_id.split(".")
-        return ".".join(parts[:2]) if len(parts) >= 2 else parts[0]
+    def _external_callee_counts(
+        self, data: GraphData, subsystem_map: dict[str, str]
+    ) -> dict[str, int]:
+        """For each function, count how many distinct external subsystems call it.
 
-    # How many subsystems / connections to include in the compact overview.
-    # Full detail is available via get_subsystem_detail().
-    _SUBSYSTEM_OVERVIEW_LIMIT = 30
-    _CONNECTION_OVERVIEW_LIMIT = 30
+        "External" means the caller is in a different subsystem from the callee.
+        This identifies the public API boundary of each subsystem.
+        """
+        counts: dict[str, int] = defaultdict(int)
+        for caller_id, callee_id in data.edges:
+            s_from = self._subsystem(caller_id, subsystem_map)
+            s_to = self._subsystem(callee_id, subsystem_map)
+            if s_from != s_to:
+                counts[callee_id] += 1
+        return dict(counts)
 
-    # Top functions to surface per subsystem in the compact overview.
-    _TOP_FUNCTIONS_PER_SUBSYSTEM = 5
-
-    def _build_subsystems(self, data: GraphData, limit: int | None = None) -> list[dict]:
-        subsystem_nodes: dict[str, list[dict]] = {}
+    def _build_subsystems(
+        self,
+        data: GraphData,
+        subsystem_map: dict[str, str] | None = None,
+        external_callee_counts: dict[str, int] | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        if subsystem_map is None:
+            subsystem_map = self._build_subsystem_map(data)
+        if external_callee_counts is None:
+            external_callee_counts = self._external_callee_counts(data, subsystem_map)
+        subsystem_nodes: dict[str, list[dict]] = defaultdict(list)
         for n in data.nodes:
-            s = self._subsystem(n["id"])
-            subsystem_nodes.setdefault(s, []).append(n)
+            subsystem_nodes[self._subsystem(n["id"], subsystem_map)].append(n)
 
         subsystems = []
         for s_name, nodes in sorted(subsystem_nodes.items(),
                                     key=lambda x: len(x[1]), reverse=True):
-            # Pick the most-called class as anchor (not just the first class found).
-            # First-found is usually alphabetical and rarely representative.
+            # Anchor: most-called class (not just the first class encountered)
             class_nodes = [n for n in nodes if n["type"] in ("class", "ClassDef")]
             if class_nodes:
                 anchor = max(class_nodes, key=lambda n: data.caller_counts.get(n["id"], 0))
             else:
                 anchor = max(nodes, key=lambda n: data.caller_counts.get(n["id"], 0))
 
-            # Top-N non-class functions by caller count — tells the agent what
-            # this subsystem does and what it exports, without reading a file.
             fn_nodes = [n for n in nodes if n["type"] not in ("class", "ClassDef")]
+
+            # Top functions by total caller count (what this subsystem exports)
             top_fns = sorted(fn_nodes, key=lambda n: data.caller_counts.get(n["id"], 0), reverse=True)
             top_fns = top_fns[:self._TOP_FUNCTIONS_PER_SUBSYSTEM]
+
+            # Improvement 3: public API count — functions called from other subsystems
+            public_fn_count = sum(1 for n in fn_nodes if external_callee_counts.get(n["id"], 0) > 0)
+
+            # Improvement 4: churn — how many decisions touch this subsystem
+            subsystem_churn = sum(data.churn.get(n["id"], 0) for n in nodes)
 
             subsystems.append({
                 "name": s_name,
                 "function_count": len(nodes),
                 "anchor": anchor["id"],
-                # Compact summary for overview; full summary in get_subsystem_detail()
                 "anchor_summary": (anchor.get("summary") or "")[:80],
-                # Top functions by call frequency — the public interface of this subsystem
                 "top_functions": [
                     {
                         "name": n["name"],
@@ -96,6 +173,10 @@ class ArchitectureAnalyzer:
                     }
                     for n in top_fns
                 ],
+                # How many of this subsystem's functions are called from outside
+                "public_functions": public_fn_count,
+                # Total decisions logged against functions in this subsystem
+                "churn": subsystem_churn,
             })
 
         cap = limit if limit is not None else self._SUBSYSTEM_OVERVIEW_LIMIT
@@ -106,26 +187,40 @@ class ArchitectureAnalyzer:
                 "name": f"... and {overflow} more subsystems",
                 "function_count": 0,
                 "anchor": "",
-                "anchor_summary": "Call get_subsystem_detail(name) for any subsystem above to see its full connections and functions.",
+                "anchor_summary": "Call get_subsystem_detail(project_id, name) for any subsystem above.",
                 "top_functions": [],
+                "public_functions": 0,
+                "churn": 0,
             })
         return subsystems
 
+    # ── Connections ───────────────────────────────────────────────────────────
+
     def _cross_subsystem_connections(
-        self, data: GraphData, limit: int | None = None, subsystem_filter: str | None = None
+        self,
+        data: GraphData,
+        subsystem_map: dict[str, str] | None = None,
+        limit: int | None = None,
+        subsystem_filter: str | None = None,
     ) -> list[dict]:
-        """Return cross-subsystem connections.
+        if subsystem_map is None:
+            subsystem_map = self._build_subsystem_map(data)
+        """Cross-subsystem connections with edge counts and representative callers.
 
-        subsystem_filter: if set, only return connections involving this subsystem.
-        limit: max entries to return (None = use _CONNECTION_OVERVIEW_LIMIT for overview,
-               or unlimited when called from get_subsystem_detail).
+        Improvement 2: each connection includes a `via` list — the top-N caller
+        function names responsible for the bulk of the cross-subsystem calls.
+        This turns raw edge counts into interpretable dependency descriptions.
         """
-        internal = {self._subsystem(n["id"]) for n in data.nodes}
+        internal = set(subsystem_map.values())
+        node_names: dict[str, str] = {n["id"]: n["name"] for n in data.nodes}
 
-        conn_counts: dict[tuple[str, str], int] = {}
+        conn_counts: dict[tuple[str, str], int] = defaultdict(int)
+        # caller_id -> count per (from, to) pair, to find representative callers
+        conn_via: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
         for caller_id, callee_id in data.edges:
-            s_from = self._subsystem(caller_id)
-            s_to = self._subsystem(callee_id)
+            s_from = self._subsystem(caller_id, subsystem_map)
+            s_to = self._subsystem(callee_id, subsystem_map)
             if s_from == s_to:
                 continue
             if s_from not in internal or s_to not in internal:
@@ -133,13 +228,23 @@ class ArchitectureAnalyzer:
             if subsystem_filter and subsystem_filter not in (s_from, s_to):
                 continue
             key = (s_from, s_to)
-            conn_counts[key] = conn_counts.get(key, 0) + 1
+            conn_counts[key] += 1
+            conn_via[key][caller_id] += 1
 
-        rows = [
-            {"from": k[0], "to": k[1], "edge_count": v}
-            for k, v in sorted(conn_counts.items(), key=lambda x: -x[1])
-            if v >= 2
-        ]
+        rows = []
+        for key, count in sorted(conn_counts.items(), key=lambda x: -x[1]):
+            if count < 2:
+                continue
+            # Top-N callers by call volume — show just the short function name
+            top_callers = sorted(conn_via[key].items(), key=lambda x: -x[1])
+            via = [node_names.get(cid, cid.split(".")[-1])
+                   for cid, _ in top_callers[:self._CONNECTION_VIA_LIMIT]]
+            rows.append({
+                "from": key[0],
+                "to": key[1],
+                "edge_count": count,
+                "via": via,
+            })
 
         cap = limit if limit is not None else self._CONNECTION_OVERVIEW_LIMIT
         if cap and len(rows) > cap:
@@ -147,62 +252,117 @@ class ArchitectureAnalyzer:
             rows = rows[:cap]
             rows.append({
                 "from": "...",
-                "to": f"({total - cap} more connections omitted)",
+                "to": f"({total - cap} more connections — use get_subsystem_detail for full list)",
                 "edge_count": 0,
+                "via": [],
             })
         return rows
 
-    def subsystem_detail(self, data: GraphData, subsystem_name: str) -> dict:
-        """Full detail for one subsystem: all functions, all connections, full anchor summary."""
-        nodes_in = [n for n in data.nodes if self._subsystem(n["id"]) == subsystem_name]
-        if not nodes_in:
-            # Try prefix match for subsystems whose name is a prefix of the requested name
-            # (e.g. "django.db.models.sql" when stored as "django.db")
-            prefix_matches = {self._subsystem(n["id"]) for n in data.nodes
-                              if self._subsystem(n["id"]).startswith(subsystem_name)
-                              or subsystem_name.startswith(self._subsystem(n["id"]))}
-            hint = f" Did you mean one of: {sorted(prefix_matches)[:5]}?" if prefix_matches else ""
-            return {"error": f"No subsystem named {subsystem_name!r} found.{hint}"}
+    # ── Subsystem detail (drill-down) ─────────────────────────────────────────
 
-        # Most-called class as anchor (same logic as overview for consistency)
+    def subsystem_detail(self, data: GraphData, subsystem_name: str) -> dict:
+        """Full detail for one subsystem.
+
+        Improvement 5: if exact name not found, auto-resolves to the closest
+        ancestor subsystem (e.g. 'django.db.models.sql' → 'django.db') so
+        agents don't need to know the exact stored name.
+        """
+        subsystem_map = self._build_subsystem_map(data)
+        all_subsystems = set(subsystem_map.values())
+
+        # Exact match first
+        resolved_name = subsystem_name
+        if subsystem_name not in all_subsystems:
+            # Walk up the prefix tree to find the closest ancestor
+            parts = subsystem_name.split(".")
+            ancestor = None
+            for depth in range(len(parts) - 1, 0, -1):
+                candidate = ".".join(parts[:depth])
+                if candidate in all_subsystems:
+                    ancestor = candidate
+                    break
+            if ancestor:
+                resolved_name = ancestor
+            else:
+                # Nothing found — suggest closest matches
+                suggestions = sorted(
+                    (s for s in all_subsystems if s.startswith(parts[0])),
+                    key=len
+                )[:5]
+                return {
+                    "error": f"No subsystem named {subsystem_name!r} found.",
+                    "suggestions": suggestions,
+                }
+
+        note = (f"Note: '{subsystem_name}' maps to stored subsystem '{resolved_name}'."
+                if resolved_name != subsystem_name else None)
+
+        nodes_in = [n for n in data.nodes
+                    if self._subsystem(n["id"], subsystem_map) == resolved_name]
+
+        external_callee_counts = self._external_callee_counts(data, subsystem_map)
+
+        # Most-called class as anchor
         class_nodes = [n for n in nodes_in if n["type"] in ("class", "ClassDef")]
         if class_nodes:
             anchor = max(class_nodes, key=lambda n: data.caller_counts.get(n["id"], 0))
         else:
             anchor = max(nodes_in, key=lambda n: data.caller_counts.get(n["id"], 0))
 
-        # All non-class functions sorted by caller count
         fn_nodes = [n for n in nodes_in if n["type"] not in ("class", "ClassDef")]
         top_fns = sorted(fn_nodes, key=lambda n: data.caller_counts.get(n["id"], 0), reverse=True)[:50]
 
-        # Synthesize a role description from anchor + top function names so the
-        # agent doesn't have to read source to understand what this subsystem does.
-        top_names = [n["name"] for n in top_fns[:8]]
+        # Public API: functions called from other subsystems, sorted by external caller count
+        public_api = sorted(
+            [n for n in fn_nodes if external_callee_counts.get(n["id"], 0) > 0],
+            key=lambda n: external_callee_counts.get(n["id"], 0),
+            reverse=True,
+        )[:20]
+
         anchor_summary = anchor.get("summary") or ""
+        top_names = [n["name"] for n in top_fns[:8]]
         role = (
-            f"{anchor_summary[:120]}  "
-            f"Key functions: {', '.join(top_names[:8])}."
+            f"{anchor_summary[:120]}  Key functions: {', '.join(top_names)}."
         ).strip()
 
-        return {
-            "subsystem": subsystem_name,
+        subsystem_churn = sum(data.churn.get(n["id"], 0) for n in nodes_in)
+
+        result = {
+            "subsystem": resolved_name,
             "function_count": len(nodes_in),
             "anchor": anchor["id"],
             "anchor_summary": anchor_summary,
             "role": role,
+            "churn": subsystem_churn,
+            # Improvement 3: the public API — what other subsystems depend on
+            "public_api": [
+                {
+                    "id": n["id"],
+                    "name": n["name"],
+                    "external_callers": external_callee_counts.get(n["id"], 0),
+                    "summary": (n.get("summary") or "")[:200],
+                }
+                for n in public_api
+            ],
             "top_functions": [
                 {
                     "id": n["id"],
                     "name": n["name"],
                     "caller_count": data.caller_counts.get(n["id"], 0),
+                    "external_callers": external_callee_counts.get(n["id"], 0),
                     "summary": (n.get("summary") or "")[:200],
                 }
                 for n in top_fns
             ],
             "connections": self._cross_subsystem_connections(
-                data, limit=None, subsystem_filter=subsystem_name
+                data, subsystem_map, limit=None, subsystem_filter=resolved_name
             ),
         }
+        if note:
+            result["note"] = note
+        return result
+
+    # ── Unchanged heuristics ──────────────────────────────────────────────────
 
     def _chokepoints(self, data: GraphData) -> list[dict]:
         all_node_ids = {n["id"] for n in data.nodes}

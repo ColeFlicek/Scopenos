@@ -410,3 +410,127 @@ class TestSnapshot:
         # dataclasses.asdict + json.dumps is how server.py serializes this.
         result = json.dumps(dataclasses.asdict(snap))
         assert "src.server" in result
+
+
+# ── adaptive subsystem depth ──────────────────────────────────────────────────
+
+class TestAdaptiveSubsystemDepth:
+    def test_small_subsystem_uses_two_parts(self):
+        # 5 functions in pkg.sub → threshold not exceeded → stays as "pkg.sub"
+        data = _graph(nodes=[_node(f"pkg.sub.fn_{i}") for i in range(5)])
+        smap = ANALYZER._build_subsystem_map(data)
+        assert smap["pkg.sub.fn_0"] == "pkg.sub"
+
+    def test_large_subsystem_uses_three_parts(self):
+        # 350 functions in pkg.sub.a — exceeds threshold → uses "pkg.sub.a"
+        nodes = [_node(f"pkg.sub.a.fn_{i}") for i in range(350)]
+        data = _graph(nodes=nodes)
+        smap = ANALYZER._build_subsystem_map(data)
+        # The 2-part prefix "pkg.sub" has 350 > 300 → promotes to 3-part
+        assert smap["pkg.sub.a.fn_0"] == "pkg.sub.a"
+
+    def test_large_prefix_splits_into_children(self):
+        # Two child packages under the same large 2-part prefix split independently
+        nodes = ([_node(f"pkg.sub.models.fn_{i}") for i in range(200)] +
+                 [_node(f"pkg.sub.backends.fn_{i}") for i in range(200)])
+        data = _graph(nodes=nodes)
+        smap = ANALYZER._build_subsystem_map(data)
+        names = set(smap.values())
+        assert "pkg.sub.models" in names
+        assert "pkg.sub.backends" in names
+        assert "pkg.sub" not in names  # bare 2-part prefix suppressed
+
+
+# ── connections via field ────────────────────────────────────────────────────
+
+class TestConnectionsVia:
+    def test_via_lists_top_caller_names(self):
+        data = _graph(
+            nodes=[_node("a.mod.caller_fn"), _node("b.mod.callee_fn")],
+            edges=[("a.mod.caller_fn", "b.mod.callee_fn")] * 3,
+        )
+        conns = ANALYZER._cross_subsystem_connections(data)
+        assert len(conns) == 1
+        assert "via" in conns[0]
+        assert "caller_fn" in conns[0]["via"]
+
+    def test_via_capped_at_limit(self):
+        data = _graph(
+            nodes=[_node("a.x.fn1"), _node("a.x.fn2"), _node("a.x.fn3"), _node("b.y.target")],
+            edges=(
+                [("a.x.fn1", "b.y.target")] * 5 +
+                [("a.x.fn2", "b.y.target")] * 3 +
+                [("a.x.fn3", "b.y.target")] * 2
+            ),
+        )
+        conns = ANALYZER._cross_subsystem_connections(data)
+        assert len(conns[0]["via"]) <= ANALYZER._CONNECTION_VIA_LIMIT
+
+
+# ── public API surface ────────────────────────────────────────────────────────
+
+class TestPublicFunctions:
+    def test_public_functions_counts_external_callees(self):
+        # fn_exported is called from b.mod (external); fn_internal is only called from a.mod
+        data = _graph(
+            nodes=[_node("a.mod.fn_exported"), _node("a.mod.fn_internal"), _node("b.mod.caller")],
+            edges=[
+                ("b.mod.caller", "a.mod.fn_exported"),
+                ("b.mod.caller", "a.mod.fn_exported"),
+                ("a.mod.fn_internal", "a.mod.fn_exported"),  # internal call, not counted for fn_internal
+            ],
+        )
+        subs = ANALYZER._build_subsystems(data)
+        a_mod = next(s for s in subs if s["name"] == "a.mod")
+        # fn_exported is called externally; fn_internal is not
+        assert a_mod["public_functions"] == 1
+
+    def test_public_functions_zero_when_nothing_external(self):
+        data = _graph(
+            nodes=[_node("a.mod.fn1"), _node("a.mod.fn2")],
+            edges=[("a.mod.fn1", "a.mod.fn2"), ("a.mod.fn1", "a.mod.fn2")],
+        )
+        subs = ANALYZER._build_subsystems(data)
+        assert subs[0]["public_functions"] == 0
+
+
+# ── churn per subsystem ───────────────────────────────────────────────────────
+
+class TestSubsystemChurn:
+    def test_churn_sums_decision_counts_in_subsystem(self):
+        data = _graph(
+            nodes=[_node("a.mod.fn1"), _node("a.mod.fn2"), _node("b.other.fn3")],
+            churn={"a.mod.fn1": 3, "a.mod.fn2": 2, "b.other.fn3": 5},
+        )
+        subs = ANALYZER._build_subsystems(data)
+        a_mod = next(s for s in subs if s["name"] == "a.mod")
+        assert a_mod["churn"] == 5  # 3 + 2
+
+    def test_churn_zero_when_no_decisions(self):
+        data = _graph(nodes=[_node("a.mod.fn1")])
+        subs = ANALYZER._build_subsystems(data)
+        assert subs[0]["churn"] == 0
+
+
+# ── subsystem_detail prefix resolution ───────────────────────────────────────
+
+class TestSubsystemDetailResolution:
+    def test_exact_name_resolves_directly(self):
+        data = _graph(nodes=[_node("src.server.fn")])
+        result = ANALYZER.subsystem_detail(data, "src.server")
+        assert result["subsystem"] == "src.server"
+        assert "error" not in result
+
+    def test_deep_name_resolves_to_ancestor(self):
+        # "src.server.routes.admin" doesn't exist as a stored subsystem,
+        # but "src.server" does → should resolve to it
+        data = _graph(nodes=[_node("src.server.fn")])
+        result = ANALYZER.subsystem_detail(data, "src.server.routes.admin")
+        assert result["subsystem"] == "src.server"
+        assert "note" in result  # explains the resolution
+
+    def test_unknown_name_returns_error_with_suggestions(self):
+        data = _graph(nodes=[_node("src.server.fn"), _node("src.db.fn")])
+        result = ANALYZER.subsystem_detail(data, "completely.unknown")
+        assert "error" in result
+        assert "suggestions" in result
