@@ -777,7 +777,7 @@ HTML = r"""<!DOCTYPE html>
       _apiKey = key.trim();
       localStorage.setItem('phronosis_api_key', _apiKey);
     }
-    return !!key;
+    return !!key.trim();
   }
 
   function setDot(id, state) { document.getElementById(id).className = 'dot ' + state; }
@@ -1363,7 +1363,7 @@ HTML = r"""<!DOCTYPE html>
 
   async function deleteContract(id) {
     if (!confirm('Deactivate this contract? It will no longer be enforced.')) return;
-    await fetch(`/api/contracts/${id}/deactivate`, {method:'POST'});
+    await fetch(`/api/contracts/${id}/deactivate`, {method:'POST', headers: writeHeaders()});
     loadContracts();
   }
 

@@ -1341,6 +1341,8 @@ async def http_get_functions_for_files(request: Request) -> JSONResponse:
             nodes = await db.get_nodes_by_file(fp, project_id)
             ids.extend(n["id"] for n in nodes)
         return JSONResponse({"function_ids": ids})
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1365,6 +1367,8 @@ async def http_search(request: Request) -> JSONResponse:
             return JSONResponse({"results": []})
         results = await svcs.embeddings.query_similar(snippet, top_k, project_id or None)
         return JSONResponse({"results": results})
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1381,6 +1385,8 @@ async def http_list_projects(request: Request) -> JSONResponse:
         _all = await svcs.db.list_projects()
         projects = [p for p in _all if p["id"] in _accessible]
         return JSONResponse({"projects": projects})
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1448,6 +1454,8 @@ async def http_index_bulk(request: Request) -> JSONResponse:
         else:
             result["contract_violations"] = []
         return JSONResponse(result)
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1522,6 +1530,8 @@ async def http_log_decision(request: Request) -> JSONResponse:
             project_id=project_id,
         )
         return JSONResponse({"status": "ok", **result})
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1537,6 +1547,8 @@ async def http_list_contracts(request: Request) -> JSONResponse:
         await _require_http_read(request, svcs.db, project_id)
         result = await svcs.contracts.list_contracts(project_id or None)
         return JSONResponse({"contracts": result})
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1557,6 +1569,8 @@ async def http_create_contract(request: Request) -> JSONResponse:
             function_ids=data.get("function_ids") or None,
         )
         return JSONResponse(result)
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1578,6 +1592,8 @@ async def http_update_contract(request: Request) -> JSONResponse:
             data.get("compliance_examples", []),
         )
         return JSONResponse(result)
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1594,6 +1610,8 @@ async def http_approve_contract(request: Request) -> JSONResponse:
             await check_permission(_user, _pid, "write", svcs.db)
         result = await svcs.contracts.approve(contract_id)
         return JSONResponse(result)
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1616,6 +1634,8 @@ async def http_deactivate_contract(request: Request) -> JSONResponse:
             await check_permission(_user, _pid, "write", svcs.db)
         await svcs.contracts.deactivate(contract_id)
         return JSONResponse({"status": "ok"})
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1638,6 +1658,8 @@ async def http_check_contracts(request: Request) -> JSONResponse:
         else:
             violations = await svcs.contracts.check_project(project_id)
         return JSONResponse({"violations": violations})
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1651,6 +1673,8 @@ async def http_project_home(request: Request) -> JSONResponse:
         await _require_http_read(request, svcs.db, project_id)
         result = await svcs.arch.get_project_home(project_id, max_age_seconds=1800)
         return JSONResponse(result)
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1664,6 +1688,8 @@ async def http_list_violations(request: Request) -> JSONResponse:
         await _require_http_read(request, svcs.db, project_id)
         violations = await svcs.db.list_violations(project_id or None)
         return JSONResponse({"violations": violations})
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1884,6 +1910,8 @@ async def http_reembed_project(request: Request) -> JSONResponse:
         await check_permission(_user, project_id, "write", svcs.db)
         result = await svcs.indexer.reembed_project(project_id)
         return JSONResponse(result)
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
@@ -1916,6 +1944,8 @@ async def http_enrich_summaries(request: Request) -> JSONResponse:
         except RuntimeError:
             return JSONResponse({"status": "rate_limited"}, status_code=429)
         return JSONResponse({"job_id": job.id, "status": "queued", "project_id": project_id})
+    except HTTPException:
+        raise
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
