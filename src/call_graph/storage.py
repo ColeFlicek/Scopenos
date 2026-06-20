@@ -16,6 +16,17 @@ from .parser import CallEdge, FunctionNode
 from ..branch_tracking import classify_conflicts, empty_conflict_result
 
 
+# Columns returned to callers (and ultimately to LLM tool responses).
+# body and body_hash are excluded: body is large source code the LLM should
+# read via file reads, not receive in navigation responses; body_hash is an
+# internal integrity field with no meaning to an agent.
+_NODE_COLS = (
+    "id, project_id, file, module, type, name, signature, "
+    "docstring, summary, decorators, start_line, end_line, "
+    "is_async, structural_layer, is_external, embedding_model"
+)
+
+
 def _pg(sql: str) -> str:
     """Convert SQLite ? placeholders to PostgreSQL $1, $2, ... positional params."""
     n = 0
@@ -499,7 +510,7 @@ class CallGraphDB:
             ) as cur:
                 return [dict(r) for r in await cur.fetchall()]
         async with self._db.execute(
-            "SELECT * FROM nodes WHERE file=?", (file_path,)
+            f"SELECT {_NODE_COLS} FROM nodes WHERE file=?", (file_path,)
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
@@ -523,7 +534,7 @@ class CallGraphDB:
 
         # Step 1: exact id or exact name
         async with self._db.execute(
-            f"SELECT * FROM nodes WHERE (id=? OR name=?){pid_clause}",
+            f"SELECT {_NODE_COLS} FROM nodes WHERE (id=? OR name=?){pid_clause}",
             (name, name, *pid_args),
         ) as cur:
             exact = [dict(r) for r in await cur.fetchall()]
@@ -532,7 +543,7 @@ class CallGraphDB:
         seen_ids = {r["id"] for r in exact}
         escaped = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         async with self._db.execute(
-            f"SELECT * FROM nodes WHERE id LIKE ? ESCAPE '\\'{pid_clause}",
+            f"SELECT {_NODE_COLS} FROM nodes WHERE id LIKE ? ESCAPE '\\'{pid_clause}",
             (f"%.{escaped}", *pid_args),
         ) as cur:
             suffix = [dict(r) for r in await cur.fetchall() if r["id"] not in seen_ids]
@@ -657,7 +668,7 @@ class CallGraphDB:
         ph = ",".join("?" * len(visited))
         pid_where = f" AND project_id=?" if project_id else ""
         async with self._db.execute(
-            f"SELECT * FROM nodes WHERE id IN ({ph}){pid_where}",
+            f"SELECT {_NODE_COLS} FROM nodes WHERE id IN ({ph}){pid_where}",
             [*visited.keys(), *((project_id,) if project_id else ())],
         ) as cur:
             rows = {r["id"]: dict(r) for r in await cur.fetchall()}
