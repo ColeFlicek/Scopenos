@@ -85,11 +85,21 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
 
         1. Call `get_project_home("{ctx.project_id}")` for an architectural overview.
         2. Use `query_similar_functions` to find the relevant code. Always pass project_id="{ctx.project_id}".
-        3. Use `get_callers` / `get_callees` / `get_impact_radius` before editing.
+        3. Call `get_impact_radius` on the function you plan to edit and check `co_change_hints` —
+           these surface protocol gaps (e.g. missing __hash__ when adding __eq__) and semantic
+           siblings not reachable via call edges. Always pass project_id="{ctx.project_id}".
+        4. Before reading any test file, call `get_subsystem_detail("{ctx.project_id}", <test_subsystem>)`
+           to see existing models, fixtures, and test patterns — avoids reading large test files.
            When calling `get_decision_history`, always pass project_id="{ctx.project_id}".
         4. Apply a minimal fix.
         5. Verify with: `{ctx.venv_python} -m pytest {' '.join(task.fail_to_pass[:3])}`
         6. When all failing tests pass, stop. The orchestrator will capture your diff.
+        7. Output a final JSON block (and nothing after it) in exactly this format:
+           ```json
+           {{"tool_log": ["tool1", "tool2", ...], "notes": "one sentence on what you found"}}
+           ```
+           List every tool call you made in order, using the exact tool name
+           (e.g. "get_project_home", "query_similar_functions", "Read", "Bash").
 
         Use Phronosis to understand relationships — don't grep blindly when the
         call graph already has the answer. Make minimal changes only.

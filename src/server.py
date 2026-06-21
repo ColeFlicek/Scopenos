@@ -548,16 +548,120 @@ async def get_impact_radius(
     Returns the set of functions that would be impacted by a change to
     function_name, annotated with their distance from the origin.
 
+    Also returns co_change_hints — functions NOT in the call graph that
+    likely need to change alongside this one:
+      - protocol_completeness: Python dunder pairs (__eq__/__hash__) missing
+        on the same class
+      - semantic_siblings: functions semantically similar to the target that
+        didn't appear via call edges (parallel implementations, related classes)
+
     project_id: limit results to a specific project. If omitted, searches all projects.
     """
+    import asyncio as _asyncio
     svcs = await _get_services()
     await _check_read_access(project_id, svcs.db)
-    results = await svcs.db.get_impact_radius(function_name, depth, project_id or None)
-    contracts = await _contracts_for_name(svcs.db, function_name, project_id)
+    pid = project_id or None
+
+    results, contracts = await _asyncio.gather(
+        svcs.db.get_impact_radius(function_name, depth, pid),
+        _contracts_for_name(svcs.db, function_name, project_id),
+    )
+
+    hints = await _co_change_hints(function_name, results, svcs.db, svcs.embeddings, pid)
+
     out: dict = {"impact_radius": results}
+    if hints:
+        out["co_change_hints"] = hints
     if contracts:
         out["applicable_contracts"] = _fmt_contracts(contracts)
     return json.dumps(out)
+
+
+async def _co_change_hints(
+    function_name: str,
+    impact_results: list[dict],
+    db,
+    embeddings,
+    project_id: str | None,
+) -> list[dict]:
+    """Derive co-change hints from protocol rules and semantic similarity."""
+    import asyncio as _asyncio
+
+    # Resolve the target node ID (use the depth=0 node from results, or look up)
+    target_nodes = [r for r in impact_results if r.get("impact_depth") == 0]
+    if not target_nodes:
+        target_nodes = await db.find_node_by_name(function_name, project_id)
+    if not target_nodes:
+        return []
+
+    target = target_nodes[0]
+    target_id = target["id"]
+    target_name = target["name"]
+    impact_ids = {r["id"] for r in impact_results}
+
+    hints: list[dict] = []
+
+    # ── Protocol completeness (Python dunder pairs) ───────────────────────────
+    _PROTOCOL_PAIRS = {
+        "__eq__": "__hash__",
+        "__hash__": "__eq__",
+        "__lt__": "__eq__",
+        "__enter__": "__exit__",
+        "__exit__": "__enter__",
+    }
+    paired_dunder = _PROTOCOL_PAIRS.get(target_name)
+    if paired_dunder:
+        siblings = await db.get_class_siblings(target_id, project_id)
+        sibling_names = {s["name"] for s in siblings}
+        if paired_dunder not in sibling_names:
+            class_prefix = ".".join(target_id.split(".")[:-1])
+            hints.append({
+                "type": "protocol_completeness",
+                "message": (
+                    f"`{target_name}` defined but `{paired_dunder}` not found on "
+                    f"`{class_prefix}`. Python requires both to be defined together."
+                ),
+                "suggested_id": f"{class_prefix}.{paired_dunder}",
+                "action": "add",
+            })
+        else:
+            # paired method exists — check it's also in the impact radius
+            paired_nodes = [s for s in siblings if s["name"] == paired_dunder]
+            for pn in paired_nodes:
+                if pn["id"] not in impact_ids:
+                    hints.append({
+                        "type": "protocol_completeness",
+                        "message": (
+                            f"`{paired_dunder}` exists on the same class and may "
+                            f"need to be updated consistently with `{target_name}`."
+                        ),
+                        "suggested_id": pn["id"],
+                        "action": "review",
+                    })
+
+    # ── Semantic siblings not in call graph ───────────────────────────────────
+    target_signature = target.get("signature", "") or ""
+    target_summary = target.get("summary") or target.get("docstring") or ""
+    query_text = f"{target_name} {target_signature} {target_summary[:200]}"
+
+    similar = await embeddings.query_similar(query_text.strip(), top_k=8, project_id=project_id)
+    for hit in similar:
+        hid = hit.get("id", "")
+        if hid and hid != target_id and hid not in impact_ids:
+            hints.append({
+                "type": "semantic_sibling",
+                "message": (
+                    f"`{hit.get('name', hid)}` is semantically similar to `{target_name}` "
+                    f"but not reachable via call edges — may need a parallel change."
+                ),
+                "id": hid,
+                "file": hit.get("file", ""),
+                "similarity": hit.get("similarity", 0),
+            })
+            if len([h for h in hints if h["type"] == "semantic_sibling"]) >= 3:
+                break
+
+    return hints
 
 
 @mcp.tool()

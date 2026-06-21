@@ -514,6 +514,28 @@ class CallGraphDB:
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
+    async def get_class_siblings(
+        self, node_id: str, project_id: str | None = None
+    ) -> list[dict]:
+        """Return all methods on the same class as node_id.
+
+        Infers the class prefix from the node_id by dropping the last component
+        (e.g. 'django.db.models.lookups.Lookup.__eq__' → prefix 'django.db.models.lookups.Lookup.').
+        Returns all nodes whose id starts with that prefix.
+        """
+        parts = node_id.split(".")
+        if len(parts) < 2:
+            return []
+        class_prefix = ".".join(parts[:-1]) + "."
+        escaped = class_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pid_clause = " AND project_id=?" if project_id else ""
+        pid_args = (project_id,) if project_id else ()
+        async with self._db.execute(
+            f"SELECT {_NODE_COLS} FROM nodes WHERE id LIKE ? ESCAPE '\\'{pid_clause}",
+            (escaped + "%", *pid_args),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
     async def find_node_by_name(
         self, name: str, project_id: str | None = None
     ) -> list[dict]:
