@@ -256,9 +256,13 @@ def cmd_check_mcp(args) -> None:
 
     Steps mirror the Claude Code MCP client lifecycle:
       1. POST /mcp  initialize          → must return mcp-session-id header
-      2. POST /mcp  notifications/initialized (no-response notification)
-      3. POST /mcp  tools/list          → must list ≥1 Phronosis tool
-      4. POST /mcp  tools/call          → list_projects must return valid JSON
+      2. POST /mcp  tools/list          → must list ≥1 Phronosis tool
+      3. POST /mcp  tools/call          → list_projects must return valid JSON
+
+    Note: notifications/initialized is intentionally omitted. Real Claude Code
+    clients open a GET SSE stream for server-to-client notifications rather than
+    POSTing the notification. POSTing it in stateful mode causes the server to
+    terminate the session, which would make this test a false negative.
     """
     import http.client
     import urllib.parse
@@ -352,37 +356,8 @@ def cmd_check_mcp(args) -> None:
         print(fail)
         failures.append(f"initialize: {exc}")
 
-    # ── Step 2: notifications/initialized ────────────────────────────────────
-    print(f"  [2/4] notifications/initialized ...", end=" ", flush=True)
-    try:
-        # This is a JSON-RPC notification (no id, no response expected)
-        import http.client as _hc
-        payload = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
-        hdrs2: dict = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            "Content-Length": str(len(payload)),
-        }
-        if api_key:
-            hdrs2["X-API-Key"] = api_key
-        if session_id:
-            hdrs2["mcp-session-id"] = session_id
-        conn2 = _hc.HTTPConnection(host, port, timeout=10)
-        conn2.request("POST", path, body=payload, headers=hdrs2)
-        resp2 = conn2.getresponse()
-        resp2.read()
-        conn2.close()
-        # 200 or 202 both acceptable for notifications
-        if resp2.status in (200, 202, 204):
-            print(ok)
-        else:
-            print(f"{ok}  (status={resp2.status} — acceptable)")
-    except Exception as exc:
-        # Non-fatal: notification delivery is best-effort
-        print(f"{ok}  (skipped: {exc})")
-
-    # ── Step 3: tools/list ────────────────────────────────────────────────────
-    print(f"  [3/4] tools/list ...", end=" ", flush=True)
+    # ── Step 2: tools/list ────────────────────────────────────────────────────
+    print(f"  [2/3] tools/list ...", end=" ", flush=True)
     tool_names: list[str] = []
     try:
         status, _, body = post("tools/list", {}, sid=session_id)
@@ -404,8 +379,8 @@ def cmd_check_mcp(args) -> None:
         print(fail)
         failures.append(f"tools/list: {exc}")
 
-    # ── Step 4: tool call ─────────────────────────────────────────────────────
-    print(f"  [4/4] tools/call list_projects ...", end=" ", flush=True)
+    # ── Step 3: tool call ─────────────────────────────────────────────────────
+    print(f"  [3/3] tools/call list_projects ...", end=" ", flush=True)
     try:
         status, _, body = post("tools/call", {
             "name": "list_projects",
@@ -424,7 +399,7 @@ def cmd_check_mcp(args) -> None:
     # ── Summary ───────────────────────────────────────────────────────────────
     print()
     if failures:
-        print(f"  {fail}  MCP check FAILED — Path B benchmark blocked")
+        print(f"  {fail}  MCP check FAILED ({len(failures)} issue(s)) — Path B benchmark blocked")
         print()
         for f in failures:
             print(f"     • {f}")

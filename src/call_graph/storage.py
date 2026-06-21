@@ -42,6 +42,7 @@ class _Cursor:
 
     def __init__(self, rows, description=None):
         self._rows = rows
+        self._idx = 0
         self.description = description or []
 
     async def fetchall(self):
@@ -49,6 +50,17 @@ class _Cursor:
 
     async def fetchone(self):
         return self._rows[0] if self._rows else None
+
+    def __aiter__(self):
+        self._idx = 0
+        return self
+
+    async def __anext__(self):
+        if self._idx >= len(self._rows):
+            raise StopAsyncIteration
+        row = self._rows[self._idx]
+        self._idx += 1
+        return row
 
     async def __aenter__(self):
         return self
