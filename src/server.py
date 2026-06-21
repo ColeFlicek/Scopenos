@@ -611,7 +611,10 @@ async def _co_change_hints(
     }
     paired_dunder = _PROTOCOL_PAIRS.get(target_name)
     if paired_dunder:
-        siblings = await db.get_class_siblings(target_id, project_id)
+        try:
+            siblings = await db.get_class_siblings(target_id, project_id)
+        except Exception:
+            siblings = []
         sibling_names = {s["name"] for s in siblings}
         if paired_dunder not in sibling_names:
             class_prefix = ".".join(target_id.split(".")[:-1])
@@ -644,7 +647,10 @@ async def _co_change_hints(
     target_summary = target.get("summary") or target.get("docstring") or ""
     query_text = f"{target_name} {target_signature} {target_summary[:200]}"
 
-    similar = await embeddings.query_similar(query_text.strip(), top_k=8, project_id=project_id)
+    try:
+        similar = await embeddings.query_similar(query_text.strip(), top_k=8, project_id=project_id)
+    except Exception:
+        similar = []
     for hit in similar:
         hid = hit.get("id", "")
         if hid and hid != target_id and hid not in impact_ids:
