@@ -552,6 +552,8 @@ async def get_impact_radius(
     likely need to change alongside this one:
       - protocol_completeness: Python dunder pairs (__eq__/__hash__) missing
         on the same class
+      - visitor_pattern: target is part of a named-dispatch or classic Visitor;
+        surfaces sibling visitors missing a handler for the same element type
       - semantic_siblings: functions semantically similar to the target that
         didn't appear via call edges (parallel implementations, related classes)
 
@@ -666,6 +668,74 @@ async def _co_change_hints(
             })
             if len([h for h in hints if h["type"] == "semantic_sibling"]) >= 3:
                 break
+
+    # ── Visitor pattern obligations ───────────────────────────────────────────
+    # Named-dispatch variant (_verb_TypeName) covers Sympy _print_X style
+    # and any similar frameworks. Classic accept/visit is also checked.
+    import re as _re
+    _DISPATCH_RE = _re.compile(r"^_([a-z][a-z0-9]*)_([A-Z]\w*)$")
+    _VISIT_RE    = _re.compile(r"^visit_([A-Z]\w*)$")
+
+    dispatch_match = _DISPATCH_RE.match(target_name)
+    visit_match    = _VISIT_RE.match(target_name)
+
+    if dispatch_match or visit_match or target_name == "accept":
+        try:
+            if dispatch_match:
+                verb, element_type = dispatch_match.groups()
+                handlers = await db.find_dispatch_handlers(project_id or "", verb)
+
+                # Group handlers by visitor class (all but last dotted segment)
+                by_class: dict[str, set[str]] = {}
+                for h in handlers:
+                    cls = ".".join(h["id"].split(".")[:-1])
+                    by_class.setdefault(cls, set()).add(
+                        h["name"][len(f"_{verb}_"):]  # strip verb prefix → TypeName
+                    )
+
+                # Only treat as Visitor when ≥2 distinct classes share the verb
+                if len(by_class) >= 2:
+                    target_class = ".".join(target_id.split(".")[:-1])
+                    all_elements = set().union(*by_class.values())
+
+                    # Case A: target is an existing handler — surface sibling visitors
+                    # that lack a handler for the same element type
+                    if target_class in by_class:
+                        missing_in = [
+                            cls for cls, handled in by_class.items()
+                            if cls != target_class and element_type not in handled
+                        ]
+                        if missing_in:
+                            hints.append({
+                                "type": "visitor_pattern",
+                                "reason": (
+                                    f"`{target_class}` implements the `_{verb}_*` "
+                                    f"Visitor pattern. Sibling visitors are missing "
+                                    f"`_{verb}_{element_type}`: "
+                                    + ", ".join(f"`{c}`" for c in missing_in[:4])
+                                ),
+                                "visitor_classes": list(by_class.keys()),
+                                "element_type": element_type,
+                                "missing_in": missing_in,
+                                "action": f"add `_{verb}_{element_type}` to each missing visitor",
+                            })
+                        else:
+                            # All visitors covered — just surface the pattern membership
+                            hints.append({
+                                "type": "visitor_pattern",
+                                "reason": (
+                                    f"`{target_class}` is one of {len(by_class)} classes "
+                                    f"implementing the `_{verb}_*` Visitor. When adding a "
+                                    f"new element type, add `_{verb}_NewType` to all: "
+                                    + ", ".join(f"`{c}`" for c in list(by_class.keys())[:4])
+                                ),
+                                "visitor_classes": list(by_class.keys()),
+                                "element_type": None,
+                                "action": "add handler to all visitor classes for any new element type",
+                            })
+
+        except Exception:
+            pass  # Visitor detection is best-effort; never block the main result
 
     # ── Git co-change history ─────────────────────────────────────────────────
     # Functions that appear together with this one in the same commits — empirical

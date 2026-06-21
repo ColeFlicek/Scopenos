@@ -638,6 +638,27 @@ class CallGraphDB:
 
         return exact + suffix
 
+    async def find_dispatch_handlers(
+        self,
+        project_id: str,
+        verb: str,
+    ) -> list[dict]:
+        """Return all methods matching the named-dispatch pattern _{verb}_{TypeName}.
+
+        Used for Visitor pattern detection: finds every handler across all
+        visitor classes for a given dispatch verb (e.g. 'print' → _print_Sin,
+        _print_Cos, etc.) so callers can build the visitor × element matrix.
+        """
+        # Escape LIKE special chars in verb; wrap with leading/trailing _...%
+        escaped_verb = verb.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"\\_{escaped_verb}\\_%"
+        async with self._db.execute(
+            "SELECT id, name, file FROM nodes "
+            "WHERE project_id = ? AND name LIKE ? ESCAPE '\\' AND is_external = 0",
+            (project_id, pattern),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
     # ── Edges ──────────────────────────────────────────────────────────────
 
     async def upsert_edges(
