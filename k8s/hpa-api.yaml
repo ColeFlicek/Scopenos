@@ -9,7 +9,7 @@ spec:
     kind: Deployment
     name: phronosis-api
   minReplicas: 1
-  maxReplicas: 3
+  maxReplicas: 1
   metrics:
     - type: Resource
       resource:
