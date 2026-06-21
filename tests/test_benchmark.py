@@ -258,6 +258,6 @@ def test_indexed_commits_cache_skips_reindex(monkeypatch):
         return original(*a, **kw)
 
     task = _task(base_commit="deadbeef")
-    result = rs._ensure_indexed(task, "/tmp/fake-repo")
+    result = rs._ensure_indexed(task, "/tmp/fake-repo", "/tmp/fake-base-clone")
     assert result == "bench-some-task"
     assert calls == []  # no HTTP call made
