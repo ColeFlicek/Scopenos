@@ -11,6 +11,10 @@ spec:
   sessionAffinityConfig:
     clientIP:
       timeoutSeconds: 3600
+  # Preserve real client IP so sessionAffinity: ClientIP actually works.
+  # Without this, NodePort SNAT's all traffic to the node IP, making all
+  # clients look identical and defeating session pinning.
+  externalTrafficPolicy: Local
   ports:
     - port: 3004
       targetPort: 3004
@@ -22,7 +26,7 @@ metadata:
   name: phronosis-api
   namespace: phronosis
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 2
   selector:
     matchLabels:
