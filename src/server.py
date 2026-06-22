@@ -673,15 +673,30 @@ async def _co_change_hints(
     # Named-dispatch variant (_verb_TypeName) covers Sympy _print_X style
     # and any similar frameworks. Classic accept/visit is also checked.
     import re as _re
-    _DISPATCH_RE = _re.compile(r"^_([a-z][a-z0-9]*)_([A-Z]\w*)$")
-    _VISIT_RE    = _re.compile(r"^visit_([A-Z]\w*)$")
+    # Named-dispatch patterns.
+    # Leading underscore is optional; TypeName may be any case (Sympy uses
+    # both _print_Relational and _print_sinc on the same class).
+    # Anchored to known Visitor verbs to avoid false positives on getters,
+    # setters, predicates (get_X, set_X, is_X) which share the same shape.
+    _VISITOR_VERBS = frozenset({
+        "print",   # Sympy printers
+        "visit",   # Python ast.NodeVisitor, antlr4
+        "render",  # template/renderer visitors
+        "handle",  # handler dispatch (e.g. logging, http)
+        "encode",  # codec visitors
+        "decode",
+        "write",   # writer/serialiser visitors
+        "emit",    # emitter visitors (e.g. LLVM-style)
+    })
+    _DISPATCH_RE = _re.compile(r"^_?([a-z][a-z0-9]*)_([A-Za-z]\w*)$")
+    _VISIT_RE    = _re.compile(r"^visit_([A-Za-z]\w*)$")
 
     dispatch_match = _DISPATCH_RE.match(target_name)
     visit_match    = _VISIT_RE.match(target_name)
 
     if dispatch_match or visit_match or target_name == "accept":
         try:
-            if dispatch_match:
+            if dispatch_match and dispatch_match.group(1) in _VISITOR_VERBS:
                 verb, element_type = dispatch_match.groups()
                 handlers = await db.find_dispatch_handlers(project_id or "", verb)
 
