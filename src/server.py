@@ -171,6 +171,47 @@ async def list_projects() -> str:
     return json.dumps(result)
 
 
+# ── Pattern prototype warmup ──────────────────────────────────────────────────
+
+@mcp.tool()
+async def warmup_pattern_prototypes() -> str:
+    """
+    [MAINTENANCE TOOL — no arguments]
+
+    Pre-compute and persist prototype embedding vectors for all GoF pattern
+    roles defined in pattern_prototypes.py. Each role's 10 descriptions are
+    embedded and averaged into a centroid stored in the pattern_prototypes table.
+
+    Safe to call multiple times — roles whose description_hash matches the
+    stored row are skipped (already current). Only re-embeds when descriptions
+    change.
+
+    Returns a summary of which roles were computed vs. loaded from cache.
+    """
+    svcs = await _get_services()
+    from .pattern_prototypes import ROLE_DESCRIPTIONS, ensure_prototype
+
+    computed, cached, failed = [], [], []
+    for role in ROLE_DESCRIPTIONS:
+        try:
+            existing = await svcs.embeddings.get_prototype(role)
+            from .pattern_prototypes import _description_hash
+            if existing and existing.get("description_hash") == _description_hash(role):
+                cached.append(role)
+            else:
+                await ensure_prototype(role, svcs.embeddings, svcs.embeddings)
+                computed.append(role)
+        except Exception as exc:
+            failed.append({"role": role, "error": str(exc)})
+
+    return json.dumps({
+        "computed": computed,
+        "cached": cached,
+        "failed": failed,
+        "total_roles": len(ROLE_DESCRIPTIONS),
+    })
+
+
 # ── Branch / diff tools ───────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -2017,6 +2058,8 @@ async def get_function_context(
     node_project = node.get("project_id", project_id)
 
     # Step 2: fan out — all queries run concurrently
+    from .pattern_detector import detect_patterns, serialize_patterns
+
     callers_task = _asyncio.create_task(db.get_callers(node_id, node_project))
     callees_task = _asyncio.create_task(db.get_callees(node_id, node_project))
     impact_task = _asyncio.create_task(db.get_impact_radius(node_id, depth, node_project))
@@ -2031,9 +2074,13 @@ async def get_function_context(
     contracts_task = _asyncio.create_task(
         db.get_contracts_for_function(node_id, node_project)
     )
+    patterns_task = _asyncio.create_task(
+        detect_patterns(node, db, node_project, embedder=svcs.embeddings)
+    )
 
-    callers, callees, impact, history, similar, contracts = await _asyncio.gather(
+    callers, callees, impact, history, similar, contracts, patterns = await _asyncio.gather(
         callers_task, callees_task, impact_task, history_task, similar_task, contracts_task,
+        patterns_task,
         return_exceptions=True,
     )
 
@@ -2054,7 +2101,9 @@ async def get_function_context(
         except Exception:
             param_names = []
 
-    return json.dumps({
+    pattern_list = serialize_patterns(_safe(patterns, []))
+
+    out: dict = {
         "node": {
             "id": node_id,
             "name": node.get("name"),
@@ -2077,7 +2126,10 @@ async def get_function_context(
         "decision_history": _safe(history, []),
         "similar_functions": similar_clean,
         "applicable_contracts": _fmt_contracts(_safe(contracts, [])),
-    })
+    }
+    if pattern_list:
+        out["design_patterns"] = pattern_list
+    return json.dumps(out)
 
 
 

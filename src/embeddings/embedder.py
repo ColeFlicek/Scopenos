@@ -99,12 +99,57 @@ class EmbeddingStore:
         return obj
 
     async def init(self) -> None:
-        """No-op — schema is in schema.sql, codec registered in CallGraphDB.init()."""
-        pass
+        """Ensure the pattern_prototypes table exists (CREATE IF NOT EXISTS).
+
+        Other schema objects live in schema.sql; this table is created here
+        because it is owned entirely by the embedding layer and needed lazily.
+        """
+        conn = self._db._db
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pattern_prototypes (
+                role             TEXT PRIMARY KEY,
+                vector           TEXT    NOT NULL,
+                description_hash TEXT    NOT NULL,
+                computed_at      TEXT    NOT NULL
+            )
+        """)
+        if hasattr(conn, "commit"):
+            await conn.commit()
 
     async def close(self) -> None:
         """No-op — the pool is owned and closed by CallGraphDB."""
         pass
+
+    # ── Pattern prototypes ─────────────────────────────────────────────────
+
+    async def get_prototype(self, role: str) -> dict | None:
+        """Return the stored prototype row for role, or None if not found."""
+        conn = self._db._db
+        async with conn.execute(
+            "SELECT role, vector, description_hash, computed_at FROM pattern_prototypes WHERE role=?",
+            (role,),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def upsert_prototype(
+        self, role: str, vector: list[float], description_hash: str
+    ) -> None:
+        """Persist a prototype centroid vector for role."""
+        from datetime import datetime, timezone
+        import json as _json
+        conn = self._db._db
+        await conn.execute(
+            """INSERT INTO pattern_prototypes(role, vector, description_hash, computed_at)
+               VALUES(?, ?, ?, ?)
+               ON CONFLICT(role) DO UPDATE SET
+                   vector=excluded.vector,
+                   description_hash=excluded.description_hash,
+                   computed_at=excluded.computed_at""",
+            (role, _json.dumps(vector), description_hash, datetime.now(timezone.utc).isoformat()),
+        )
+        if hasattr(conn, "commit"):
+            await conn.commit()
 
     # ── Shared ─────────────────────────────────────────────────────────────
 

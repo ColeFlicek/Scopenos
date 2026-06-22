@@ -659,6 +659,135 @@ class CallGraphDB:
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
+    async def get_class_methods(
+        self, class_id: str, project_id: str | None = None
+    ) -> list[dict]:
+        """Return all method/function nodes directly under class_id.
+
+        Includes the body column (truncated at index time to 2000 chars) so that
+        pattern detectors can check for raise NotImplementedError in addition to
+        the @abstractmethod decorator.
+        """
+        escaped = class_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pid_clause = " AND project_id=?" if project_id else ""
+        pid_args = (project_id,) if project_id else ()
+        async with self._db.execute(
+            f"SELECT {_NODE_COLS}, body FROM nodes "
+            f"WHERE id LIKE ? ESCAPE '\\' AND type IN ('method','function') "
+            f"AND is_external=0{pid_clause}",
+            (f"{escaped}.%", *pid_args),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def find_base_classes(
+        self, class_id: str, project_id: str | None = None
+    ) -> list[str]:
+        """Return fully-qualified ids of classes that class_id directly inherits from.
+
+        Resolves bare callee names (e.g. 'ABC') to qualified ids via find_node_by_name
+        when the indexer could not resolve them at index time.
+        """
+        pid_clause = " AND project_id=?" if project_id else ""
+        pid_args = (project_id,) if project_id else ()
+        async with self._db.execute(
+            f"SELECT callee_id FROM edges "
+            f"WHERE caller_id=? AND edge_type='inherits'{pid_clause}",
+            (class_id, *pid_args),
+        ) as cur:
+            raw = [r["callee_id"] for r in await cur.fetchall()]
+
+        resolved = []
+        for rid in raw:
+            if "." in rid:
+                resolved.append(rid)
+            else:
+                hits = await self.find_node_by_name(rid, project_id)
+                resolved.append(hits[0]["id"] if hits else rid)
+        return resolved
+
+    async def find_sibling_callers(
+        self,
+        node_id: str,
+        class_id: str,
+        project_id: str | None = None,
+    ) -> list[str]:
+        """Find callers of node_id that live in the same class.
+
+        Checks both the fully-qualified callee_id AND the bare method name,
+        because _resolve_callee leaves ambiguous callees as bare names when
+        multiple classes share the same method name (e.g. 'handle').
+        """
+        bare_name = node_id.split(".")[-1]
+        escaped = class_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pid_clause = " AND project_id=?" if project_id else ""
+        pid_args = (project_id,) if project_id else ()
+        async with self._db.execute(
+            f"SELECT DISTINCT caller_id FROM edges "
+            f"WHERE (callee_id=? OR callee_id=?) "
+            f"AND caller_id LIKE ? ESCAPE '\\'{pid_clause}",
+            (node_id, bare_name, f"{escaped}.%", *pid_args),
+        ) as cur:
+            return [r["caller_id"] for r in await cur.fetchall()]
+
+    async def find_self_delegating_callees(
+        self, caller_id: str, method_name: str, project_id: str | None = None
+    ) -> list[str]:
+        """Return callee_ids where callee_id ends with '.{method_name}'.
+
+        Catches calls like self._next.handle(), child.render(), element.draw()
+        that the indexer cannot resolve to a known node because the object is a
+        runtime value. Used by CoR and Composite detectors.
+        """
+        escaped = method_name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pid_clause = " AND project_id=?" if project_id else ""
+        pid_args = (project_id,) if project_id else ()
+        async with self._db.execute(
+            f"SELECT DISTINCT callee_id FROM edges "
+            f"WHERE caller_id=? AND callee_id LIKE ? ESCAPE '\\'{pid_clause}",
+            (caller_id, f"%.{escaped}", *pid_args),
+        ) as cur:
+            return [r["callee_id"] for r in await cur.fetchall()]
+
+    async def get_node_body(self, node_id: str, project_id: str | None = None) -> str:
+        """Fetch the stored body text for a single node. Returns '' if not found."""
+        pid_clause = " AND project_id=?" if project_id else ""
+        pid_args = (project_id,) if project_id else ()
+        async with self._db.execute(
+            f"SELECT body FROM nodes WHERE id=?{pid_clause} LIMIT 1",
+            (node_id, *pid_args),
+        ) as cur:
+            row = await cur.fetchone()
+        return (row["body"] or "") if row else ""
+
+    async def get_node_abstractness(self, node_id: str, project_id: str | None = None) -> bool:
+        """Return True if node_id is abstract (@abstractmethod or raise NotImplementedError body)."""
+        pid_clause = " AND project_id=?" if project_id else ""
+        pid_args = (project_id,) if project_id else ()
+        async with self._db.execute(
+            f"SELECT decorators, body FROM nodes WHERE id=?{pid_clause} LIMIT 1",
+            (node_id, *pid_args),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return False
+        decorators = json.loads(row["decorators"] or "[]")
+        if "abstractmethod" in decorators:
+            return True
+        return "raise NotImplementedError" in (row["body"] or "")
+
+    async def find_subclasses(
+        self, class_id: str, project_id: str | None = None
+    ) -> list[str]:
+        """Return fully-qualified ids of classes that directly inherit from class_id."""
+        pid_clause = " AND project_id=?" if project_id else ""
+        pid_args = (project_id,) if project_id else ()
+        async with self._db.execute(
+            f"SELECT caller_id FROM edges "
+            f"WHERE callee_id=? AND edge_type='inherits'{pid_clause}",
+            (class_id, *pid_args),
+        ) as cur:
+            return [r["caller_id"] for r in await cur.fetchall()]
+
     # ── Edges ──────────────────────────────────────────────────────────────
 
     async def upsert_edges(
