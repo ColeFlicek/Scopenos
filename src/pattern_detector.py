@@ -423,7 +423,7 @@ _SUBJECT_DETACH = frozenset({
     "detach", "unsubscribe", "deregister", "remove_listener", "remove_observer", "off",
 })
 _OBSERVER_UPDATE = frozenset({
-    "update", "on_update", "on_change", "on_event", "receive",
+    "on_update", "on_change", "on_event", "on_notify", "receive", "notify_of",
 })
 
 
