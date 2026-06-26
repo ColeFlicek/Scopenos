@@ -1,5 +1,5 @@
 """
-RQ job functions for long-running Phronosis operations.
+RQ job functions for long-running Scopenos operations.
 
 Each function is a synchronous wrapper around async indexing code.
 Workers run these in a separate process with their own DB pool.
@@ -12,7 +12,7 @@ import os
 
 
 def _dsn() -> str:
-    return os.getenv("DATABASE_URL", "postgresql://phronosis:phronosis@localhost/phronosis")
+    return os.getenv("DATABASE_URL", "postgresql://scopenos:scopenos@localhost/scopenos")
 
 
 async def _make_indexer():

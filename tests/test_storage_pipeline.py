@@ -1,5 +1,5 @@
 """
-TDD regression tests for the Phronosis storage pipeline.
+TDD regression tests for the Scopenos storage pipeline.
 
 Covers the bugs surfaced during K8s deployment:
 - _QueryContext.description was always empty → dict(zip(cols, row)) produced {}

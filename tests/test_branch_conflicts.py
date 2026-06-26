@@ -250,15 +250,21 @@ class TestIndexerBranchWiring:
         db.get_latest_dependency_fingerprint.return_value = None
         db.save_dependency_fingerprint.return_value = None
         db.get_project_root.return_value = "/project"
+        db.create_project_schema.return_value = None
+        # project_db() returns the same mock — all configured methods apply to pdb too
+        db.project_db.return_value = db
         return db
 
     def _make_mock_pipeline(self):
+        from unittest.mock import MagicMock
         pipeline = AsyncMock()
         pipeline.delete_by_file.return_value = None
         pipeline.delete_by_ids.return_value = None
         pipeline.upsert_chunks.return_value = {"docs": 0, "fallback": 0}
         pipeline.get_embedded_ids.return_value = set()
         pipeline.get_summaries.return_value = {}
+        # with_db is synchronous — override AsyncMock's default async treatment
+        pipeline.with_db = MagicMock(return_value=pipeline)
         return pipeline
 
     @pytest.mark.asyncio

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Post-commit git hook — re-indexes changed files and logs the decision to Phronosis.
+# Post-commit git hook — re-indexes changed files and logs the decision to Scopenos.
 # Install: cp scripts/post-commit.sh .git/hooks/post-commit && chmod +x .git/hooks/post-commit
 
 set -euo pipefail
 
-PHRONOSIS_URL="${PHRONOSIS_URL:-http://100.71.88.106:3004}"
-PHRONOSIS_API_KEY="${PHRONOSIS_API_KEY:-}"  # required — set in shell profile or CI secrets
+SCOPENOS_URL="${SCOPENOS_URL:-http://100.71.88.106:3004}"
+SCOPENOS_API_KEY="${SCOPENOS_API_KEY:-}"  # required — set in shell profile or CI secrets
 
 CHANGED=$(git diff-tree --no-commit-id -r --name-only HEAD 2>/dev/null || true)
 
@@ -15,9 +15,9 @@ fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
-# Derive project_id: prefer PHRONOSIS_PROJECT env var, then git remote basename, then dirname.
-if [ -n "${PHRONOSIS_PROJECT:-}" ]; then
-  PROJECT_ID="$PHRONOSIS_PROJECT"
+# Derive project_id: prefer SCOPENOS_PROJECT env var, then git remote basename, then dirname.
+if [ -n "${SCOPENOS_PROJECT:-}" ]; then
+  PROJECT_ID="$SCOPENOS_PROJECT"
 else
   REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
   if [ -n "$REMOTE_URL" ]; then
@@ -41,18 +41,18 @@ NEEDS_FULL_REINDEX=false
 for _trigger in $FULL_REINDEX_TRIGGERS; do
   if echo "$CHANGED" | grep -qF "$_trigger"; then
     NEEDS_FULL_REINDEX=true
-    echo "[phronosis] $( echo "$_trigger" | xargs basename ) changed — triggering full re-index"
+    echo "[scopenos] $( echo "$_trigger" | xargs basename ) changed — triggering full re-index"
     break
   fi
 done
 
 if [ "$NEEDS_FULL_REINDEX" = "true" ]; then
-  PHRONOSIS_URL="$PHRONOSIS_URL" PHRONOSIS_PROJECT_ID="$PROJECT_ID" REPO_ROOT="$REPO_ROOT" python3 - <<'PYEOF'
+  SCOPENOS_URL="$SCOPENOS_URL" SCOPENOS_PROJECT_ID="$PROJECT_ID" REPO_ROOT="$REPO_ROOT" python3 - <<'PYEOF'
 import glob, json, os, sys
 from urllib.request import urlopen, Request as UReq
 
-url       = os.environ.get("PHRONOSIS_URL", "http://100.71.88.106:3004")
-project   = os.environ.get("PHRONOSIS_PROJECT_ID", "default")
+url       = os.environ.get("SCOPENOS_URL", "http://100.71.88.106:3004")
+project   = os.environ.get("SCOPENOS_PROJECT_ID", "default")
 root      = os.environ.get("REPO_ROOT", "")
 src_files = glob.glob(f"{root}/src/**/*.py", recursive=True)
 
@@ -73,9 +73,9 @@ for i in range(0, len(src_files), BATCH):
         with urlopen(req, timeout=60) as r:
             total_fns += json.loads(r.read()).get("functions_updated", 0)
     except Exception as e:
-        print(f"[phronosis] batch failed: {e}", file=sys.stderr)
+        print(f"[scopenos] batch failed: {e}", file=sys.stderr)
 
-print(f"[phronosis] full re-index: {len(src_files)} files, {total_fns} functions updated")
+print(f"[scopenos] full re-index: {len(src_files)} files, {total_fns} functions updated")
 PYEOF
 else
   FILES_JSON=$(echo "$CHANGED" | while IFS= read -r f; do
@@ -83,13 +83,13 @@ else
   done | paste -sd ',' - | sed 's/^/[/' | sed 's/$/]/')
 
   curl --silent --show-error --max-time 30 \
-    -X POST "${PHRONOSIS_URL}/index" \
+    -X POST "${SCOPENOS_URL}/index" \
     -H "Content-Type: application/json" \
-    -H "X-API-Key: ${PHRONOSIS_API_KEY}" \
+    -H "X-API-Key: ${SCOPENOS_API_KEY}" \
     -d "{\"changed_files\": ${FILES_JSON}, \"project_root\": \"${REPO_ROOT}\", \"project_id\": \"${PROJECT_ID}\"}" \
     > /dev/null
 
-  echo "[phronosis] index_changes triggered for $(echo "$CHANGED" | wc -l | tr -d ' ') files (project: ${PROJECT_ID})"
+  echo "[scopenos] index_changes triggered for $(echo "$CHANGED" | wc -l | tr -d ' ') files (project: ${PROJECT_ID})"
 fi
 
 # ── Contract check ──────────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ if [ -n "$CHANGED_SRC" ]; then
 
   # Get function IDs for changed files.
   FN_RESP=$(curl --silent --max-time 5 \
-    -X POST "${PHRONOSIS_URL}/api/functions" \
+    -X POST "${SCOPENOS_URL}/api/functions" \
     -H "Content-Type: application/json" \
     -d "{\"files\": ${ABS_FILES_JSON}, \"project_id\": \"${PROJECT_ID}\"}" 2>/dev/null || echo '{}')
 
@@ -118,7 +118,7 @@ print(json.dumps(ids))
 
   # Check contracts.
   VIOLATIONS=$(curl --silent --max-time 15 \
-    -X POST "${PHRONOSIS_URL}/api/contracts/check" \
+    -X POST "${SCOPENOS_URL}/api/contracts/check" \
     -H "Content-Type: application/json" \
     -d "{\"project_id\": \"${PROJECT_ID}\", \"function_ids\": ${FUNCTION_IDS}}" 2>/dev/null || echo '{"violations":[]}')
 
@@ -127,12 +127,12 @@ import sys, json
 d = json.load(sys.stdin)
 viols = d.get('violations', [])
 if viols:
-    print(f'[phronosis] ⚠  {len(viols)} contract violation(s) detected:')
+    print(f'[scopenos] ⚠  {len(viols)} contract violation(s) detected:')
     for v in viols:
         pct = f\"{v['score']*100:.0f}%\" if v['violation_type'] == 'semantic' else 'structural'
         print(f'  [{v[\"violation_type\"]}] {v[\"function_id\"]} → {v.get(\"contract_title\",v[\"contract_id\"])} ({pct})')
 else:
-    print('[phronosis] contracts: ok (no violations)')
+    print('[scopenos] contracts: ok (no violations)')
 " 2>/dev/null || echo '')
 
   if [ -n "$VIOL_COUNT" ]; then
@@ -142,13 +142,13 @@ fi
 
 # ── Log decision ────────────────────────────────────────────────────────────────
 
-PHRONOSIS_PROJECT_ID="$PROJECT_ID" PHRONOSIS_URL="$PHRONOSIS_URL" REPO_ROOT="$REPO_ROOT" PHRONOSIS_API_KEY="$PHRONOSIS_API_KEY" python3 - <<'PYEOF'
+SCOPENOS_PROJECT_ID="$PROJECT_ID" SCOPENOS_URL="$SCOPENOS_URL" REPO_ROOT="$REPO_ROOT" SCOPENOS_API_KEY="$SCOPENOS_API_KEY" python3 - <<'PYEOF'
 import json, os, subprocess, sys
 try:
     from urllib.request import urlopen, Request as UReq
 
-    phronosis_url    = os.environ.get("PHRONOSIS_URL", "http://100.71.88.106:3004")
-    project_id  = os.environ.get("PHRONOSIS_PROJECT_ID", "default")
+    scopenos_url    = os.environ.get("SCOPENOS_URL", "http://100.71.88.106:3004")
+    project_id  = os.environ.get("SCOPENOS_PROJECT_ID", "default")
     repo_root   = os.environ.get("REPO_ROOT", "")
 
     msg   = subprocess.check_output(["git", "log", "-1", "--format=%s"]).decode().strip()
@@ -179,13 +179,13 @@ try:
     parts.append(f"Changes:\n{diff_stat}")
     description = " — ".join(parts)
 
-    # Resolve changed files → actual indexed function IDs via the Phronosis API.
+    # Resolve changed files → actual indexed function IDs via the Scopenos API.
     abs_files = [f"{repo_root}/{f}" for f in changed if f.endswith((".py", ".ts", ".tsx"))]
     linked = None
     if abs_files:
         try:
             fn_req = UReq(
-                f"{phronosis_url}/api/functions",
+                f"{scopenos_url}/api/functions",
                 data=json.dumps({"files": abs_files, "project_id": project_id}).encode(),
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -205,16 +205,16 @@ try:
         "project_id": project_id,
     }).encode()
 
-    api_key = os.environ.get("PHRONOSIS_API_KEY", "")
+    api_key = os.environ.get("SCOPENOS_API_KEY", "")
     req = UReq(
-        f"{phronosis_url}/api/decisions",
+        f"{scopenos_url}/api/decisions",
         data=payload,
         headers={"Content-Type": "application/json", "X-API-Key": api_key},
         method="POST",
     )
     with urlopen(req, timeout=10) as r:
         resp = json.loads(r.read())
-    print(f"[phronosis] decision logged ({type_}): {resp.get('decision_id', '')[:8]}")
+    print(f"[scopenos] decision logged ({type_}): {resp.get('decision_id', '')[:8]}")
 except Exception as e:
-    print(f"[phronosis] decision log skipped: {e}", file=sys.stderr)
+    print(f"[scopenos] decision log skipped: {e}", file=sys.stderr)
 PYEOF

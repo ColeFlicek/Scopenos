@@ -1,8 +1,8 @@
 """
-Phronosis client setup — generates the self-contained Python script that configures
-a user's machine and project to work with Phronosis.
+Scopenos client setup — generates the self-contained Python script that configures
+a user's machine and project to work with Scopenos.
 
-Called by the setup_phronosis_client MCP tool. The returned script writes all
+Called by the setup_scopenos_client MCP tool. The returned script writes all
 required files (hook, settings.json merge, CLAUDE.md, memory files, git hook)
 and requires no manual steps beyond running it.
 """
@@ -11,18 +11,18 @@ from __future__ import annotations
 import os
 
 # ── Template: Claude Code pre-edit hook ───────────────────────────────────────
-# Installed to ~/.claude/hooks/phronosis-suggest.py
+# Installed to ~/.claude/hooks/scopenos-suggest.py
 _HOOK_SCRIPT = r'''#!/usr/bin/env python3
-"""Phronosis PreToolUse hook — gate on Read, risk-check on Edit, nudge on Bash."""
+"""Scopenos PreToolUse hook — gate on Read, risk-check on Edit, nudge on Bash."""
 import json, os, re, sys, time, urllib.request
 
-PHRONOSIS_URL = os.environ.get("PHRONOSIS_URL", "{phronosis_url}")
+SCOPENOS_URL = os.environ.get("SCOPENOS_URL", "{scopenos_url}")
 TIMEOUT = 3
 GATE_TTL = 1800
-_GATE_DIR = os.path.expanduser("~/.claude/phronosis_gates")
+_GATE_DIR = os.path.expanduser("~/.claude/scopenos_gates")
 
 def _project_id():
-    pid = os.environ.get("PHRONOSIS_PROJECT", "")
+    pid = os.environ.get("SCOPENOS_PROJECT", "")
     if pid: return pid
     try:
         import subprocess
@@ -39,7 +39,7 @@ def _project_id():
 
 def _project_home(pid):
     try:
-        url = f"{PHRONOSIS_URL}/api/project-home/{urllib.request.quote(pid,safe='')}"
+        url = f"{SCOPENOS_URL}/api/project-home/{urllib.request.quote(pid,safe='')}"
         with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
             return json.loads(r.read())
     except Exception: return {}
@@ -73,7 +73,7 @@ try:
         cmd = inp.get("command","")
         if (re.search(r"\bgrep\b",cmd) and re.search(r"\.(py|ts|tsx|js|jsx)",cmd)
                 and not re.search(r"\b(git|pytest|rtk|ruff|mypy|test)\b",cmd)):
-            print("[Phronosis] grep on source — MCP is faster:\n"
+            print("[Scopenos] grep on source — MCP is faster:\n"
                   "  get_callers(fn) · get_callees(fn) · query_similar_functions(snippet)")
 
     elif tool == "Read":
@@ -85,16 +85,16 @@ try:
         if _gate_valid(pid): sys.exit(0)
         home = _project_home(pid)
         if not home:
-            print("[Phronosis] Reading source — if exploring structure, MCP is faster:\n"
+            print("[Scopenos] Reading source — if exploring structure, MCP is faster:\n"
                   "  get_impact_radius(fn) · get_decision_history(fn) · get_callers(fn)")
             sys.exit(0)
-        print(f"[Phronosis] Architectural context — {pid} ({home.get('function_count','?')} functions)")
+        print(f"[Scopenos] Architectural context — {pid} ({home.get('function_count','?')} functions)")
         print(f"  Chokepoints : {_fmt(home.get('chokepoints',[]))}")
         ssl = home.get("since_last_session")
         if ssl and any(ssl.get(k) for k in ("functions_added","functions_modified","functions_removed")):
             print(f"  Since last session: +{len(ssl.get('functions_added',[]))} "
                   f"~{len(ssl.get('functions_modified',[]))} -{len(ssl.get('functions_removed',[]))} functions")
-        print(f"\n[Phronosis] Context loaded. Retry your Read — gate valid for {GATE_TTL//60} min.")
+        print(f"\n[Scopenos] Context loaded. Retry your Read — gate valid for {GATE_TTL//60} min.")
         _write_gate(pid)
         sys.exit(2)
 
@@ -113,35 +113,35 @@ try:
             if mod and (mod in fid or fid.startswith(mod)):
                 warnings.append(f"  CHOKEPOINT  {'.'.join(fid.split('.')[-2:])}  ({cp['caller_count']} callers)")
         if warnings:
-            print(f"[Phronosis] High-risk edit in {os.path.basename(path)}:")
+            print(f"[Scopenos] High-risk edit in {os.path.basename(path)}:")
             for w in warnings: print(w)
             print("  1. get_impact_radius(fn, depth=2)     — what breaks?")
             print("  2. get_decision_history(fn)           — why was this designed this way?")
             print("  3. query_similar_functions(snippet)   — what is the existing pattern?")
         else:
             fn = mod.split(".")[-1] if mod else "fn"
-            print(f"[Phronosis] Pre-edit: get_impact_radius({fn}) · get_decision_history({fn}) · query_similar_functions(snippet)")
+            print(f"[Scopenos] Pre-edit: get_impact_radius({fn}) · get_decision_history({fn}) · query_similar_functions(snippet)")
 except Exception: pass
 sys.exit(0)
 '''
 
 # ── Template: Claude Code post-edit hook ─────────────────────────────────────
-# Installed to ~/.claude/hooks/phronosis-post-edit.py
+# Installed to ~/.claude/hooks/scopenos-post-edit.py
 _POST_EDIT_HOOK = r'''#!/usr/bin/env python3
-"""Phronosis PostToolUse hook — auto-indexes edited files and warns on template staleness."""
+"""Scopenos PostToolUse hook — auto-indexes edited files and warns on template staleness."""
 import json, os, re, subprocess, sys, urllib.request
 
-PHRONOSIS_URL = os.environ.get("PHRONOSIS_URL", "{phronosis_url}")
+SCOPENOS_URL = os.environ.get("SCOPENOS_URL", "{scopenos_url}")
 TIMEOUT  = 3
 
 TEMPLATE_SOURCES = {
-    "scripts/phronosis-pre-edit-hook.py":  "_HOOK_SCRIPT in client_setup.py",
+    "scripts/scopenos-pre-edit-hook.py":  "_HOOK_SCRIPT in client_setup.py",
     "scripts/post-commit.sh":         "post-commit template (verify structure unchanged)",
     "CLAUDE.md":                      "_CLIENT_CLAUDE_MD template in client_setup.py",
 }
 
 def _project_id():
-    pid = os.environ.get("PHRONOSIS_PROJECT", "")
+    pid = os.environ.get("SCOPENOS_PROJECT", "")
     if pid: return pid
     try:
         remote = subprocess.check_output(["git","remote","get-url","origin"],
@@ -166,14 +166,14 @@ def _bg_index(file_path, root, pid):
     cmd = f"""
 import json,urllib.request
 payload=json.dumps({{"project_root":{repr(root)},"project_id":{repr(pid)},"files":{{{repr(file_path)}:open({repr(file_path)},encoding="utf-8",errors="replace").read()}}}}).encode()
-req=urllib.request.Request({repr(PHRONOSIS_URL+"/api/index-bulk")},data=payload,headers={{"Content-Type":"application/json"}},method="POST")
+req=urllib.request.Request({repr(SCOPENOS_URL+"/api/index-bulk")},data=payload,headers={{"Content-Type":"application/json"}},method="POST")
 try:
     with urllib.request.urlopen(req,timeout=60) as r:
         d=json.loads(r.read())
     import os
-    print(f"[Phronosis] indexed {os.path.basename({repr(file_path)})}: {{d.get('functions_updated',0)}} fns updated")
+    print(f"[Scopenos] indexed {os.path.basename({repr(file_path)})}: {{d.get('functions_updated',0)}} fns updated")
 except Exception as e:
-    print(f"[Phronosis] index failed: {{e}}")
+    print(f"[Scopenos] index failed: {{e}}")
 """
     subprocess.Popen(["python3","-c",cmd],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
@@ -191,13 +191,13 @@ try:
         if pid and root:
             _bg_index(path, root, pid)
             rel = path.replace(root+"/","") if root else path
-            print(f"[Phronosis] Indexing {rel} in background...")
+            print(f"[Scopenos] Indexing {rel} in background...")
 
     for suffix, warning in TEMPLATE_SOURCES.items():
         if path.endswith(suffix):
-            print(f"[Phronosis] Template source edited: {suffix}")
+            print(f"[Scopenos] Template source edited: {suffix}")
             print(f"  → Review {warning}")
-            print(f"  → Update the embedded constant so setup_phronosis_client() distributes the latest version.")
+            print(f"  → Update the embedded constant so setup_scopenos_client() distributes the latest version.")
             break
 except Exception: pass
 sys.exit(0)
@@ -206,9 +206,9 @@ sys.exit(0)
 # ── Template: project CLAUDE.md ───────────────────────────────────────────────
 # Written to <project_root>/CLAUDE.md (appended if file exists)
 _CLIENT_CLAUDE_MD = """\
-# Phronosis Workflow
+# Scopenos Workflow
 
-This project is indexed in Phronosis at `{phronosis_url}` (project: `{project_id}`).
+This project is indexed in Scopenos at `{scopenos_url}` (project: `{project_id}`).
 Follow this three-tier retrieval ladder every session.
 
 ## Session start — build the map first
@@ -258,11 +258,11 @@ Concurrent agents read this before touching the same code.
 """
 
 # ── Template: memory feedback file ───────────────────────────────────────────
-# Written to ~/.claude/projects/<project>/memory/feedback_phronosis_workflow.md
+# Written to ~/.claude/projects/<project>/memory/feedback_scopenos_workflow.md
 _MEMORY_FEEDBACK = """\
 ---
-name: feedback-phronosis-workflow
-description: "Phronosis workflow rules for {project_id}: three-tier retrieval, pre-edit gate, immediate decision logging."
+name: feedback-scopenos-workflow
+description: "Scopenos workflow rules for {project_id}: three-tier retrieval, pre-edit gate, immediate decision logging."
 metadata:
   type: feedback
 ---
@@ -278,26 +278,26 @@ log_decision() immediately after significant choices (not just at session end).
 Concurrent agents read it before touching the same code.
 
 **Why:** file reads for architectural understanding waste tokens and miss cross-file context.
-Phronosis queries are more information-dense. [[feedback-phronosis-comprehension]]
+Scopenos queries are more information-dense. [[feedback-scopenos-comprehension]]
 """
 
 _MEMORY_INDEX = """\
-# Phronosis Memory Index
+# Scopenos Memory Index
 
-- [Phronosis workflow](feedback_phronosis_workflow.md) — three-tier retrieval, pre-edit gate, immediate decision logging
+- [Scopenos workflow](feedback_scopenos_workflow.md) — three-tier retrieval, pre-edit gate, immediate decision logging
 """
 
-# ── Skill: phronosis-workflow ──────────────────────────────────────────────────────
-# Installed to ~/.claude/skills/phronosis-workflow/SKILL.md
+# ── Skill: scopenos-workflow ──────────────────────────────────────────────────────
+# Installed to ~/.claude/skills/scopenos-workflow/SKILL.md
 # Frontmatter is always loaded in Claude's system prompt (first level of
 # progressive disclosure). Body loads when Claude judges the skill is relevant.
-_Phronosis_SKILL = """\
+_Scopenos_SKILL = """\
 ---
-name: phronosis-workflow
-description: "Phronosis code intelligence for indexed codebases. Mandatory workflow: call get_project_home(project_id) FIRST every session before any source file read. Tier order: (1) get_project_home — architecture snapshot; (2) query_similar_functions / get_impact_radius / get_decision_history — function context; (3) Read — only for the exact lines you are about to modify. Never read files to understand structure; use Phronosis tools instead. Use on any Phronosis-indexed project."
+name: scopenos-workflow
+description: "Scopenos code intelligence for indexed codebases. Mandatory workflow: call get_project_home(project_id) FIRST every session before any source file read. Tier order: (1) get_project_home — architecture snapshot; (2) query_similar_functions / get_impact_radius / get_decision_history — function context; (3) Read — only for the exact lines you are about to modify. Never read files to understand structure; use Scopenos tools instead. Use on any Scopenos-indexed project."
 ---
 
-# Phronosis Workflow
+# Scopenos Workflow
 
 ## Session Start — Three-Tier Retrieval Ladder
 
@@ -387,7 +387,7 @@ The post-commit git hook handles commit-level decisions automatically.
 
 def generate_setup_script(
     project_root: str,
-    phronosis_url: str,
+    scopenos_url: str,
     project_id: str,
     claude_home: str,
     install_git_hook: bool,
@@ -395,23 +395,23 @@ def generate_setup_script(
 ) -> str:
     """
     Generate a self-contained Python script that configures a machine and project
-    to work with Phronosis. The caller executes this script via Bash.
+    to work with Scopenos. The caller executes this script via Bash.
     """
-    hook_content = _HOOK_SCRIPT.replace("{phronosis_url}", phronosis_url)
-    post_edit_content = _POST_EDIT_HOOK.replace("{phronosis_url}", phronosis_url)
-    claude_md = _CLIENT_CLAUDE_MD.replace("{phronosis_url}", phronosis_url).replace("{project_id}", project_id)
+    hook_content = _HOOK_SCRIPT.replace("{scopenos_url}", scopenos_url)
+    post_edit_content = _POST_EDIT_HOOK.replace("{scopenos_url}", scopenos_url)
+    claude_md = _CLIENT_CLAUDE_MD.replace("{scopenos_url}", scopenos_url).replace("{project_id}", project_id)
     mem_feedback = _MEMORY_FEEDBACK.replace("{project_id}", project_id)
-    skill_content = _Phronosis_SKILL
+    skill_content = _Scopenos_SKILL
 
     mem_path_key = project_root.replace("/", "-").lstrip("-")
 
     pre_hook_entries = [
-        {"matcher": "Bash", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/phronosis-suggest.py"}]},
-        {"matcher": "Read", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/phronosis-suggest.py"}]},
-        {"matcher": "Edit", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/phronosis-suggest.py"}]},
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/scopenos-suggest.py"}]},
+        {"matcher": "Read", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/scopenos-suggest.py"}]},
+        {"matcher": "Edit", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/scopenos-suggest.py"}]},
     ]
     post_hook_entries = [
-        {"matcher": "Edit", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/phronosis-post-edit.py"}]},
+        {"matcher": "Edit", "hooks": [{"type": "command", "command": f"python3 {claude_home}/hooks/scopenos-post-edit.py"}]},
     ]
 
     import json as _json
@@ -434,11 +434,11 @@ else:
 """
 
     script = f'''#!/usr/bin/env python3
-"""Phronosis client setup — generated by setup_phronosis_client().  Run once per machine/project."""
+"""Scopenos client setup — generated by setup_scopenos_client().  Run once per machine/project."""
 import json, os, pathlib, re, stat, sys
 
 PROJECT_ROOT = "{project_root}"
-PHRONOSIS_URL     = "{phronosis_url}"
+SCOPENOS_URL     = "{scopenos_url}"
 PROJECT_ID   = "{project_id}"
 CLAUDE_HOME  = "{claude_home}"
 MEM_KEY      = "{mem_path_key}"
@@ -448,12 +448,12 @@ results = []
 # ── Pre-edit and post-edit hooks ──────────────────────────────────
 hooks_dir = pathlib.Path(CLAUDE_HOME) / "hooks"
 hooks_dir.mkdir(parents=True, exist_ok=True)
-for fname, content in [("phronosis-suggest.py", {repr(hook_content)}),
-                        ("phronosis-post-edit.py", {repr(post_edit_content)})]:
+for fname, content in [("scopenos-suggest.py", {repr(hook_content)}),
+                        ("scopenos-post-edit.py", {repr(post_edit_content)})]:
     p = hooks_dir / fname
     p.write_text(content)
     p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-results.append(f"  hooks        {{hooks_dir}}/phronosis-suggest.py + phronosis-post-edit.py")
+results.append(f"  hooks        {{hooks_dir}}/scopenos-suggest.py + scopenos-post-edit.py")
 
 # ── settings.json — merge PreToolUse and PostToolUse entries ──────
 settings_path = pathlib.Path(CLAUDE_HOME) / "settings.json"
@@ -481,29 +481,29 @@ results.append(f"  settings     {{settings_path}}")
 
 # ── Project CLAUDE.md ──────────────────────────────────────────────
 claude_md_path = pathlib.Path(PROJECT_ROOT) / "CLAUDE.md"
-phronosis_section = {repr(claude_md)}
+scopenos_section = {repr(claude_md)}
 if claude_md_path.exists():
     existing = claude_md_path.read_text()
-    if "# Phronosis Workflow" not in existing:
-        claude_md_path.write_text(existing.rstrip() + "\\n\\n" + phronosis_section)
-        results.append(f"  CLAUDE.md    {{claude_md_path}} (Phronosis section appended)")
+    if "# Scopenos Workflow" not in existing:
+        claude_md_path.write_text(existing.rstrip() + "\\n\\n" + scopenos_section)
+        results.append(f"  CLAUDE.md    {{claude_md_path}} (Scopenos section appended)")
     else:
-        results.append(f"  CLAUDE.md    {{claude_md_path}} (already has Phronosis section, skipped)")
+        results.append(f"  CLAUDE.md    {{claude_md_path}} (already has Scopenos section, skipped)")
 else:
-    claude_md_path.write_text(phronosis_section)
+    claude_md_path.write_text(scopenos_section)
     results.append(f"  CLAUDE.md    {{claude_md_path}} (created)")
 
 # ── Memory files ───────────────────────────────────────────────────
 mem_dir = pathlib.Path(CLAUDE_HOME) / "projects" / MEM_KEY / "memory"
 mem_dir.mkdir(parents=True, exist_ok=True)
-(mem_dir / "feedback_phronosis_workflow.md").write_text({repr(mem_feedback)})
+(mem_dir / "feedback_scopenos_workflow.md").write_text({repr(mem_feedback)})
 mem_index = mem_dir / "MEMORY.md"
 if not mem_index.exists():
     mem_index.write_text({repr(_MEMORY_INDEX)})
 results.append(f"  memory       {{mem_dir}}")
 
-# ── Skill: phronosis-workflow ───────────────────────────────────────────
-skill_dir = pathlib.Path(CLAUDE_HOME) / "skills" / "phronosis-workflow"
+# ── Skill: scopenos-workflow ───────────────────────────────────────────
+skill_dir = pathlib.Path(CLAUDE_HOME) / "skills" / "scopenos-workflow"
 skill_dir.mkdir(parents=True, exist_ok=True)
 (skill_dir / "SKILL.md").write_text({repr(skill_content)})
 results.append(f"  skill        {{skill_dir / 'SKILL.md'}}")
@@ -511,8 +511,8 @@ results.append(f"  skill        {{skill_dir / 'SKILL.md'}}")
 {git_hook_block}
 
 # ── Done ───────────────────────────────────────────────────────────
-print("\\nPhronosis setup complete for project:", PROJECT_ID)
-print("Server:", PHRONOSIS_URL)
+print("\\nScopenos setup complete for project:", PROJECT_ID)
+print("Server:", SCOPENOS_URL)
 print("\\nFiles written:")
 for r in results: print(r)
 print("\\nNext: restart Claude Code to activate the hooks.")

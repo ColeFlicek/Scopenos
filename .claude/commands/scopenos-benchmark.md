@@ -1,8 +1,8 @@
-# Phronosis Benchmark: MCP vs File-Read Comparison
+# Scopenos Benchmark: MCP vs File-Read Comparison
 
-Run a structured benchmark comparing two retrieval strategies on the Phronosis codebase:
+Run a structured benchmark comparing two retrieval strategies on the Scopenos codebase:
 
-- **Session A (MCP)** — answers each question using only Phronosis MCP tools
+- **Session A (MCP)** — answers each question using only Scopenos MCP tools
 - **Session B (Files)** — answers each question using only `Read` and `grep` (Bash)
 
 Execute every test question under BOTH strategies, then print a comparison report.
@@ -44,12 +44,12 @@ Answer each of the following 5 questions twice — once per strategy. Questions 
 ### Phase 1 — MCP Strategy
 
 For each question, answer using ONLY these tools:
-- `mcp__phronosis__get_decision_history`
-- `mcp__phronosis__get_impact_radius`
-- `mcp__phronosis__get_callers`
-- `mcp__phronosis__get_callees`
-- `mcp__phronosis__query_similar_functions`
-- `mcp__phronosis__query_decisions`
+- `mcp__scopenos__get_decision_history`
+- `mcp__scopenos__get_impact_radius`
+- `mcp__scopenos__get_callers`
+- `mcp__scopenos__get_callees`
+- `mcp__scopenos__query_similar_functions`
+- `mcp__scopenos__query_decisions`
 
 Do NOT read any files. Do NOT use grep or Bash.
 
@@ -81,7 +81,7 @@ After completing both phases, print this report exactly:
 
 ```
 ═══════════════════════════════════════════════════════════════
-  Phronosis BENCHMARK REPORT — MCP vs File-Read
+  Scopenos BENCHMARK REPORT — MCP vs File-Read
 ═══════════════════════════════════════════════════════════════
 
 SESSION A: MCP Tools
@@ -124,7 +124,7 @@ VERDICT
 ────────────────────────────────────────────────────────────────
 [2-3 sentence summary: which strategy was more effective, which
 was more efficient, and which question showed the largest gap
-between strategies — that gap is the clearest signal of Phronosis's
+between strategies — that gap is the clearest signal of Scopenos's
 unique value over raw file access.]
 ═══════════════════════════════════════════════════════════════
 ```
@@ -134,11 +134,11 @@ Fill in every bracket. Do not omit any row.
 After the report, log a decision summarizing the benchmark findings:
 
 ```
-mcp__phronosis__log_decision(
+mcp__scopenos__log_decision(
   type="Implementation",
   description="Benchmark result: MCP vs file-read strategy comparison on 5 test questions. [paste VERDICT here]",
   rejected_alternatives=["pure file-read retrieval"],
-  trigger="phronosis-benchmark slash command",
+  trigger="scopenos-benchmark slash command",
   linked_function_ids=["src.embeddings.embedder._resolve_config", "src.embeddings.embedder._embed_batch", "src.embeddings.embedder.EmbeddingStore.upsert_chunks"]
 )
 ```

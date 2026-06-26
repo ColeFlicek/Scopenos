@@ -13,6 +13,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Protocol
 
 
 @dataclass
@@ -23,6 +24,24 @@ class PatternMatch:
     participants: dict
     missing: list[str] = field(default_factory=list)
     action: str | None = None
+
+
+# ── Storage protocol ─────────────────────────────────────────────────────────
+
+class PatternStorageProtocol(Protocol):
+    """Structural protocol capturing the 7 storage methods used by pattern detectors.
+
+    Any object satisfying these methods can serve as the `db` argument to
+    detect_patterns(). CallGraphDB satisfies this; so can test doubles.
+    """
+    async def get_class_methods(self, class_id: str, project_id: str | None = None) -> list[dict]: ...
+    async def find_base_classes(self, class_id: str, project_id: str | None = None) -> list[str]: ...
+    async def find_subclasses(self, class_id: str, project_id: str | None = None) -> list[str]: ...
+    async def find_sibling_callers(self, node_id: str, class_id: str, project_id: str | None = None) -> list[str]: ...
+    async def find_self_delegating_callees(self, caller_id: str, method_name: str, project_id: str | None = None) -> list[str]: ...
+    async def get_node_body(self, node_id: str, project_id: str | None = None) -> str: ...
+    async def get_node_abstractness(self, node_id: str, project_id: str | None = None) -> bool: ...
+    async def find_dispatch_handlers(self, project_id: str, verb: str) -> list[dict]: ...
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -765,7 +784,7 @@ async def _detect_decorator_pattern(node: dict, db, project_id: str | None) -> l
 
 async def detect_patterns(
     node: dict,
-    db,
+    db: PatternStorageProtocol,
     project_id: str | None,
     embedder=None,
 ) -> list[PatternMatch]:

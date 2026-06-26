@@ -2,7 +2,7 @@
 """
 Backfill commit_function_changes from git history.
 
-For each commit in a repo's git log, finds which Phronosis-indexed functions
+For each commit in a repo's git log, finds which Scopenos-indexed functions
 live in the changed files and inserts (project_id, commit_hash, function_id)
 rows. After running, get_co_change_functions() can surface empirical co-change
 hints in get_impact_radius responses.
@@ -13,15 +13,15 @@ Usage:
     DATABASE_URL=postgresql://acip:...@172.21.0.1/acip \\
         python3 scripts/backfill_cochange.py \\
         --project-id django \\
-        --repo-path /tmp/phronosis-demos/django
+        --repo-path /tmp/scopenos-demos/django
 
     # Dry run — shows commit count and sample without writing
     python3 scripts/backfill_cochange.py \\
-        --project-id django --repo-path /tmp/phronosis-demos/django --dry-run
+        --project-id django --repo-path /tmp/scopenos-demos/django --dry-run
 
     # Limit to recent history
     python3 scripts/backfill_cochange.py \\
-        --project-id django --repo-path /tmp/phronosis-demos/django --limit 500
+        --project-id django --repo-path /tmp/scopenos-demos/django --limit 500
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ except ImportError:
     print("asyncpg not installed. Run: pip install asyncpg", file=sys.stderr)
     sys.exit(1)
 
-_DEFAULT_DSN = "postgresql://phronosis:phronosis@localhost:5432/phronosis"
+_DEFAULT_DSN = "postgresql://scopenos:scopenos@localhost:5432/scopenos"
 _BATCH_SIZE = 2000
 
 
@@ -294,7 +294,7 @@ def main() -> None:
         description="Backfill commit_function_changes from git history"
     )
     parser.add_argument("--project-id", required=True,
-                        help="Phronosis project_id (e.g. 'django')")
+                        help="Scopenos project_id (e.g. 'django')")
     parser.add_argument("--repo-path", required=True,
                         help="Absolute path to the git repo to mine")
     parser.add_argument("--dsn", default=None,

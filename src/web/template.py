@@ -3,7 +3,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phronosis</title>
+  <title>Scopenos</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none'><rect width='64' height='64' rx='14' fill='%230f172a'/><line x1='11' y1='53' x2='32' y2='11' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/><line x1='32' y1='11' x2='53' y2='53' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/><line x1='19' y1='38' x2='45' y2='38' stroke='%2338bdf8' stroke-width='3' stroke-linecap='round'/><circle cx='32' cy='11' r='5' fill='%237dd3fc'/><circle cx='19' cy='38' r='3.5' fill='%230ea5e9'/><circle cx='45' cy='38' r='3.5' fill='%230ea5e9'/><circle cx='11' cy='53' r='3.5' fill='%230ea5e9'/><circle cx='53' cy='53' r='3.5' fill='%230ea5e9'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
@@ -291,7 +291,7 @@ HTML = r"""<!DOCTYPE html>
           <path d="M12 2L2 7l10 5 10-5-10-5z"/>
           <path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
         </svg>
-        Phronosis
+        Scopenos
       </div>
       <div class="logo-sub">ai code intelligence platform</div>
     </div>
@@ -515,7 +515,7 @@ HTML = r"""<!DOCTYPE html>
             <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
           pending config differs from running — restart to apply:
-          <code>docker compose restart phronosis</code>
+          <code>docker compose restart scopenos</code>
         </div>
 
         <div class="card" style="margin-bottom:16px;">
@@ -576,7 +576,7 @@ HTML = r"""<!DOCTYPE html>
               <div class="instr-section">
                 <div class="instr-step">1 · ssh into your server</div>
                 <code class="cmd">ssh user@your-server</code>
-                <code class="cmd">nano ~/Phronosis/.env</code>
+                <code class="cmd">nano ~/Scopenos/.env</code>
               </div>
               <div class="instr-section">
                 <div class="instr-step">2 · add or change a key</div>
@@ -586,7 +586,7 @@ HTML = r"""<!DOCTYPE html>
               </div>
               <div class="instr-section">
                 <div class="instr-step">3 · apply changes</div>
-                <code class="cmd">docker compose restart phronosis</code>
+                <code class="cmd">docker compose restart scopenos</code>
               </div>
             </div>
           </div>
@@ -601,7 +601,7 @@ HTML = r"""<!DOCTYPE html>
           <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
             <div>
               <div class="section-title">new contract</div>
-              <div class="section-sub">define an architectural rule in plain english — Phronosis generates enforceable examples</div>
+              <div class="section-sub">define an architectural rule in plain english — Scopenos generates enforceable examples</div>
             </div>
           </div>
 
@@ -763,7 +763,7 @@ HTML = r"""<!DOCTYPE html>
   let _scopeId = '';
 
   // API key for authenticated write operations — persisted in localStorage.
-  let _apiKey = localStorage.getItem('phronosis_api_key') || '';
+  let _apiKey = localStorage.getItem('scopenos_api_key') || '';
 
   function writeHeaders(extra) {
     const h = {'Content-Type': 'application/json'};
@@ -772,10 +772,10 @@ HTML = r"""<!DOCTYPE html>
   }
 
   function promptApiKey(action) {
-    const key = prompt('Enter your Phronosis API key to ' + action + ':\n(It will be saved in your browser for this session)');
+    const key = prompt('Enter your Scopenos API key to ' + action + ':\n(It will be saved in your browser for this session)');
     if (key) {
       _apiKey = key.trim();
-      localStorage.setItem('phronosis_api_key', _apiKey);
+      localStorage.setItem('scopenos_api_key', _apiKey);
     }
     return !!key.trim();
   }

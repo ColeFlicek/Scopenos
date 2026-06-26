@@ -116,6 +116,26 @@ class EmbeddingStore:
         if hasattr(conn, "commit"):
             await conn.commit()
 
+    def with_db(self, db) -> "EmbeddingStore":
+        """Return a shallow copy of this store that uses a different DB pool.
+
+        Reuses all API clients and the in-process embedding cache. Intended for
+        project-scoped reads/writes where the pool has search_path set to the
+        project schema — avoids re-initialising clients on every tool call.
+        """
+        copy = object.__new__(EmbeddingStore)
+        copy._db = db
+        copy._anthropic = self._anthropic
+        copy._provider = self._provider
+        copy._model = self._model
+        copy._dim = self._dim
+        copy._embed_client = self._embed_client
+        copy._large_client = self._large_client
+        copy._large_model = self._large_model
+        copy._embed_cache = self._embed_cache   # shared — cache hits benefit all scopes
+        copy._embed_cache_max = self._embed_cache_max
+        return copy
+
     async def close(self) -> None:
         """No-op — the pool is owned and closed by CallGraphDB."""
         pass

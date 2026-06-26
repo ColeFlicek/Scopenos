@@ -200,7 +200,7 @@ def register_routes(
 
     @mcp.custom_route("/api/health", methods=["GET"])
     async def api_health(request: Request) -> JSONResponse:
-        """Return a lightweight health check result for all three Phronosis layers."""
+        """Return a lightweight health check result for all three Scopenos layers."""
         result: dict = {}
 
         async def _check() -> None:

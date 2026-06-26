@@ -32,9 +32,12 @@ from src.dependency_fingerprint import DependencyChecker
 @pytest.fixture(autouse=True)
 def bypass_auth():
     """Bypass auth context for all tool tests — tools are tested for logic, not auth."""
-    with patch("src.server.get_current_user", return_value={"id": "test-user"}), \
-         patch("src.server.check_permission", AsyncMock(return_value=None)), \
-         patch("src.server._check_read_access", AsyncMock(return_value=None)):
+    with patch("src.tools._shared.check_read_access", AsyncMock(return_value=None)), \
+         patch("src.tools.memory.check_permission", AsyncMock(return_value=None)), \
+         patch("src.tools.memory.get_current_user", return_value={"id": "test-user"}), \
+         patch("src.tools.discovery.get_current_user", return_value={"id": "test-user"}), \
+         patch("src.server.get_current_user", return_value={"id": "test-user"}), \
+         patch("src.server.check_permission", AsyncMock(return_value=None)):
         yield
 
 
@@ -71,12 +74,18 @@ def _node(node_id: str, *, is_external: bool = False, name: str | None = None) -
 
 
 async def _insert(db: CallGraphDB, project_id: str, nodes: list, edges: list = []):
-    """Seed the DB with nodes + edges for a project."""
+    """Seed the DB with nodes + edges for a project.
+
+    Writes through a project-scoped DB so data lands in the project schema
+    (matching what the indexer and tool reads now both use via resolve_project_db).
+    """
+    from src.call_graph.storage import derive_schema_name
     await db.upsert_project(project_id, project_id, "/workspace/test")
-    await db.upsert_nodes(nodes, project_id)
+    pdb = await db.project_db(derive_schema_name(project_id))
+    await pdb.upsert_nodes(nodes, project_id)
     if edges:
-        all_ids = await db.get_all_node_ids(project_id)
-        await db.upsert_edges(edges, all_ids, project_id)
+        all_ids = await pdb.get_all_node_ids(project_id)
+        await pdb.upsert_edges(edges, all_ids, project_id)
 
 
 # ── list_projects ─────────────────────────────────────────────────────────────
@@ -86,8 +95,8 @@ class TestListProjects:
     async def test_returns_registered_project(self, svc):
         await svc.db.upsert_project("myapp", "myapp", "/workspace/myapp")
         svc.db.get_accessible_project_ids = AsyncMock(return_value={"myapp"})
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import list_projects
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.discovery import list_projects
             result = json.loads(await list_projects())
         ids = [p["id"] for p in result]
         assert "myapp" in ids
@@ -95,8 +104,8 @@ class TestListProjects:
     @pytest.mark.asyncio
     async def test_returns_empty_list_for_no_projects(self, svc):
         svc.db.get_accessible_project_ids = AsyncMock(return_value=set())
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import list_projects
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.discovery import list_projects
             result = json.loads(await list_projects())
         assert result == []
 
@@ -111,16 +120,16 @@ class TestGetCallers:
                           edge_type="calls", file="src/server.py")]
         await _insert(svc.db, "proj", nodes, edges)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_callers
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_callers
             result = json.loads(await get_callers("target", project_id="proj"))
         names = [r["name"] for r in result["callers"]]
         assert "caller" in names
 
     @pytest.mark.asyncio
     async def test_returns_empty_for_unknown_function(self, svc):
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_callers
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_callers
             result = json.loads(await get_callers("does_not_exist", project_id="proj"))
         assert result["callers"] == []
 
@@ -133,8 +142,8 @@ class TestGetCallers:
                           edge_type="reference", file="src/server.py")]
         await _insert(svc.db, "proj", [internal, external], edges)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_callees
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_callees
             result = json.loads(await get_callees("handler", project_id="proj"))
         callees = result["callees"]
         assert len(callees) == 1
@@ -150,8 +159,8 @@ class TestGetCallees:
                           edge_type="calls", file="src/server.py")]
         await _insert(svc.db, "proj", nodes, edges)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_callees
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_callees
             result = json.loads(await get_callees("fn_a", project_id="proj"))
         names = [r["name"] for r in result["callees"]]
         assert "fn_b" in names
@@ -168,8 +177,8 @@ class TestListExternalDependencies:
                           edge_type="reference", file="src/server.py")]
         await _insert(svc.db, "proj", [internal, stub], edges)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import list_external_dependencies
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import list_external_dependencies
             result = json.loads(await list_external_dependencies("proj"))
         libs = [entry["library"] for entry in result]
         assert "requests" in libs
@@ -178,8 +187,8 @@ class TestListExternalDependencies:
     async def test_returns_empty_for_project_with_no_external_nodes(self, svc):
         await _insert(svc.db, "proj", [_node("src.server.fn")])
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import list_external_dependencies
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import list_external_dependencies
             result = json.loads(await list_external_dependencies("proj"))
         assert result["results"] == []
 
@@ -194,8 +203,8 @@ class TestListExternalDependencies:
         ]
         await _insert(svc.db, "proj", callers + [stub], edges)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import list_external_dependencies
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import list_external_dependencies
             result = json.loads(await list_external_dependencies("proj"))
         numpy = next(e for e in result if e["library"] == "numpy")
         symbol = numpy["symbols"][0]
@@ -213,8 +222,8 @@ class TestGetLibraryDependents:
                           edge_type="reference", file="src/api.py")]
         await _insert(svc.db, "proj", [internal, stub], edges)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_library_dependents
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import get_library_dependents
             result = json.loads(await get_library_dependents("requests", "proj"))
         ids = [r["id"] for r in result]
         assert "src.api.handler" in ids
@@ -223,8 +232,8 @@ class TestGetLibraryDependents:
     async def test_returns_empty_when_library_not_used(self, svc):
         await _insert(svc.db, "proj", [_node("src.api.handler")])
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_library_dependents
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import get_library_dependents
             result = json.loads(await get_library_dependents("requests", "proj"))
         assert result["results"] == []
 
@@ -235,8 +244,8 @@ class TestGetLibraryDependents:
         stub_b = _node("external.requests.post", is_external=True, name="post")
         await _insert(svc.db, "proj", [stub_a, stub_b])
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_library_dependents
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import get_library_dependents
             result = json.loads(await get_library_dependents("requests", "proj"))
         assert result["results"] == []
 
@@ -274,15 +283,15 @@ class TestGetDependencyFingerprint:
                                     "symbols": [{"id": "external.requests.get",
                                                  "signature": "requests.get(...)",
                                                  "caller_count": 3}]}})
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_dependency_fingerprint
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import get_dependency_fingerprint
             result = json.loads(await get_dependency_fingerprint("proj"))
         assert result["libraries"]["requests"]["version"] == "2.28.0"
 
     @pytest.mark.asyncio
     async def test_returns_no_fingerprint_status_when_none_exists(self, svc):
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_dependency_fingerprint
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import get_dependency_fingerprint
             result = json.loads(await get_dependency_fingerprint("proj"))
         assert result["status"] == "no fingerprint"
 
@@ -295,8 +304,8 @@ class TestGetDependencyFingerprint:
             libraries={"requests": {"version": "2.31.0", "symbol_count": 0, "symbols": []}},
             diff=diff)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_dependency_fingerprint
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import get_dependency_fingerprint
             result = json.loads(await get_dependency_fingerprint("proj"))
         removed = result["diff_from_previous"]["removed_symbols"]
         assert len(removed) == 1
@@ -310,15 +319,15 @@ class TestGetDependencyFingerprintAt:
             libraries={"numpy": {"version": "1.24.0", "symbol_count": 0, "symbols": []}},
             fp_id="fp-historical")
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_dependency_fingerprint_at
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import get_dependency_fingerprint_at
             result = json.loads(await get_dependency_fingerprint_at("fp-historical"))
         assert "numpy" in result["libraries"]
 
     @pytest.mark.asyncio
     async def test_returns_not_found_for_unknown_id(self, svc):
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_dependency_fingerprint_at
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import get_dependency_fingerprint_at
             result = json.loads(await get_dependency_fingerprint_at("does-not-exist"))
         assert result["status"] == "not found"
 
@@ -331,8 +340,8 @@ class TestListDependencyFingerprintHistory:
         await _insert_fingerprint(svc.db, "proj", fp_id="fp-new",
             libraries={"requests": {"version": "2.31.0", "symbol_count": 0, "symbols": []}})
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import list_dependency_fingerprint_history
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import list_dependency_fingerprint_history
             result = json.loads(await list_dependency_fingerprint_history("proj"))
         ids = [r["id"] for r in result]
         assert "fp-old" in ids
@@ -346,8 +355,8 @@ class TestListDependencyFingerprintHistory:
         await _insert_fingerprint(svc.db, "proj", fp_id="fp1",
             libraries={}, diff=diff)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import list_dependency_fingerprint_history
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import list_dependency_fingerprint_history
             result = json.loads(await list_dependency_fingerprint_history("proj"))
         row = next(r for r in result if r["id"] == "fp1")
         assert row["removed_count"] == 1
@@ -355,8 +364,8 @@ class TestListDependencyFingerprintHistory:
 
     @pytest.mark.asyncio
     async def test_returns_empty_for_project_with_no_fingerprints(self, svc):
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import list_dependency_fingerprint_history
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import list_dependency_fingerprint_history
             result = json.loads(await list_dependency_fingerprint_history("proj"))
         assert result == []
 
@@ -375,8 +384,8 @@ class TestCompareDependencyFingerprints:
         await _insert_fingerprint(svc.db, "proj", libraries=libs_a, fp_id="fp-a")
         await _insert_fingerprint(svc.db, "proj", libraries=libs_b, fp_id="fp-b")
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import compare_dependency_fingerprints
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import compare_dependency_fingerprints
             result = json.loads(await compare_dependency_fingerprints("fp-a", "fp-b"))
         removed = result["diff"]["removed_symbols"]
         assert any(s["id"] == "external.requests.post" for s in removed)
@@ -384,8 +393,8 @@ class TestCompareDependencyFingerprints:
 
     @pytest.mark.asyncio
     async def test_returns_not_found_for_unknown_fingerprint(self, svc):
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import compare_dependency_fingerprints
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import compare_dependency_fingerprints
             result = json.loads(await compare_dependency_fingerprints("bad-id", "also-bad"))
         assert result["status"] == "not found"
 
@@ -395,8 +404,8 @@ class TestCheckDependency:
     async def test_returns_version_from_fingerprint(self, svc):
         await _insert_fingerprint(svc.db, "proj",
             libraries={"requests": {"version": "2.31.0", "symbol_count": 0, "symbols": []}})
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import check_dependency
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import check_dependency
             result = json.loads(await check_dependency("requests", "proj"))
         assert result["version"] == "2.31.0"
 
@@ -408,16 +417,16 @@ class TestCheckDependency:
                           edge_type="reference", file="src/api.py")]
         await _insert(svc.db, "proj", [internal, stub], edges)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import check_dependency
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import check_dependency
             result = json.loads(await check_dependency("requests", "proj"))
         assert result["dependent_count"] == 1
         assert result["dependents"][0]["id"] == "src.api.handler"
 
     @pytest.mark.asyncio
     async def test_unknown_version_when_no_fingerprint(self, svc):
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import check_dependency
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import check_dependency
             result = json.loads(await check_dependency("requests", "proj"))
         assert result["version"] == "unknown"
         assert result["dependent_count"] == 0
@@ -436,8 +445,8 @@ class TestCheckDependency:
             libraries={"requests": {"version": "2.31.0", "symbol_count": 0, "symbols": []}},
             diff=diff)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import check_dependency
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.dependencies import check_dependency
             result = json.loads(await check_dependency("requests", "proj"))
         removed = result["recent_changes"]["removed_symbols"]
         assert len(removed) == 1
@@ -514,16 +523,16 @@ class TestGetImpactRadius:
                           edge_type="calls", file="src/mod.py")]
         await _insert(svc.db, "proj", nodes, edges)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_impact_radius
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_impact_radius
             result = json.loads(await get_impact_radius("inner", project_id="proj"))
         ids = {r["id"] for r in result["impact_radius"]}
         assert "src.mod.outer" in ids
 
     @pytest.mark.asyncio
     async def test_returns_empty_for_unknown_function(self, svc):
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_impact_radius
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_impact_radius
             result = json.loads(await get_impact_radius("nonexistent", project_id="proj"))
         assert result["impact_radius"] == []
 
@@ -534,8 +543,8 @@ class TestGetImpactRadius:
                           edge_type="calls", file="src/mod.py")]
         await _insert(svc.db, "proj", nodes, edges)
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_impact_radius
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_impact_radius
             result = json.loads(await get_impact_radius("leaf", project_id="proj"))
         caller = next(r for r in result["impact_radius"] if r["id"] == "src.mod.caller")
         assert "impact_depth" in caller
@@ -556,7 +565,7 @@ class TestLogDecision:
         with patch("src.server._get_services", AsyncMock(return_value=svc)), \
              patch("src.server.get_current_user", return_value={"id": "test-user"}), \
              patch("src.server.check_permission", AsyncMock(return_value=None)):
-            from src.server import log_decision
+            from src.tools.memory import log_decision
             result = json.loads(await log_decision(
                 type="Implementation",
                 description="Chose asyncpg over psycopg2 for connection pooling",
@@ -579,8 +588,8 @@ class TestLogDecision:
              "created_at": "2026-01-01", "functions": ["src.mod.my_func"]}
         ])
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_decision_history
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.memory import get_decision_history
             result = json.loads(await get_decision_history(
                 function_name="my_func", project_id="proj"
             ))
@@ -594,8 +603,8 @@ class TestLogDecision:
         svc.decisions = MagicMock()
         svc.decisions.get_decision_history = AsyncMock(return_value=[])
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)):
-            from src.server import get_decision_history
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.memory import get_decision_history
             result = json.loads(await get_decision_history(
                 function_name="nonexistent", project_id="proj"
             ))

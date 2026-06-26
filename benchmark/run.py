@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Phronosis SWE-bench benchmark — setup and evaluation CLI.
+Scopenos SWE-bench benchmark — setup and evaluation CLI.
 
 This script handles the deterministic parts of the benchmark:
-cloning repos, creating venvs, indexing with Phronosis, applying patches,
+cloning repos, creating venvs, indexing with Scopenos, applying patches,
 running tests, and writing results.
 
 The Claude Code session handles spawning the actual agent subagents
@@ -45,7 +45,7 @@ from benchmark.report import write_task_results, write_summary, print_summary
 
 
 # Global workdir shared across setup calls in one session
-_WORKDIR_FILE = Path("/tmp/phronosis-bench-workdir")
+_WORKDIR_FILE = Path("/tmp/scopenos-bench-workdir")
 
 
 def _get_or_create_workdir() -> str:
@@ -53,7 +53,7 @@ def _get_or_create_workdir() -> str:
         wd = _WORKDIR_FILE.read_text().strip()
         if Path(wd).exists():
             return wd
-    wd = tempfile.mkdtemp(prefix="phronosis-bench-")
+    wd = tempfile.mkdtemp(prefix="scopenos-bench-")
     _WORKDIR_FILE.write_text(wd)
     return wd
 
@@ -97,12 +97,12 @@ def cmd_setup(args) -> None:
         sys.exit(1)
 
     workdir = _get_or_create_workdir()
-    phronosis_index = args.path == "b"
+    scopenos_index = args.path == "b"
 
     ctx = setup_repo(
         task,
-        phronosis_index=phronosis_index,
-        phronosis_dsn=os.getenv("DATABASE_URL", ""),
+        scopenos_index=scopenos_index,
+        scopenos_dsn=os.getenv("DATABASE_URL", ""),
         workdir=workdir,
     )
 
@@ -115,7 +115,7 @@ def cmd_setup(args) -> None:
         "repo_path": ctx.repo_path,
         "venv_python": ctx.venv_python,
         "project_id": ctx.project_id,
-        "phronosis_indexed": ctx.phronosis_indexed,
+        "scopenos_indexed": ctx.scopenos_indexed,
         "fail_to_pass": task.fail_to_pass,
     }, indent=2))
 
@@ -178,13 +178,13 @@ def cmd_evaluate(args) -> None:
     )
 
     # Per-tool breakdown for analysis
-    phronosis_tools = {
+    scopenos_tools = {
         "get_project_home", "query_similar_functions", "get_impact_radius",
         "get_callers", "get_callees", "get_subsystem_detail",
         "get_decision_history", "query_decisions",
     }
     tool_names = [e.get("tool", "unknown") for e in agent_result.tool_calls]
-    phronosis_calls = [e for e in agent_result.tool_calls if e.get("tool") in phronosis_tools]
+    scopenos_calls = [e for e in agent_result.tool_calls if e.get("tool") in scopenos_tools]
     file_read_calls = [e for e in agent_result.tool_calls if e.get("tool") in ("Read", "Bash")]
 
     out = path_dir / "evaluation.json"
@@ -196,7 +196,7 @@ def cmd_evaluate(args) -> None:
         "error": result.error,
         "agent_tokens": agent_result.agent_tokens,
         "tool_call_count": len(agent_result.tool_calls),
-        "phronosis_call_count": len(phronosis_calls),
+        "scopenos_call_count": len(scopenos_calls),
         "file_read_count": len(file_read_calls),
         "notes": agent_result.notes,
         "tool_log": agent_result.tool_calls,
@@ -207,7 +207,7 @@ def cmd_evaluate(args) -> None:
         "tests_passed": result.tests_passed,
         "tests_failed": result.tests_failed,
         "error": result.error,
-        "phronosis_calls": len(phronosis_calls),
+        "scopenos_calls": len(scopenos_calls),
         "file_reads": len(file_read_calls),
     }))
 
@@ -250,13 +250,13 @@ def cmd_check_mcp(args) -> None:
     """
     Simulate the exact MCP handshake a Claude Code subagent performs.
 
-    A passing run proves that subagents will have Phronosis tools available.
+    A passing run proves that subagents will have Scopenos tools available.
     A failing run blocks the benchmark with a clear diagnostic so you don't
     waste tokens on a Path B run that silently degrades to grep.
 
     Steps mirror the Claude Code MCP client lifecycle:
       1. POST /mcp  initialize          → must return mcp-session-id header
-      2. POST /mcp  tools/list          → must list ≥1 Phronosis tool
+      2. POST /mcp  tools/list          → must list ≥1 Scopenos tool
       3. POST /mcp  tools/call          → list_projects must return valid JSON
 
     Note: notifications/initialized is intentionally omitted. Real Claude Code
@@ -268,7 +268,7 @@ def cmd_check_mcp(args) -> None:
     import urllib.parse
 
     url = args.mcp_url
-    api_key = args.api_key or os.getenv("PHRONOSIS_API_KEY", "")
+    api_key = args.api_key or os.getenv("SCOPENOS_API_KEY", "")
 
     parsed = urllib.parse.urlparse(url)
     host = parsed.hostname
@@ -332,7 +332,7 @@ def cmd_check_mcp(args) -> None:
         status, hdrs, body = post("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "phronosis-bench-check", "version": "1.0"},
+            "clientInfo": {"name": "scopenos-bench-check", "version": "1.0"},
         })
         if status != 200:
             print(fail)
@@ -363,18 +363,18 @@ def cmd_check_mcp(args) -> None:
         status, _, body = post("tools/list", {}, sid=session_id)
         tools = body.get("result", {}).get("tools", [])
         tool_names = [t.get("name", "") for t in tools]
-        phronosis_tools = [n for n in tool_names if n in {
+        scopenos_tools = [n for n in tool_names if n in {
             "get_project_home", "query_similar_functions", "get_impact_radius",
             "get_callers", "get_callees", "get_decision_history", "list_projects",
         }]
-        if not phronosis_tools:
+        if not scopenos_tools:
             print(fail)
             failures.append(
-                f"tools/list: no Phronosis tools in response "
+                f"tools/list: no Scopenos tools in response "
                 f"(got {len(tool_names)} tools total: {tool_names[:5]})"
             )
         else:
-            print(f"{ok}  {len(phronosis_tools)} Phronosis tools visible")
+            print(f"{ok}  {len(scopenos_tools)} Scopenos tools visible")
     except Exception as exc:
         print(fail)
         failures.append(f"tools/list: {exc}")
@@ -404,16 +404,16 @@ def cmd_check_mcp(args) -> None:
         for f in failures:
             print(f"     • {f}")
         print()
-        print("  Subagents will NOT have Phronosis tools. Fix the above before")
+        print("  Subagents will NOT have Scopenos tools. Fix the above before")
         print("  running Path B or results will be identical to Path A.")
         sys.exit(1)
     else:
-        print(f"  {ok}  MCP check PASSED — subagents will have Phronosis tools")
+        print(f"  {ok}  MCP check PASSED — subagents will have Scopenos tools")
         sys.exit(0)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Phronosis SWE-bench benchmark CLI")
+    parser = argparse.ArgumentParser(description="Scopenos SWE-bench benchmark CLI")
     parser.add_argument("--repo", default="pytest-dev/pytest")
     parser.add_argument("--results-dir", default="benchmark/results")
 
@@ -440,13 +440,13 @@ def main() -> None:
     )
     p_check.add_argument(
         "--mcp-url",
-        default=os.getenv("PHRONOSIS_URL", "http://100.71.88.106:3004") + "/mcp",
-        help="MCP endpoint to test (default: $PHRONOSIS_URL/mcp)",
+        default=os.getenv("SCOPENOS_URL", "http://100.71.88.106:3004") + "/mcp",
+        help="MCP endpoint to test (default: $SCOPENOS_URL/mcp)",
     )
     p_check.add_argument(
         "--api-key",
         default=None,
-        help="X-API-Key value (default: $PHRONOSIS_API_KEY)",
+        help="X-API-Key value (default: $SCOPENOS_API_KEY)",
     )
     p_check.add_argument(
         "--no-color",

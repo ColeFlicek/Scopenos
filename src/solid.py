@@ -1,5 +1,5 @@
 """
-SOLID principle violation detector for Phronosis.
+SOLID principle violation detector for Scopenos.
 
 Three structural detectors — no LLM calls, no embeddings required:
 

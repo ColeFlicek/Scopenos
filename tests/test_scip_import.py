@@ -480,7 +480,7 @@ class TestScipSymToNodeId:
 
     def test_no_scip_package_hash_in_output(self):
         """The version / hash portion of a SCIP symbol must not appear in the ID."""
-        sym = "scip-python python phronosis c93d2e87879ab90d3d1afce546288ba974754e14 src/server.py:index_project()."
+        sym = "scip-python python scopenos c93d2e87879ab90d3d1afce546288ba974754e14 src/server.py:index_project()."
         result = _scip_sym_to_node_id(sym, "src.server")
         assert "c93d2e87879ab90d3d1afce546288ba974754e14" not in result
         assert "scip-python" not in result

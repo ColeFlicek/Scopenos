@@ -1,6 +1,6 @@
 # Auth Workflow
 
-Complete reference for everything authentication and authorization in Phronosis.
+Complete reference for everything authentication and authorization in Scopenos.
 Covers the full path from key creation through enforcement at every layer.
 
 ---
@@ -239,7 +239,7 @@ The web UI is a single-page app served from `GET /`. It has no server-side sessi
 
 ```javascript
 // Loaded from localStorage on page init
-let _apiKey = localStorage.getItem('phronosis_api_key') || '';
+let _apiKey = localStorage.getItem('scopenos_api_key') || '';
 
 // All write requests use this
 function writeHeaders(extra) {
@@ -250,10 +250,10 @@ function writeHeaders(extra) {
 
 // Called before the first write if no key is stored
 function promptApiKey(action) {
-    const key = prompt('Enter your Phronosis API key to ' + action + ':\n(It will be saved in your browser for this session)');
+    const key = prompt('Enter your Scopenos API key to ' + action + ':\n(It will be saved in your browser for this session)');
     if (key) {
         _apiKey = key.trim();
-        localStorage.setItem('phronosis_api_key', _apiKey);
+        localStorage.setItem('scopenos_api_key', _apiKey);
     }
     return !!key;
 }
@@ -266,7 +266,7 @@ function promptApiKey(action) {
 4. Fetch fires with `headers: writeHeaders()` → includes `X-API-Key`
 5. Server calls `_require_valid_key(request, db)` → validates → proceeds
 
-**Security note:** localStorage is visible to any JS on the same origin. Since the web UI is served from the Phronosis server itself (no external scripts), this is acceptable. Don't use this pattern if the web UI ever loads third-party scripts.
+**Security note:** localStorage is visible to any JS on the same origin. Since the web UI is served from the Scopenos server itself (no external scripts), this is acceptable. Don't use this pattern if the web UI ever loads third-party scripts.
 
 ---
 

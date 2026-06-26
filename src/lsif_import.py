@@ -1,10 +1,10 @@
 """
-LSIF (Language Server Index Format) ingestion for Phronosis.
+LSIF (Language Server Index Format) ingestion for Scopenos.
 
 LSIF is an NDJSON format where each line is a JSON vertex or edge produced
 by tools like lsif-py, lsif-tsc, lsif-java, rust-analyzer, etc.  We build
 an in-memory graph from the LSIF objects, then extract function/class
-definitions with their hover documentation and import them into Phronosis's
+definitions with their hover documentation and import them into Scopenos's
 call-graph + embedding pipeline.
 
 Call-edge resolution is deferred to v2 — the LSIF reference graph does not

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phronosis database health check.
+Scopenos database health check.
 
 Connects to the configured Postgres instance, runs coverage and quality
 queries across all tables, and writes a Markdown report.
@@ -26,7 +26,7 @@ except ImportError:
     print("asyncpg not installed. Run: pip install asyncpg", file=sys.stderr)
     sys.exit(1)
 
-_DEFAULT_DSN = "postgresql://phronosis:phronosis@localhost:5432/phronosis"
+_DEFAULT_DSN = "postgresql://scopenos:scopenos@localhost:5432/scopenos"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -284,7 +284,7 @@ def build_report(
     lines: list[str] = []
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    lines.append("# Phronosis Database Health Report")
+    lines.append("# Scopenos Database Health Report")
     lines.append(f"\n_Generated: {now} — {elapsed_ms}ms — DB: {_mask_dsn(dsn)} — Size: {db_size}_")
     if focus_project:
         lines.append(f"\n> Focused on project: `{focus_project}`")
@@ -428,7 +428,7 @@ def build_report(
 
     # ── Tool reference ───────────────────────────────────────────────────────
     _section(lines, "Tool Reference")
-    lines.append("_What each Phronosis MCP tool returns. All tools require `project_id`._\n")
+    lines.append("_What each Scopenos MCP tool returns. All tools require `project_id`._\n")
 
     lines.append("### `get_project_home(project_id)`")
     lines.append("Architectural snapshot. Call this first every session.\n")
@@ -648,7 +648,7 @@ async def main(dsn: str, output: Path, focus_project: str | None) -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Phronosis database health check")
+    p = argparse.ArgumentParser(description="Scopenos database health check")
     p.add_argument("--output", type=Path, default=Path("docs/db_health.md"),
                    help="Output path for the Markdown report (default: docs/db_health.md)")
     p.add_argument("--project", default=None,
@@ -665,7 +665,7 @@ if __name__ == "__main__":
         print(
             "ERROR: DATABASE_URL is not set.\n"
             "Export it before running:\n"
-            "  export DATABASE_URL=postgresql://phronosis:PASSWORD@HOST/phronosis\n"
+            "  export DATABASE_URL=postgresql://scopenos:PASSWORD@HOST/scopenos\n"
             "Then re-run: .venv/bin/python scripts/db_health.py",
             file=sys.stderr,
         )

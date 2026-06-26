@@ -1,8 +1,11 @@
 {
   "mcpServers": {
-    "phronosis": {
+    "scopenos": {
       "type": "http",
-      "url": "http://100.71.88.106:3004/mcp"
+      "url": "http://100.71.88.106:3004/mcp",
+      "headers": {
+        "X-API-Key": "scopenos-cole-abe89269d04ff65758b2b1cdeb3ab35d"
+      }
     }
   }
 }

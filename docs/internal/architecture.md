@@ -1,4 +1,4 @@
-# Phronosis Architecture
+# Scopenos Architecture
 
 Internal reference. Not for public docs — contains rationale for rejected designs and known tradeoffs.
 
@@ -117,4 +117,4 @@ Each layer uses the one below. Contracts reference functions from the call graph
 - `asyncpg` connection pool (min=2, max=10 currently, should be raised before high-concurrency load)
 - The `app.src.*` namespace duplication in the call graph is a Docker build artifact — `app.src.module` and `src.module` may appear as separate nodes for the same function. Pending cleanup (see roadmap).
 - `enrich_summaries` model check: `embedding_model = 'text-embedding-3-large'` string literal identifies unenriched functions. Should be a `needs_enrichment BOOLEAN` column.
-- Post-commit hook requires `PHRONOSIS_URL` env var to be set on the developer's machine. Without it, commits silently skip indexing.
+- Post-commit hook requires `SCOPENOS_URL` env var to be set on the developer's machine. Without it, commits silently skip indexing.

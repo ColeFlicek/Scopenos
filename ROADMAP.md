@@ -1,6 +1,6 @@
-# Phronosis Roadmap
+# Scopenos Roadmap
 
-> **Vision:** Phronosis becomes the organizational substrate for a software development organization that runs without a standing engineering team. Humans define goals, constraints, and priorities. Agents handle implementation. Phronosis is the shared nervous system — memory, coordination, governance, and project management in one queryable layer.
+> **Vision:** Scopenos becomes the organizational substrate for a software development organization that runs without a standing engineering team. Humans define goals, constraints, and priorities. Agents handle implementation. Scopenos is the shared nervous system — memory, coordination, governance, and project management in one queryable layer.
 
 ---
 
@@ -13,7 +13,7 @@ Before the public website (Phase 17): audit every feature end-to-end and build a
 - An internal docs site (not public): full tool reference with live examples, architecture overview, ops runbook, known limitations, teaching series compiled, internal decision index
 - A hard gate: nothing ships publicly that exists in the code but doesn't work
 
-Content that passes review moves to `docs.phronosis.dev`. Limitations, internal architecture rationale, and ops details stay internal.
+Content that passes review moves to `docs.scopenos.dev`. Limitations, internal architecture rationale, and ops details stay internal.
 
 See Notion Phase 16 for full task breakdown.
 
@@ -37,7 +37,7 @@ All 12 repos indexed, verified, and documented.
 
 Prerequisite for Phase 17 (public launch). Enumerate and verify every feature surface:
 
-- [ ] **MCP tools** — run each tool against Phronosis itself; verify response is correct, not just non-erroring
+- [ ] **MCP tools** — run each tool against Scopenos itself; verify response is correct, not just non-erroring
 - [ ] **HTTP endpoints** — test every `/api/*` route end-to-end
 - [ ] **Web UI panels** — search, contracts, project home, improvements — verify each renders and all interactions work
 - [ ] **Claude Code hooks** — PreToolUse/PostToolUse: verify each fires in a live session with the right output
@@ -63,20 +63,20 @@ See Notion Phase 16 for full task breakdown.
 From Notion — not blockers, but compound at scale:
 
 - [ ] **`get_decision_history` returns empty for most functions** — `risk_detection_mode: "structural_heuristic_no_decisions"` in `get_project_home` is the symptom. Diagnose: is `log_decision()` never called, or does the post-commit hook skip `linked_function_ids`? Check decisions table directly. Fix the gap, then verify a real edit produces a non-empty `get_decision_history`.
-- [ ] **Anchor summaries** — 25/26 Phronosis subsystems have empty `anchor_summary`. Write a 1-line docstring per subsystem anchor class so `get_project_home` tells agents what each subsystem *does*, not just its name.
+- [ ] **Anchor summaries** — 25/26 Scopenos subsystems have empty `anchor_summary`. Write a 1-line docstring per subsystem anchor class so `get_project_home` tells agents what each subsystem *does*, not just its name.
 - [ ] **Structured logging** — replace `print()` in `src/` with `logging.getLogger()`, add request ID per line
 - [ ] **Config class** — single `Config` dataclass at startup, replace scattered `os.getenv()` calls
-- [ ] **Typed errors** — `PhronosisError`, `NotFoundError`, `PermissionError`, `RateLimitError`
+- [ ] **Typed errors** — `ScopenosError`, `NotFoundError`, `PermissionError`, `RateLimitError`
 - [ ] **Queue depth limit per user** — Redis counter per `user_id`; free tier: 1 enrich/month, 3 index/month; pro: 10 enrich/month, unlimited index (Phase 12 partial — rate limiting by concurrent job exists, per-plan monthly cap does not)
 - [ ] **Separate transport from logic** — extract core operations into `src/services/`; `server.py` becomes thin routing only
-- [ ] **DNS** — `api.phronosis.dev` → ingress (blocked until TLS/cert-manager sorted for cloud move)
+- [ ] **DNS** — `api.scopenos.dev` → ingress (blocked until TLS/cert-manager sorted for cloud move)
 
 ---
 
 ## Back burner — design needed before building
 
 ### IDE Extension *(design settled, not yet started)*
-Surface Phronosis context inline — impact radius on hover, performance findings as diagnostics, decision history in a sidebar — without leaving the editor.
+Surface Scopenos context inline — impact radius on hover, performance findings as diagnostics, decision history in a sidebar — without leaving the editor.
 
 **VS Code first** (larger developer market, simpler extension API). JetBrains as a follow-on once VS Code is stable.
 
@@ -104,9 +104,9 @@ Human attention becomes a finite resource allocated by evidence, not spent unifo
 ---
 
 ### Multi-Agent Coordination
-Phronosis as shared semantic state for multiple concurrent agents on the same codebase.
+Scopenos as shared semantic state for multiple concurrent agents on the same codebase.
 
-When agent A changes an API contract, it doesn't send a message to agent B — it updates Phronosis. Agent B, before implementing anything that touches that contract, queries Phronosis and discovers the change. Coordination through semantic state, not message passing. Requires multi-agent runtime infrastructure and a subscription/notification model on function-level changes.
+When agent A changes an API contract, it doesn't send a message to agent B — it updates Scopenos. Agent B, before implementing anything that touches that contract, queries Scopenos and discovers the change. Coordination through semantic state, not message passing. Requires multi-agent runtime infrastructure and a subscription/notification model on function-level changes.
 
 ---
 
@@ -140,12 +140,12 @@ Measure whether tests cover the *behaviors* functions implement, not just the li
 | Parallel LLM summarization | 2026-06-09 | asyncio.gather + Semaphore(10) |
 | Similarity score normalization | 2026-06-09 | L2 → [0,1] match percentage |
 | Web UI project selector + search panel | 2026-06-09 | |
-| `/phronosis-import` slash command | 2026-06-08 | Three-step onboarding in one command |
+| `/scopenos-import` slash command | 2026-06-08 | Three-step onboarding in one command |
 | ~~Project Management Interface~~ | — | Skipped — markdown files + function ID references serve the same purpose without a dedicated tracker |
 | Invariant Contracts | 2026-06-09 | LLM-generated violation/compliance examples, structural + semantic enforcement, MCP tools, web UI, post-commit hook. Destructive ops (delete/update) web-UI-only to prevent agent bypass. |
 | Project Home (`get_project_home`) | 2026-06-09 | Single MCP call returns subsystems, wiring, chokepoints, risk surface, health. Replaces file reads for architectural understanding. |
-| `setup_phronosis_client` one-call onboarding | 2026-06-09 | Generates setup script: hooks, settings.json, CLAUDE.md, memory files, git hook. |
-| PreToolUse hooks (Bash/Read/Edit) | 2026-06-09 | Risk-signal check on Edit; Phronosis nudge on grep/Read. |
+| `setup_scopenos_client` one-call onboarding | 2026-06-09 | Generates setup script: hooks, settings.json, CLAUDE.md, memory files, git hook. |
+| PreToolUse hooks (Bash/Read/Edit) | 2026-06-09 | Risk-signal check on Edit; Scopenos nudge on grep/Read. |
 | PostToolUse/Edit hook | 2026-06-09 | Auto-indexes edited file in background; warns when client_setup.py template sources are modified. |
 | Agent Improvement Filing (`file_improvement` / `list_improvements` / `resolve_improvement`) | 2026-06-09 | Cross-session agent crosstalk: agents file structured bug/enhancement reports mid-session; a later session reads open items and implements them. SQLite-backed, no external dependency. |
 | Auth layer (Phase 10) | 2026-06-14 | `users`, `api_keys`, `project_access`, `demo_projects` tables. `AuthMiddleware` + `check_permission`. `POST /api/signup`, `GET /api/me`. `scripts/create_user.py`. |

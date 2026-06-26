@@ -1,6 +1,6 @@
-# Phronosis Ops Runbook
+# Scopenos Ops Runbook
 
-Procedures for operating the production Phronosis instance. Internal only.
+Procedures for operating the production Scopenos instance. Internal only.
 
 ---
 
@@ -24,14 +24,14 @@ Procedures for operating the production Phronosis instance. Internal only.
 ```bash
 export KUBECONFIG=~/.kube/theHive.config
 kubectl apply -f k8s/
-kubectl rollout restart deployment/phronosis-api -n phronosis
-kubectl rollout restart deployment/phronosis-worker -n phronosis
+kubectl rollout restart deployment/scopenos-api -n scopenos
+kubectl rollout restart deployment/scopenos-worker -n scopenos
 ```
 
 **Check pod status:**
 ```bash
-kubectl get pods -n phronosis
-kubectl logs -n phronosis deployment/phronosis-api --tail=50
+kubectl get pods -n scopenos
+kubectl logs -n scopenos deployment/scopenos-api --tail=50
 ```
 
 ---
@@ -46,7 +46,7 @@ Returns a `job_id`. Poll with `GET /api/jobs/{job_id}` or wait for the MCP tool 
 
 **From inside the cluster (for large repos):**
 ```bash
-kubectl exec -n phronosis -it deployment/phronosis-worker -- \
+kubectl exec -n scopenos -it deployment/scopenos-worker -- \
   python3 -c "
 import asyncio
 from src.call_graph.storage import CallGraphDB
@@ -68,8 +68,8 @@ reembed_project("myapp")
 
 ## Add a demo repo
 
-1. Clone the repo to `/tmp/phronosis-demos/<name>` on the server
-2. Run `index_project("/tmp/phronosis-demos/<name>", project_id="<name>")`
+1. Clone the repo to `/tmp/scopenos-demos/<name>` on the server
+2. Run `index_project("/tmp/scopenos-demos/<name>", project_id="<name>")`
 3. Run `enrich_summaries("<name>", limit=2000)`
 4. Mark as demo in DB:
 ```sql
@@ -84,7 +84,7 @@ VALUES ('<name>', '<Display Name>', 'https://github.com/org/repo', NOW());
 
 **Create a new user + key:**
 ```bash
-kubectl exec -n phronosis -it deployment/phronosis-api -- \
+kubectl exec -n scopenos -it deployment/scopenos-api -- \
   python3 scripts/create_user.py --email user@example.com --name "User Name" --plan free
 ```
 Prints the API key. Send it to the user.
@@ -121,14 +121,14 @@ If `function_embeddings` count is much lower than `function_nodes`, run `reembed
 
 **Check 3 — Is the indexer job stuck?**
 ```bash
-kubectl exec -n phronosis -it deployment/phronosis-worker -- \
-  python3 -c "from rq import Queue; from redis import Redis; q = Queue(connection=Redis(host='phronosis-redis')); print(q.job_ids)"
+kubectl exec -n scopenos -it deployment/scopenos-worker -- \
+  python3 -c "from rq import Queue; from redis import Redis; q = Queue(connection=Redis(host='scopenos-redis')); print(q.job_ids)"
 ```
 
 **Check 4 — Parser errors?**
 Look at worker logs:
 ```bash
-kubectl logs -n phronosis deployment/phronosis-worker --tail=100 | grep -i "error\|exception"
+kubectl logs -n scopenos deployment/scopenos-worker --tail=100 | grep -i "error\|exception"
 ```
 
 **Check 5 — HNSW index missing?**
@@ -148,14 +148,14 @@ CREATE INDEX CONCURRENTLY ON function_embeddings USING hnsw (embedding vector_co
 
 **Step 1 — Check what schema the DB is on:**
 ```bash
-kubectl exec -n phronosis -it deployment/phronosis-postgres-0 -- \
-  psql -U phronosis -d phronosis -c "\dt"
+kubectl exec -n scopenos -it deployment/scopenos-postgres-0 -- \
+  psql -U scopenos -d scopenos -c "\dt"
 ```
 
 **Step 2 — Revert to the last working image:**
 ```bash
-kubectl set image deployment/phronosis-api api=ghcr.io/coleflicek/phronosis:<previous-tag> -n phronosis
-kubectl set image deployment/phronosis-worker worker=ghcr.io/coleflicek/phronosis:<previous-tag> -n phronosis
+kubectl set image deployment/scopenos-api api=ghcr.io/coleflicek/scopenos:<previous-tag> -n scopenos
+kubectl set image deployment/scopenos-worker worker=ghcr.io/coleflicek/scopenos:<previous-tag> -n scopenos
 ```
 
 **Step 3 — Apply the missing migration manually:**
@@ -191,9 +191,9 @@ curl -X POST http://100.71.88.106:3004/api/enrich-summaries/pytest \
   -d '{"limit": 500}'
 
 # Tail API logs
-kubectl logs -n phronosis -f deployment/phronosis-api
+kubectl logs -n scopenos -f deployment/scopenos-api
 
 # Connect to Postgres directly
-kubectl exec -n phronosis -it deployment/phronosis-postgres-0 -- \
-  psql -U phronosis -d phronosis
+kubectl exec -n scopenos -it deployment/scopenos-postgres-0 -- \
+  psql -U scopenos -d scopenos
 ```

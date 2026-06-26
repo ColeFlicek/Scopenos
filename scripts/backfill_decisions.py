@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Backfill Phronosis decision memory from git history.
+Backfill Scopenos decision memory from git history.
 
-Reads every commit in the current repo and POSTs it to the Phronosis
+Reads every commit in the current repo and POSTs it to the Scopenos
 /api/decisions endpoint. Each commit message becomes a decision record
 with the commit hash as its trigger.
 
 Usage:
-    PHRONOSIS_URL=http://100.71.88.106:3004 python3 scripts/backfill_decisions.py
+    SCOPENOS_URL=http://100.71.88.106:3004 python3 scripts/backfill_decisions.py
     python3 scripts/backfill_decisions.py --dry-run
     python3 scripts/backfill_decisions.py --since 2024-01-01
     python3 scripts/backfill_decisions.py --limit 50
@@ -27,15 +27,15 @@ import os
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-PHRONOSIS_URL = os.environ.get("PHRONOSIS_URL", "http://100.71.88.106:3004")
-PHRONOSIS_API_KEY = os.environ.get("PHRONOSIS_API_KEY", "")
+SCOPENOS_URL = os.environ.get("SCOPENOS_URL", "http://100.71.88.106:3004")
+SCOPENOS_API_KEY = os.environ.get("SCOPENOS_API_KEY", "")
 DELAY_BETWEEN_CALLS = 0.5  # seconds — each call embeds via OpenAI/Ollama
 
 
 # ── Type classifier ────────────────────────────────────────────────────────────
 
 def classify(subject: str) -> str:
-    """Map a commit subject line to an Phronosis decision type based on its leading verb."""
+    """Map a commit subject line to an Scopenos decision type based on its leading verb."""
     low = subject.lower()
     if low.startswith(("fix", "bug", "patch", "hotfix", "revert")):
         return "Patch"
@@ -110,12 +110,12 @@ def get_changed_files(hash_: str) -> list[str]:
 # ── API call ───────────────────────────────────────────────────────────────────
 
 def post_decision(payload: dict) -> dict:
-    """POST a decision record to the Phronosis /api/decisions endpoint and return the response."""
+    """POST a decision record to the Scopenos /api/decisions endpoint and return the response."""
     data = json.dumps(payload).encode()
     req = Request(
-        f"{PHRONOSIS_URL}/api/decisions",
+        f"{SCOPENOS_URL}/api/decisions",
         data=data,
-        headers={"Content-Type": "application/json", "X-API-Key": PHRONOSIS_API_KEY},
+        headers={"Content-Type": "application/json", "X-API-Key": SCOPENOS_API_KEY},
         method="POST",
     )
     with urlopen(req, timeout=30) as r:
@@ -123,36 +123,36 @@ def post_decision(payload: dict) -> dict:
 
 
 def check_server() -> bool:
-    """Verify the Phronosis server is reachable and has decision memory operational."""
+    """Verify the Scopenos server is reachable and has decision memory operational."""
     try:
-        req = Request(f"{PHRONOSIS_URL}/api/health", method="GET")
+        req = Request(f"{SCOPENOS_URL}/api/health", method="GET")
         with urlopen(req, timeout=5) as r:
             resp = json.loads(r.read())
         return resp.get("decision_memory", {}).get("status") == "ok"
     except Exception as e:
-        print(f"ERROR: cannot reach Phronosis at {PHRONOSIS_URL}: {e}", file=sys.stderr)
+        print(f"ERROR: cannot reach Scopenos at {SCOPENOS_URL}: {e}", file=sys.stderr)
         return False
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    """Parse CLI args and backfill git history as Phronosis decision records."""
-    parser = argparse.ArgumentParser(description="Backfill Phronosis decisions from git history")
+    """Parse CLI args and backfill git history as Scopenos decision records."""
+    parser = argparse.ArgumentParser(description="Backfill Scopenos decisions from git history")
     parser.add_argument("--dry-run", action="store_true", help="Print decisions without writing")
     parser.add_argument("--since", metavar="DATE", help="Only commits after DATE (e.g. 2024-01-01)")
     parser.add_argument("--limit", type=int, metavar="N", help="Maximum number of commits to process")
-    parser.add_argument("--phronosis-url", default=PHRONOSIS_URL, help=f"Phronosis base URL (default: {PHRONOSIS_URL})")
+    parser.add_argument("--scopenos-url", default=SCOPENOS_URL, help=f"Scopenos base URL (default: {SCOPENOS_URL})")
     parser.add_argument(
         "--project", metavar="ID",
         help="Project ID to tag decisions with (default: derived from git remote or dirname)",
     )
     args = parser.parse_args()
 
-    if args.phronosis_url != PHRONOSIS_URL:
-        globals()["PHRONOSIS_URL"] = args.phronosis_url
+    if args.scopenos_url != SCOPENOS_URL:
+        globals()["SCOPENOS_URL"] = args.scopenos_url
 
-    project_id = args.project or os.environ.get("PHRONOSIS_PROJECT") or derive_project_id()
+    project_id = args.project or os.environ.get("SCOPENOS_PROJECT") or derive_project_id()
     print(f"Project ID: {project_id}")
 
     if not args.dry_run and not check_server():

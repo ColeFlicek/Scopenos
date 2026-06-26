@@ -37,7 +37,7 @@ def _ctx(task=None, **kwargs) -> RepoContext:
         repo_path="/tmp/bench/pytest-dev__pytest-1234",
         venv_python="/tmp/bench/pytest-dev__pytest-1234/.bench-venv/bin/python",
         project_id="bench-pytest-dev__pytest-1234",
-        phronosis_indexed=True,
+        scopenos_indexed=True,
     )
     return RepoContext(**{**defaults, **kwargs})
 
@@ -127,10 +127,10 @@ def test_evaluate_no_patch_returns_unresolved():
 
 # ── prompt builders ───────────────────────────────────────────────────────────
 
-def test_prompt_a_prohibits_phronosis():
+def test_prompt_a_prohibits_scopenos():
     pa = build_prompt_a(_task(), _ctx())
     assert "do NOT" in pa or "Do NOT" in pa
-    assert "Phronosis" in pa
+    assert "Scopenos" in pa
 
 
 def test_prompt_a_contains_venv_path():
@@ -146,9 +146,9 @@ def test_prompt_a_contains_fail_to_pass_tests():
     assert "testing/test_foo.py::test_baz" in pa
 
 
-def test_prompt_b_instructs_phronosis_use():
+def test_prompt_b_instructs_scopenos_use():
     pb = build_prompt_b(_task(), _ctx())
-    assert "Phronosis" in pb
+    assert "Scopenos" in pb
     assert "get_project_home" in pb
 
 

@@ -21,8 +21,8 @@ Only a test that runs index→query end-to-end can catch that class of bug.
 
 SETUP
 -----
-Requires a Postgres DB (DATABASE_URL or default phronosis_test). Set via:
-    DATABASE_URL=postgresql://phronosis:phronosis@localhost/phronosis_test pytest
+Requires a Postgres DB (DATABASE_URL or default scopenos_test). Set via:
+    DATABASE_URL=postgresql://scopenos:scopenos@localhost/scopenos_test pytest
 
 The `db` fixture is in the root conftest.py and truncates all tables before
 each test for isolation. Embeddings are mocked — no API key required.
@@ -34,7 +34,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from src.architecture_service import ArchitectureService
-from src.call_graph.storage import CallGraphDB
+from src.call_graph.storage import CallGraphDB, derive_schema_name
 from src.indexer import Indexer
 
 
@@ -50,6 +50,8 @@ async def indexer(db: CallGraphDB):
     # get_embedded_ids is called by _verify_coverage — return empty set (no embeddings)
     pipeline.get_embedded_ids = AsyncMock(return_value=set())
     pipeline.model = "text-embedding-3-small"
+    # with_db is synchronous — return the same mock so project-scoped calls work
+    pipeline.with_db = MagicMock(return_value=pipeline)
     return Indexer(db, pipeline)
 
 
@@ -137,7 +139,8 @@ class TestCallGraphAfterIndex:
         _write_project(tmp_path, FIXTURE_SIMPLE)
         await indexer.index_project(str(tmp_path), project_id="test_proj")
 
-        nodes = await db.get_all_nodes("test_proj")
+        pdb = await db.project_db(derive_schema_name("test_proj"))
+        nodes = await pdb.get_all_nodes("test_proj")
         names = {n["name"] for n in nodes}
         assert "add" in names
         assert "multiply" in names
@@ -152,7 +155,8 @@ class TestCallGraphAfterIndex:
         _write_project(tmp_path, FIXTURE_SIMPLE)
         await indexer.index_project(str(tmp_path), project_id="test_proj")
 
-        callees = await db.get_callees("compute", project_id="test_proj")
+        pdb = await db.project_db(derive_schema_name("test_proj"))
+        callees = await pdb.get_callees("compute", project_id="test_proj")
         callee_names = {c["name"] for c in callees}
         assert "add" in callee_names
         assert "multiply" in callee_names
@@ -165,7 +169,8 @@ class TestCallGraphAfterIndex:
         _write_project(tmp_path, FIXTURE_SIMPLE)
         await indexer.index_project(str(tmp_path), project_id="test_proj")
 
-        callers = await db.get_callers("add", project_id="test_proj")
+        pdb = await db.project_db(derive_schema_name("test_proj"))
+        callers = await pdb.get_callers("add", project_id="test_proj")
         caller_names = {c["name"] for c in callers}
         assert "compute" in caller_names
 
@@ -184,8 +189,9 @@ class TestCallGraphAfterIndex:
         _write_project(tmp_path, FIXTURE_SIMPLE)
         await indexer.index_project(str(tmp_path), project_id="test_proj")
 
+        pdb = await db.project_db(derive_schema_name("test_proj"))
         # add() is called by compute() — must not return empty
-        callers = await db.get_callers("add", project_id="test_proj")
+        callers = await pdb.get_callers("add", project_id="test_proj")
         assert len(callers) > 0, (
             "get_callers('add') returned empty after indexing. "
             "This likely means edge caller_ids don't match stored node IDs — "
@@ -200,7 +206,8 @@ class TestCallGraphAfterIndex:
         _write_project(tmp_path, FIXTURE_CHAIN)
         await indexer.index_project(str(tmp_path), project_id="test_chain")
 
-        radius = await db.get_impact_radius("inner", depth=2, project_id="test_chain")
+        pdb = await db.project_db(derive_schema_name("test_chain"))
+        radius = await pdb.get_impact_radius("inner", depth=2, project_id="test_chain")
         names = {r["name"] for r in radius}
         assert "middle" in names   # depth 1 caller
         assert "outer" in names    # depth 2 caller
@@ -384,7 +391,8 @@ class TestProjectHomeAfterIndex:
         _write_project(tmp_path, FIXTURE_SIMPLE)
         await indexer.index_project(str(tmp_path), project_id="test_proj")
 
-        home = await ArchitectureService(db).get_project_home("test_proj")
+        pdb = await db.project_db(derive_schema_name("test_proj"))
+        home = await ArchitectureService(pdb).get_project_home("test_proj")
         subsystems = home.get("subsystems", [])
         assert len(subsystems) > 0
         subsystem_names = {s["name"] for s in subsystems}

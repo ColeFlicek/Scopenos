@@ -1,5 +1,5 @@
 """
-Prompt builders and patch capture for the Phronosis SWE-bench benchmark.
+Prompt builders and patch capture for the Scopenos SWE-bench benchmark.
 
 The Claude Code orchestrator (not this script) spawns the actual subagents
 via the Agent tool. This module provides:
@@ -109,7 +109,7 @@ def build_prompt_a(task: BenchmarkTask, ctx: RepoContext) -> str:
         You are an expert software engineer fixing a real bug in {task.repo}.
 
         IMPORTANT: Use only standard code investigation tools — grep, file reads,
-        bash commands. Do NOT use any Phronosis or code-intelligence MCP tools.
+        bash commands. Do NOT use any Scopenos or code-intelligence MCP tools.
 
         The repository is checked out at: {ctx.repo_path}
         Python venv for running tests: {ctx.venv_python}
@@ -145,14 +145,14 @@ def build_prompt_a(task: BenchmarkTask, ctx: RepoContext) -> str:
 
 
 def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
-    """System + user prompt for Path B (Phronosis-assisted)."""
+    """System + user prompt for Path B (Scopenos-assisted)."""
     pytest_ids = _to_pytest_ids(task.fail_to_pass, ctx.repo_path)
     return textwrap.dedent(f"""\
         You are an expert software engineer fixing a real bug in {task.repo}.
-        You have access to Phronosis code intelligence tools (MCP) — use them.
+        You have access to Scopenos code intelligence tools (MCP) — use them.
 
         The repository is checked out at: {ctx.repo_path}
-        Phronosis project_id for this checkout: {ctx.project_id}
+        Scopenos project_id for this checkout: {ctx.project_id}
         Python venv for running tests: {ctx.venv_python}
 
         ## Bug to fix
@@ -266,7 +266,7 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
           {{"tool": "Read", "file": "django/db/models/base.py", "reason": "view __eq__ before editing"}}
         ], "notes": "one sentence — what the bug was and how you fixed it"}}
         ```
-        Every tool call in order. `reason` is 5-10 words. For Phronosis tools include
+        Every tool call in order. `reason` is 5-10 words. For Scopenos tools include
         `query` if you passed a search string. For Read/Edit include `file`.
     """)
 

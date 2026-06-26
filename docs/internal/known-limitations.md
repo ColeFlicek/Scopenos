@@ -33,12 +33,12 @@ The default is now `exclude_test_files=True`, but the tool historically flagged 
 
 ---
 
-### `app.src.*` namespace duplication in Phronosis's own index
-Functions in Phronosis itself appear under both `src.module.function` and `app.src.module.function` in the call graph. This is a Docker build artifact where the container's working directory creates a duplicate import path.
+### `app.src.*` namespace duplication in Scopenos's own index
+Functions in Scopenos itself appear under both `src.module.function` and `app.src.module.function` in the call graph. This is a Docker build artifact where the container's working directory creates a duplicate import path.
 
-**Impact:** `get_callers` for Phronosis functions may return half the actual callers. Subsystem counts are inflated.
+**Impact:** `get_callers` for Scopenos functions may return half the actual callers. Subsystem counts are inflated.
 
-**Fix:** Pending cleanup — remove the `app.src.*` entries from the call graph. Do not expose Phronosis's own index as a demo repo until this is resolved.
+**Fix:** Pending cleanup — remove the `app.src.*` entries from the call graph. Do not expose Scopenos's own index as a demo repo until this is resolved.
 
 ---
 
@@ -52,7 +52,7 @@ Functions in Phronosis itself appear under both `src.module.function` and `app.s
 ---
 
 ### `estimate_index` requires server-side file access
-The tool accepts an absolute path on the Phronosis server filesystem, not a remote path. Users on local machines cannot use it without either SSHing in or uploading files first.
+The tool accepts an absolute path on the Scopenos server filesystem, not a remote path. Users on local machines cannot use it without either SSHing in or uploading files first.
 
 **Impact:** The "how much will this cost?" pre-flight check doesn't work for remote clients.
 

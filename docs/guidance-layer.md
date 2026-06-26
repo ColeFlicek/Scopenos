@@ -11,7 +11,7 @@ field computed from existing index data. No LLM calls. No separate pipeline. All
 fire in <20ms by running pure logic on the result set or by issuing 1–3 targeted DB queries
 in parallel.
 
-The goal: agents using Phronosis tools produce architecturally conformant code on the first
+The goal: agents using Scopenos tools produce architecturally conformant code on the first
 attempt — not because they were told to, but because the tool response makes the correct path
 visible.
 
@@ -93,7 +93,7 @@ fires when cnt >= CHOKEPOINT_THRESHOLD (= 15)
 }
 ```
 
-**Why 15?** The Phronosis codebase has `_DB.execute` at 90 callers and a typical utility at
+**Why 15?** The Scopenos codebase has `_DB.execute` at 90 callers and a typical utility at
 3–5. The threshold of 15 sits cleanly above "commonly used" and below "genuinely structural."
 Projects with fewer functions may need a lower threshold.
 
@@ -192,7 +192,7 @@ fires when:
 ```json
 {
   "tool": "check_performance",
-  "args": {"project_id": "Phronosis"},
+  "args": {"project_id": "Scopenos"},
   "reason": "Async functions in I/O-heavy module — sequential await or N+1 pattern may be present"
 }
 ```
@@ -626,7 +626,7 @@ The `return_type` column exists on every node. If 7/8 existing functions return
 The check would be trivial to add.
 
 **F. Parameter count signal**
-Functions with 1–3 parameters are the norm in Phronosis. A proposed function with 7
+Functions with 1–3 parameters are the norm in Scopenos. A proposed function with 7
 parameters is likely doing too much or needs a dataclass. Could be checked from
 `parameter_names` column on existing nodes.
 
@@ -660,7 +660,7 @@ guard). The naming check fires more often on utility files where naming is genui
 A confidence weight per check would produce a more accurate score.
 
 **L. Module-relative thresholds**
-`CHOKEPOINT_THRESHOLD = 15` is calibrated for Phronosis (~900 functions). A project with
+`CHOKEPOINT_THRESHOLD = 15` is calibrated for Scopenos (~900 functions). A project with
 50 functions has a different notion of "chokepoint." The threshold could be set as a
 percentile of the caller-count distribution for the project rather than a fixed number.
 
@@ -745,7 +745,7 @@ SELECT PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY cnt)
 FROM (SELECT COUNT(DISTINCT caller_id) cnt FROM edges WHERE project_id=$1 GROUP BY callee_id)
 ```
 The 90th percentile of caller counts becomes the project-specific chokepoint threshold.
-A Phronosis-sized project gets 15; a 50k-function enterprise project gets something
+A Scopenos-sized project gets 15; a 50k-function enterprise project gets something
 proportionally higher.
 
 **9. `module_patterns` cache population**

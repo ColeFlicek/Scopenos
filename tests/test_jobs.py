@@ -16,7 +16,7 @@ from src.call_graph.storage import CallGraphDB
 from src.auth import set_auth_db
 
 TEST_REDIS_URL = "redis://localhost:6379/1"  # DB 1 — isolated from dev
-TEST_QUEUE_NAME = "phronosis-test"
+TEST_QUEUE_NAME = "scopenos-test"
 
 # Skip all Redis-dependent tests when Redis is not reachable.
 # In CI, Redis is a sidecar service and these tests run normally.

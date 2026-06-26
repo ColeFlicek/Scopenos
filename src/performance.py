@@ -1,5 +1,5 @@
 """
-Performance concern detector for Phronosis.
+Performance concern detector for Scopenos.
 
 Runs static detectors against indexed function bodies and the call graph,
 then scores findings using object embeddings to separate real concerns from
@@ -600,10 +600,19 @@ async def check_performance(
     I/O is isolated here; all detection logic is in _run_detectors (pure).
     """
     from .schema_objects import load_schema_objects
-    nodes_by_id = await db.get_nodes_with_bodies(project_id)
+    from .call_graph.storage import derive_schema_name
+    # Route node/edge reads to the project schema so data written by the indexer
+    # (which uses a project-scoped pool) is visible here.
+    pdb = db if db._schema else await db.project_db(derive_schema_name(project_id))
+    nodes_by_id = await pdb.get_nodes_with_bodies(project_id)
     if exclude_test_files:
         nodes_by_id = {k: v for k, v in nodes_by_id.items() if not _is_test_file(v.get("file", ""))}
-    callee_map = await db.get_callee_map(project_id)
+    callee_map = await pdb.get_callee_map(project_id)
+    # Decisions and schema objects are read from the passed-in DB (db), not from
+    # the project-scoped pdb. The project schema's decisions/schema_object_embeddings
+    # tables shadow the public copies when pdb is used, but writes from tests and
+    # tool callers go through the org-level pool (public schema). Reading via db
+    # ensures we see those writes regardless of schema routing.
     acknowledged = await db.get_acknowledged_performance_decisions(project_id)
     schema_objects = await load_schema_objects(db, project_id)
     expand_ids: set[str] = set()

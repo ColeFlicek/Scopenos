@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .branch_tracking import BranchContext, detect_branch
 from .call_graph.parser import TreeSitterParser
-from .call_graph.storage import CallGraphDB
+from .call_graph.storage import CallGraphDB, derive_schema_name
 from .dependency_fingerprint import DependencyFingerprint, DependencyFingerprinter
 from .embeddings.chunker import extract_chunks
 from .embeddings.pipeline import EmbeddingPipeline
@@ -130,7 +130,7 @@ class Indexer:
                 "path": path,
                 "project_id": project_id,
                 "detail": (
-                    f"'{path}' does not exist on the Phronosis server's filesystem. "
+                    f"'{path}' does not exist on the Scopenos server's filesystem. "
                     "The server runs in Docker and cannot access paths on your local machine. "
                     "Use POST /api/index-bulk instead — it accepts file contents directly: "
                     '{"project_root": "...", "project_id": "...", "files": {"abs/path": "content"}}'
@@ -141,13 +141,22 @@ class Indexer:
         if not source_files:
             return {"status": "no source files found", "path": path, "project_id": project_id}
 
+        # Ensure the project schema exists and get a project-scoped DB + pipeline.
+        # All per-project writes (nodes, edges, embeddings) go through pdb so that
+        # search_path routes them into the project schema, not public.
+        schema_name = derive_schema_name(project_id)
+        await self._db.create_project_schema(schema_name)
+        pdb = await self._db.project_db(schema_name)
+        ppipe = self._pipeline.with_db(pdb)
+
         all_nodes = []
         all_edges = []
         contents: dict[str, str] = {}
 
         # Phase 1: Tree-sitter always runs — source of truth for internal nodes,
         # body text, and content-based hashes.
-        print(f"[indexer] index_project: project={project_id!r} {len(source_files)} files under {path!r}")
+        print(f"[indexer] index_project: project={project_id!r} schema={schema_name!r} "
+              f"{len(source_files)} files under {path!r}")
         for fp in source_files:
             try:
                 content = Path(fp).read_text(encoding="utf-8", errors="replace")
@@ -183,7 +192,7 @@ class Indexer:
         existing_summaries: dict[str, str] = {}
         old_hashes: dict[str, str] = {}
         for fp in contents:
-            for node in await self._db.get_nodes_by_file(fp, project_id):
+            for node in await pdb.get_nodes_by_file(fp, project_id):
                 if node["summary"]:
                     existing_summaries[node["id"]] = node["summary"]
                 old_hashes[node["id"]] = node.get("body_hash", "")
@@ -191,7 +200,7 @@ class Indexer:
         # Reconcile: diff old DB state against freshly parsed nodes.
         new_hashes = {n.id: n.body_hash for n in all_nodes}
         delta = reconcile(old_hashes, new_hashes)
-        await self._pipeline.delete_by_ids(list(delta.to_delete), project_id)
+        await ppipe.delete_by_ids(list(delta.to_delete), project_id)
 
         # Drop stale Claude summaries for functions whose body changed. A summary
         # generated when a function had no docstring becomes misleading if a good
@@ -203,12 +212,12 @@ class Indexer:
 
         # Wipe and rewrite call graph for all parsed files (edges change at file granularity).
         for fp in contents:
-            await self._db.delete_file_data(fp, project_id)
+            await pdb.delete_file_data(fp, project_id)
 
         print(f"[indexer] call graph: {len(all_nodes)} nodes, {len(all_edges)} edges total — writing to db")
-        await self._db.upsert_nodes(all_nodes, project_id)
-        all_ids = await self._db.get_all_node_ids(project_id)
-        await self._db.upsert_edges(all_edges, all_ids, project_id)
+        await pdb.upsert_nodes(all_nodes, project_id)
+        all_ids = await pdb.get_all_node_ids(project_id)
+        await pdb.upsert_edges(all_edges, all_ids, project_id)
         print(f"[indexer] call graph written ok")
 
         print(f"[indexer] +{len(delta.functions_added)} new, "
@@ -225,6 +234,8 @@ class Indexer:
             contents=contents,
             always_save_fingerprint=True,
             capture_fingerprint=True,
+            project_db=pdb,
+            project_pipeline=ppipe,
         )
 
         internal_count = sum(1 for n in all_nodes if not n.is_external)
@@ -251,7 +262,7 @@ class Indexer:
                 f"embedded with text-embedding-3-large. Call enrich_summaries('{project_id}') to "
                 f"generate LLM summaries and re-embed them with {{}}, which will improve semantic search quality."
             ).format(self._pipeline.model)
-        coverage = await self._verify_coverage(project_id)
+        coverage = await self._verify_coverage(project_id, project_db=pdb, project_pipeline=ppipe)
         result["coverage"] = coverage.as_dict()
         if coverage.status != "ok":
             result["status"] = coverage.status
@@ -273,6 +284,8 @@ class Indexer:
         contents: dict[str, str],
         always_save_fingerprint: bool = True,
         capture_fingerprint: bool = True,
+        project_db=None,
+        project_pipeline=None,
     ) -> tuple[dict, dict | None]:
         """Shared post-reconciliation phases for index_project and index_changes.
 
@@ -280,9 +293,16 @@ class Indexer:
         2. Update project record + record branch changes.
         3. Optionally capture dependency fingerprint.
 
+        project_db: project-scoped CallGraphDB (search_path set to project schema).
+                    Falls back to self._db if not provided (pre-routing callers).
+        project_pipeline: matching EmbeddingPipeline. Falls back to self._pipeline.
+
         Returns (embed_stats, fingerprint_result).
         fingerprint_result is None when capture_fingerprint=False.
         """
+        pdb = project_db or self._db
+        ppipe = project_pipeline or self._pipeline
+
         # Phase 1: Embed
         chunks = [
             c for fp, content in contents.items()
@@ -292,7 +312,7 @@ class Indexer:
         embed_stats = {"docs": 0, "fallback": 0}
         if chunks:
             print(f"[indexer] starting embedding for {len(chunks)} chunks")
-            embed_stats = await self._pipeline.upsert_chunks(
+            embed_stats = await ppipe.upsert_chunks(
                 chunks,
                 project_id=project_id,
                 existing_summaries=existing_summaries or None,
@@ -302,11 +322,12 @@ class Indexer:
         ctx = detect_branch(project_root)
         effective_branch = branch_override or ctx.branch
         head_commit = ctx.head_commit
+        # upsert_project goes to the org-level DB (public.projects registry)
         await self._db.upsert_project(
             project_id, project_id, project_root,
             branch=effective_branch, head_commit=head_commit,
         )
-        await self._db.record_branch_changes(
+        await pdb.record_branch_changes(
             project_id, effective_branch, changed_fn_ids, head_commit
         )
 
@@ -314,8 +335,8 @@ class Indexer:
         if not capture_fingerprint:
             return embed_stats, None
 
-        deps = await self._db.list_external_dependencies(project_id)
-        prev_row = await self._db.get_latest_dependency_fingerprint(project_id)
+        deps = await pdb.list_external_dependencies(project_id)
+        prev_row = await pdb.get_latest_dependency_fingerprint(project_id)
         prev_fp = (
             DependencyFingerprint.from_dict(json.loads(prev_row["snapshot_json"]))
             if prev_row else None
@@ -328,7 +349,7 @@ class Indexer:
         }
         diff = _fingerprinter.diff(prev_fp, fp) if prev_fp else None
         if always_save_fingerprint or prev_fp is None or fp.fingerprint_hash != prev_fp.fingerprint_hash:
-            await self._db.save_dependency_fingerprint(
+            await pdb.save_dependency_fingerprint(
                 project_id, uuid.uuid4().hex, fp.captured_at, fp.fingerprint_hash,
                 json.dumps(fp.to_dict()),
                 json.dumps(diff.to_dict()) if diff else None,
@@ -340,20 +361,25 @@ class Indexer:
             )
         return embed_stats, fp_result
 
-    async def _verify_coverage(self, project_id: str) -> IndexCoverage:
+    async def _verify_coverage(
+        self, project_id: str, project_db=None, project_pipeline=None
+    ) -> IndexCoverage:
         """
         Post-commit audit: compare all call graph nodes against all embedding vectors.
         Runs after every index_project to surface gaps before the caller sees the result.
         Three SQL queries — negligible cost relative to parsing and embedding.
         """
-        all_node_ids = await self._db.get_all_node_ids(project_id)
-        embedded_ids = await self._pipeline.get_embedded_ids(project_id)
+        pdb = project_db or self._db
+        ppipe = project_pipeline or self._pipeline
+
+        all_node_ids = await pdb.get_all_node_ids(project_id)
+        embedded_ids = await ppipe.get_embedded_ids(project_id)
 
         missing = sorted(all_node_ids - embedded_ids)
         actual = len(embedded_ids & all_node_ids)
 
-        degraded = await self._db.get_nodes_with_null_content(project_id)
-        large_model = await self._db.count_nodes_by_model(
+        degraded = await pdb.get_nodes_with_null_content(project_id)
+        large_model = await pdb.count_nodes_by_model(
             project_id, "text-embedding-3-large"
         )
 
@@ -380,11 +406,16 @@ class Indexer:
         if not project_id:
             project_id = _derive_project_id(project_root) if project_root else "default"
 
+        schema_name = derive_schema_name(project_id)
+        await self._db.create_project_schema(schema_name)
+        pdb = await self._db.project_db(schema_name)
+        ppipe = self._pipeline.with_db(pdb)
+
         # Snapshot existing summaries and body hashes before any deletion.
         existing_summaries: dict[str, str] = {}
         old_hashes: dict[str, str] = {}
         for fp in file_paths:
-            for node in await self._db.get_nodes_by_file(fp, project_id):
+            for node in await pdb.get_nodes_by_file(fp, project_id):
                 if node["summary"]:
                     existing_summaries[node["id"]] = node["summary"]
                 old_hashes[node["id"]] = node.get("body_hash", "")
@@ -400,15 +431,15 @@ class Indexer:
 
             if content is None:
                 # Deleted file — wipe all its embeddings (while nodes still exist for ID lookup).
-                await self._pipeline.delete_by_file(fp, project_id)
-                await self._db.delete_file_data(fp, project_id)
+                await ppipe.delete_by_file(fp, project_id)
+                await pdb.delete_file_data(fp, project_id)
                 print(f"[indexer]   {fp}: deleted (purged from index)")
                 continue
 
             ext = Path(fp).suffix.lower()
             if ext not in _SUPPORTED_EXTENSIONS:
-                await self._pipeline.delete_by_file(fp, project_id)
-                await self._db.delete_file_data(fp, project_id)
+                await ppipe.delete_by_file(fp, project_id)
+                await pdb.delete_file_data(fp, project_id)
                 print(f"[indexer]   {fp}: skipped (unsupported extension {ext!r})")
                 continue
 
@@ -419,17 +450,17 @@ class Indexer:
             # Reconcile this file's old DB state against freshly parsed nodes.
             file_old_hashes = {
                 n["id"]: n.get("body_hash", "")
-                for n in await self._db.get_nodes_by_file(fp, project_id)
+                for n in await pdb.get_nodes_by_file(fp, project_id)
             }
             file_delta = reconcile(file_old_hashes, new_hashes)
-            await self._pipeline.delete_by_ids(list(file_delta.to_delete), project_id)
+            await ppipe.delete_by_ids(list(file_delta.to_delete), project_id)
 
             # Clear stale Claude summaries for functions whose body changed.
             for fn_id in file_delta.to_embed:
                 existing_summaries.pop(fn_id, None)
 
             # Refresh call graph for the whole file — edges can change in any function.
-            await self._db.delete_file_data(fp, project_id)
+            await pdb.delete_file_data(fp, project_id)
             updated_nodes.extend(nodes)
             updated_edges.extend(edges)
             changed_ids |= file_delta.to_embed
@@ -441,10 +472,10 @@ class Indexer:
 
         if updated_nodes:
             print(f"[indexer] call graph: {len(updated_nodes)} nodes, {len(updated_edges)} edges — writing to db")
-            await self._db.upsert_nodes(updated_nodes, project_id)
+            await pdb.upsert_nodes(updated_nodes, project_id)
         if updated_edges:
-            all_ids = await self._db.get_all_node_ids(project_id)
-            await self._db.upsert_edges(updated_edges, all_ids, project_id)
+            all_ids = await pdb.get_all_node_ids(project_id)
+            await pdb.upsert_edges(updated_edges, all_ids, project_id)
         if updated_nodes or updated_edges:
             print(f"[indexer] call graph written ok")
 
@@ -460,6 +491,8 @@ class Indexer:
                 contents=processed_contents,
                 always_save_fingerprint=False,
                 capture_fingerprint=bool(updated_nodes),
+                project_db=pdb,
+                project_pipeline=ppipe,
             )
 
         result = {
@@ -653,13 +686,13 @@ class Indexer:
 
 
     async def index_lsif(self, path: str, project_id: str = "") -> dict:
-        """Ingest an LSIF NDJSON index file into Phronosis.
+        """Ingest an LSIF NDJSON index file into Scopenos.
 
         Extracts symbol definitions with their hover documentation and imports
         them as FunctionNode records into the call-graph + embedding pipeline.
         Call-edge resolution is deferred to a future version.
 
-        path: filesystem path to the .lsif file on the Phronosis server.
+        path: filesystem path to the .lsif file on the Scopenos server.
         project_id: target project namespace (defaults to lsif filename stem).
         """
         if not project_id:
@@ -704,13 +737,13 @@ class Indexer:
         }
 
     async def index_scip(self, path: str, project_id: str = "") -> dict:
-        """Ingest a SCIP JSON index file into Phronosis.
+        """Ingest a SCIP JSON index file into Scopenos.
 
         SCIP (Sourcegraph Code Intelligence Protocol) provides structured symbol
         information with explicit documentation and relationships.  Produces
         FunctionNode records and basic call edges from relationship data.
 
-        path: filesystem path to the .scip.json file on the Phronosis server.
+        path: filesystem path to the .scip.json file on the Scopenos server.
         project_id: target project namespace (defaults to scip filename stem).
         """
         if not project_id:
@@ -778,7 +811,7 @@ async def _try_scip_index(
         "typescript": ["scip-typescript", "index", "--infer-tsconfig"],
         "javascript": ["scip-typescript", "index", "--infer-tsconfig"],
         # Phase 3 (typed compiled languages): type-resolved call graphs via SCIP.
-        # These indexers must be installed separately; Phronosis silently skips
+        # These indexers must be installed separately; Scopenos silently skips
         # SCIP augmentation when the binary is absent (tree-sitter remains the source).
         "go":     ["scip-go", "--output", "index.scip"],
         "java":   ["scip-java", "index"],
@@ -810,8 +843,8 @@ async def _try_scip_index(
         try:
             for git_cmd in [
                 ["git", "init"],
-                ["git", "config", "user.email", "scip@phronosis.dev"],
-                ["git", "config", "user.name", "phronosis"],
+                ["git", "config", "user.email", "scip@scopenos.dev"],
+                ["git", "config", "user.name", "scopenos"],
                 ["git", "add", "-A"],
                 ["git", "commit", "-m", "index", "--allow-empty"],
             ]:

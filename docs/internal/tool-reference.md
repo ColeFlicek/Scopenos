@@ -1,7 +1,7 @@
-# Phronosis MCP Tool Reference
+# Scopenos MCP Tool Reference
 
 Internal reference. Every tool, every parameter, one working example against an indexed demo repo.
-Promoted to `docs.phronosis.dev` in Phase 17 with pricing/limitation sections redacted.
+Promoted to `docs.scopenos.dev` in Phase 17 with pricing/limitation sections redacted.
 
 ---
 
@@ -92,7 +92,7 @@ Recursive BFS of everything that depends on this function. Returns full dependen
 
 **Example:**
 ```
-get_impact_radius("check_permission", depth=2, project_id="phronosis")
+get_impact_radius("check_permission", depth=2, project_id="scopenos")
 → {"impact_radius": [...], "total_impacted": 18}
 ```
 
@@ -271,15 +271,15 @@ Generate LLM summaries for functions that fell back to the large model (no docst
 
 ## Setup tool
 
-### `setup_phronosis_client(project_id, project_root, server_url?)`
+### `setup_scopenos_client(project_id, project_root, server_url?)`
 Generate all client-side artifacts for a new project: post-commit hook, Claude Code settings, CLAUDE.md section, memory files, and the `acip-workflow` skill.
 
 **Parameters:**
 - `project_id` — required
 - `project_root` — absolute path to the project root
-- `server_url` — the Phronosis server URL as seen from the client (e.g. `http://100.71.88.106:3004`). If omitted, falls back to `PHRONOSIS_URL` env var then `http://localhost:3004`.
+- `server_url` — the Scopenos server URL as seen from the client (e.g. `http://100.71.88.106:3004`). If omitted, falls back to `SCOPENOS_URL` env var then `http://localhost:3004`.
 
-**Important:** Always pass `server_url` explicitly when connecting to a remote instance. The tool reads its own `PHRONOSIS_URL` (the server's internal address), which is wrong for remote clients.
+**Important:** Always pass `server_url` explicitly when connecting to a remote instance. The tool reads its own `SCOPENOS_URL` (the server's internal address), which is wrong for remote clients.
 
 ---
 

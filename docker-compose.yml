@@ -2,14 +2,14 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_USER: phronosis
-      POSTGRES_PASSWORD: phronosis
-      POSTGRES_DB: phronosis
+      POSTGRES_USER: scopenos
+      POSTGRES_PASSWORD: scopenos
+      POSTGRES_DB: scopenos
     ports:
       - "5432:5432"
     volumes:
-      - phronosis_pgdata:/var/lib/postgresql/data
-      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - scopenos_pgdata:/var/lib/postgresql/data
+      - ./schema_org.sql:/docker-entrypoint-initdb.d/01-schema_org.sql
     restart: unless-stopped
 
   redis:
@@ -18,14 +18,14 @@ services:
       - "6379:6379"
     restart: unless-stopped
 
-  phronosis:
+  scopenos:
     build: .
     ports:
       - "3004:3004"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      DATABASE_URL: postgresql://phronosis:phronosis@postgres/phronosis
+      DATABASE_URL: postgresql://scopenos:scopenos@postgres/scopenos
       REDIS_URL: redis://redis:6379
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
@@ -37,13 +37,13 @@ services:
       - redis
     restart: unless-stopped
 
-  phronosis-worker:
+  scopenos-worker:
     build: .
     command: python -m src.worker
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      DATABASE_URL: postgresql://phronosis:phronosis@postgres/phronosis
+      DATABASE_URL: postgresql://scopenos:scopenos@postgres/scopenos
       REDIS_URL: redis://redis:6379
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
@@ -54,4 +54,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  phronosis_pgdata:
+  scopenos_pgdata:

@@ -1,5 +1,5 @@
 """
-File watcher for Phronosis — automatically re-indexes project files on save.
+File watcher for Scopenos — automatically re-indexes project files on save.
 
 Uses watchfiles (already a transitive dependency of uvicorn) to watch
 all directories registered as project roots.  On file change, runs an
@@ -28,7 +28,7 @@ _SUPPORTED = {".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go",
 
 async def start_file_watcher(db: "CallGraphDB", indexer: "Indexer") -> asyncio.Task:
     """Launch the file watcher as a background task and return its handle."""
-    task = asyncio.create_task(_watch_loop(db, indexer), name="phronosis-file-watcher")
+    task = asyncio.create_task(_watch_loop(db, indexer), name="scopenos-file-watcher")
     return task
 
 

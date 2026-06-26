@@ -54,7 +54,7 @@ def evaluate(
             error="Agent produced no patch (no files modified)",
         )
 
-    with tempfile.TemporaryDirectory(prefix="phronosis-eval-") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="scopenos-eval-") as tmpdir:
         # Copy the checkout into a fresh directory for evaluation, then reset to
         # HEAD so the patch can be applied cleanly (the worktree may already
         # contain the agent's uncommitted changes).

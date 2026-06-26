@@ -9,7 +9,7 @@ and ANTHROPIC_API_KEY are set (e.g. on TheHive with the K8s env exported):
     python scripts/index_demo_repos.py --skip-enrich   # index only, no LLM summaries
     python scripts/index_demo_repos.py --repos requests flask  # subset by slug
 
-Phronosis itself is handled specially: it's already indexed, so the script
+Scopenos itself is handled specially: it's already indexed, so the script
 just marks it as a demo project without re-indexing.
 
 Record your OpenAI and Anthropic dashboard totals BEFORE running, then again
@@ -43,10 +43,10 @@ class DemoRepo:
 
 DEMO_REPOS: list[DemoRepo] = [
     DemoRepo(
-        slug="phronosis",
-        display_name="Phronosis",
-        repo_url="https://github.com/ColeFlicek/Phronosis",
-        description="Phronosis itself — call graph, semantic embeddings, and decision memory for codebases.",
+        slug="scopenos",
+        display_name="Scopenos",
+        repo_url="https://github.com/ColeFlicek/Scopenos",
+        description="Scopenos itself — call graph, semantic embeddings, and decision memory for codebases.",
         already_indexed=True,
     ),
     DemoRepo(
@@ -130,7 +130,7 @@ DEMO_REPOS: list[DemoRepo] = [
 # ── Services (same pattern as src/jobs.py) ────────────────────────────────────
 
 def _dsn() -> str:
-    return os.getenv("DATABASE_URL", "postgresql://phronosis:phronosis@localhost/phronosis")
+    return os.getenv("DATABASE_URL", "postgresql://scopenos:scopenos@localhost/scopenos")
 
 
 async def _make_db():
@@ -263,8 +263,8 @@ def main():
         help=f"Index only these slugs. Available: {[r.slug for r in DEMO_REPOS]}",
     )
     parser.add_argument(
-        "--clone-dir", default="/tmp/phronosis-demos",
-        help="Directory to clone repos into (default: /tmp/phronosis-demos)",
+        "--clone-dir", default="/tmp/scopenos-demos",
+        help="Directory to clone repos into (default: /tmp/scopenos-demos)",
     )
     parser.add_argument(
         "--pause", type=int, default=5,
@@ -287,7 +287,7 @@ def main():
     clone_dir = Path(args.clone_dir)
     clone_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nPhronosis demo indexer")
+    print(f"\nScopenos demo indexer")
     print(f"Repos : {[r.slug for r in repos]}")
     print(f"Enrich: {'no (--skip-enrich)' if args.skip_enrich else 'yes'}")
     print(f"Clones: {clone_dir}")

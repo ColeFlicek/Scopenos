@@ -1,6 +1,6 @@
 #!/bin/bash
 # One-time database setup — run as postgres superuser.
-# Creates the phronosis user, database, and enables pgvector.
+# Creates the scopenos user, database, and enables pgvector.
 #
 # Usage (local dev):
 #   sudo -u postgres bash scripts/setup_db.sh
@@ -10,10 +10,10 @@
 
 set -e
 
-DB=${DB:-phronosis}
-TEST_DB=${TEST_DB:-phronosis_test}
-DB_USER=${DB_USER:-phronosis}
-DB_PASS=${DB_PASS:-phronosis}
+DB=${DB:-scopenos}
+TEST_DB=${TEST_DB:-scopenos_test}
+DB_USER=${DB_USER:-scopenos}
+DB_PASS=${DB_PASS:-scopenos}
 
 psql -v ON_ERROR_STOP=1 <<-EOSQL
     DO \$\$ BEGIN

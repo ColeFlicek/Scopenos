@@ -1,5 +1,5 @@
 """
-Shared fixtures for Phronosis tests.
+Shared fixtures for Scopenos tests.
 
 GraphData and node construction helpers so individual test files
 don't repeat boilerplate. Tests that need a GraphData call _graph();

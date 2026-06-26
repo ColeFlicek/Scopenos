@@ -9,7 +9,7 @@ Results directory layout (public artifact):
                 patch.diff      — what the baseline agent produced
                 evaluation.json — pass/fail per test
             path_b/
-                patch.diff      — what the Phronosis-assisted agent produced
+                patch.diff      — what the Scopenos-assisted agent produced
                 evaluation.json — pass/fail per test
         summary.json            — aggregate pass rates
 """
@@ -111,7 +111,7 @@ def write_summary(results_dir: str = "results") -> dict:
             "instance_id": task_dir.name,
             "path_a_resolved": a_ok,
             "path_b_resolved": b_ok,
-            "phronosis_advantage": b_ok and not a_ok,
+            "scopenos_advantage": b_ok and not a_ok,
             "path_a_tokens": a_tokens,
             "path_b_tokens": b_tokens,
             "path_a_tools": a_tools,
@@ -135,7 +135,7 @@ def write_summary(results_dir: str = "results") -> dict:
         },
         "token_savings": total_a_tokens - total_b_tokens,
         "token_savings_pct": round((total_a_tokens - total_b_tokens) / total_a_tokens * 100, 1) if total_a_tokens else 0,
-        "phronosis_advantage_tasks": sum(1 for r in rows if r["phronosis_advantage"]),
+        "scopenos_advantage_tasks": sum(1 for r in rows if r["scopenos_advantage"]),
         "tasks": rows,
     }
 
@@ -162,7 +162,7 @@ def print_summary(summary: dict) -> None:
         tool_delta = b['total_tool_calls'] - a['total_tool_calls']
         print(f"  {'Total tool calls':<28} {a['total_tool_calls']:>10,} {b['total_tool_calls']:>10,}  ({tool_delta:+d})")
     print(f"  {'-'*48}")
-    print(f"  Phronosis advantage: {summary['phronosis_advantage_tasks']} task(s) Path B resolved that A could not")
+    print(f"  Scopenos advantage: {summary['scopenos_advantage_tasks']} task(s) Path B resolved that A could not")
     print(f"{'='*56}\n")
 
 

@@ -45,6 +45,7 @@ async def indexer(db: CallGraphDB):
     pipeline.delete_by_file = AsyncMock()
     pipeline.get_embedded_ids = AsyncMock(return_value=set())
     pipeline.model = "text-embedding-3-small"
+    pipeline.with_db = MagicMock(return_value=pipeline)
     return Indexer(db, pipeline)
 
 

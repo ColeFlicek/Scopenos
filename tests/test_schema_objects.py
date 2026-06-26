@@ -176,7 +176,7 @@ class TestSchemaObject:
         obj = SchemaObject(
             name="nodes",
             source="db_table",
-            project_id="phronosis",
+            project_id="scopenos",
             cardinality="HIGH",
             description="Database table: nodes",
         )

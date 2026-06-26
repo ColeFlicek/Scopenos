@@ -5,7 +5,7 @@ import os
 from redis import Redis
 from rq import Queue
 
-QUEUE_NAME = "phronosis-indexing"
+QUEUE_NAME = "scopenos-indexing"
 
 
 def get_redis() -> Redis:
@@ -15,5 +15,5 @@ def get_redis() -> Redis:
 
 
 def get_queue() -> Queue:
-    """Return the Phronosis indexing queue."""
+    """Return the Scopenos indexing queue."""
     return Queue(QUEUE_NAME, connection=get_redis())

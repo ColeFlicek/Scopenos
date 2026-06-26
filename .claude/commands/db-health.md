@@ -1,4 +1,4 @@
-# Phronosis Database Health Check
+# Scopenos Database Health Check
 
 Run the database health check script and surface the report.
 
@@ -8,7 +8,7 @@ Run the database health check script and surface the report.
 The DB lives on TheHive (K8s cluster) — set the URL to point at it:
 
 ```bash
-export DATABASE_URL=postgresql://phronosis:PASSWORD@HOST/phronosis
+export DATABASE_URL=postgresql://scopenos:PASSWORD@HOST/scopenos
 ```
 
 If `DATABASE_URL` is not set the script will print a clear error and exit.

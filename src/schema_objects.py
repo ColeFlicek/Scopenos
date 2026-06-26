@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 # Tables whose cardinality is domain-known regardless of row count
 _KNOWN_CARDINALITY: dict[str, str] = {
-    # Phronosis DB tables
+    # Scopenos DB tables
     "projects":                    "LOW",
     "nodes":                       "HIGH",
     "edges":                       "HIGH",

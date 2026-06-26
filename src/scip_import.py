@@ -1,5 +1,5 @@
 """
-SCIP (Sourcegraph Code Intelligence Protocol) JSON ingestion for Phronosis.
+SCIP (Sourcegraph Code Intelligence Protocol) JSON ingestion for Scopenos.
 
 SCIP is a protobuf-based format produced by indexers like scip-python,
 scip-typescript, rust-analyzer, and scip-java.  The JSON form (produced

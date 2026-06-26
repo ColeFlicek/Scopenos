@@ -1,5 +1,5 @@
 """
-Guidance layer for Phronosis tool responses.
+Guidance layer for Scopenos tool responses.
 
 Classifies a set of query_similar_functions results into structural signals
 and injects them as a _guidance field — so agents see patterns and constraints

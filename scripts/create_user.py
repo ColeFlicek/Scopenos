@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Create a Phronosis user and issue an API key.
+Create a Scopenos user and issue an API key.
 
 Usage:
     python scripts/create_user.py <email> [--name KEY_NAME] [--plan free|paid]
     python scripts/create_user.py <email> --project <project_id> --role owner
 
 The raw API key is printed once and never stored — save it immediately.
-Reads DATABASE_URL env var (default: postgresql://phronosis:phronosis@localhost/phronosis).
+Reads DATABASE_URL env var (default: postgresql://scopenos:scopenos@localhost/scopenos).
 
 Examples:
     python scripts/create_user.py cole@example.com
     python scripts/create_user.py cole@example.com --name "dev laptop" --plan paid
-    python scripts/create_user.py cole@example.com --project phronosis --role owner
+    python scripts/create_user.py cole@example.com --project scopenos --role owner
 """
 import argparse
 import asyncio
@@ -27,7 +27,7 @@ from src.call_graph.storage import CallGraphDB
 
 
 async def main(email: str, key_name: str, plan: str, project_id: str, role: str) -> None:
-    dsn = os.getenv("DATABASE_URL", "postgresql://phronosis:phronosis@localhost/phronosis")
+    dsn = os.getenv("DATABASE_URL", "postgresql://scopenos:scopenos@localhost/scopenos")
     db = await CallGraphDB.create(dsn)
 
     try:
@@ -68,7 +68,7 @@ async def main(email: str, key_name: str, plan: str, project_id: str, role: str)
 
 
 def cli() -> None:
-    parser = argparse.ArgumentParser(description="Create a Phronosis user and issue an API key.")
+    parser = argparse.ArgumentParser(description="Create a Scopenos user and issue an API key.")
     parser.add_argument("email", help="User's email address")
     parser.add_argument("--name", default="", help="Label for this key (e.g. 'dev laptop')")
     parser.add_argument("--plan", default="free", choices=["free", "paid"], help="User plan")

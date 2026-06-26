@@ -26,6 +26,17 @@ class EmbeddingPipeline:
         self._db = db
         self._store = store
 
+    def with_db(self, db: "CallGraphDB") -> "EmbeddingPipeline":
+        """Return a shallow copy of this pipeline that uses a project-scoped DB pool.
+
+        The returned pipeline's store also uses the same DB so vector reads/writes
+        go through the project schema's search_path.
+        """
+        pipe = object.__new__(EmbeddingPipeline)
+        pipe._db = db
+        pipe._store = self._store.with_db(db)
+        return pipe
+
     @property
     def model(self) -> str:
         return self._store._model

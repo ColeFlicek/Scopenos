@@ -5,7 +5,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres-pvc
-  namespace: phronosis
+  namespace: scopenos
 spec:
   accessModes:
     - ReadWriteOnce
@@ -17,7 +17,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgres-svc
-  namespace: phronosis
+  namespace: scopenos
 spec:
   selector:
     app: postgres
@@ -30,7 +30,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
-  namespace: phronosis
+  namespace: scopenos
 spec:
   serviceName: postgres-svc
   replicas: 1
@@ -56,15 +56,15 @@ spec:
             - "maintenance_work_mem=64MB"
           env:
             - name: POSTGRES_USER
-              value: phronosis
+              value: scopenos
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: phronosis-secrets
+                  name: scopenos-secrets
                   key: POSTGRES_PASSWORD
                   optional: true
             - name: POSTGRES_DB
-              value: phronosis
+              value: scopenos
           ports:
             - containerPort: 5432
           volumeMounts:
@@ -88,15 +88,15 @@ spec:
             name: postgres-schema
 ---
 # Mount schema.sql as a ConfigMap so Postgres initialises it on first start.
-# Apply after running: kubectl create configmap postgres-schema --from-file=schema.sql -n phronosis
+# Apply after running: kubectl create configmap postgres-schema --from-file=schema.sql -n scopenos
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-schema
-  namespace: phronosis
+  namespace: scopenos
 # data is populated by k8s/README.md setup command:
 #   kubectl create configmap postgres-schema \
 #     --from-file=00-init.sql=k8s/postgres-init.sql \
 #     --from-file=01-schema.sql=schema.sql \
-#     -n phronosis --dry-run=client -o yaml | kubectl apply -f -
+#     -n scopenos --dry-run=client -o yaml | kubectl apply -f -
 # Files are applied alphabetically — 00-init.sql runs before 01-schema.sql.

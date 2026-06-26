@@ -1,9 +1,9 @@
 ---
-name: phronosis-workflow
-description: "Phronosis code intelligence for indexed codebases. Mandatory workflow: call get_project_home(project_id) FIRST every session before any source file read. Tier order: (1) get_project_home — architecture snapshot; (2) query_similar_functions / get_impact_radius / get_decision_history — function context; (3) Read — only for the exact lines you are about to modify. Never read files to understand structure; use Phronosis tools instead. Use on any Phronosis-indexed project."
+name: scopenos-workflow
+description: "Scopenos code intelligence for indexed codebases. Mandatory workflow: call get_project_home(project_id) FIRST every session before any source file read. Tier order: (1) get_project_home — architecture snapshot; (2) query_similar_functions / get_impact_radius / get_decision_history — function context; (3) Read — only for the exact lines you are about to modify. Never read files to understand structure; use Scopenos tools instead. Use on any Scopenos-indexed project."
 ---
 
-# Phronosis Workflow
+# Scopenos Workflow
 
 ## Session Start — Three-Tier Retrieval Ladder
 

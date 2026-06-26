@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook — Phronosis workflow enforcement.
+PreToolUse hook — Scopenos workflow enforcement.
 
 Fires on: Bash (grep), Read (source files), Edit (source files)
 
-Bash:  nudge toward Phronosis tools instead of grep-based exploration.
-Read:  gate — blocks the first read of a session, calls Phronosis itself,
+Bash:  nudge toward Scopenos tools instead of grep-based exploration.
+Read:  gate — blocks the first read of a session, calls Scopenos itself,
        prints the architectural summary, then defers ("review the above
        then retry"). Gate valid for 30 min; subsequent reads pass silently.
 Edit:  hard risk-signal check — warns on chokepoints and risk-surface
-       functions with the three pre-edit Phronosis calls to run first.
+       functions with the three pre-edit Scopenos calls to run first.
 
 Gate strategy:
   - First Read of a session on a source file → hook fetches project_home,
-    prints it, writes ~/.claude/phronosis_gates/{project_id}, exits 2 (blocks).
+    prints it, writes ~/.claude/scopenos_gates/{project_id}, exits 2 (blocks).
   - Retry Read in same session → gate exists, exits 0 (allows).
   - Gate expires after GATE_TTL seconds → next Read re-fetches and re-gates.
-  - Phronosis unreachable → silent pass (never block when the server is down).
+  - Scopenos unreachable → silent pass (never block when the server is down).
 """
 import json
 import os
@@ -25,17 +25,17 @@ import sys
 import time
 import urllib.request
 
-PHRONOSIS_URL = os.environ.get("PHRONOSIS_URL", "http://100.71.88.106:3004")
+SCOPENOS_URL = os.environ.get("SCOPENOS_URL", "http://100.71.88.106:3004")
 TIMEOUT = 3
 GATE_TTL = 1800  # 30 minutes
-_GATE_DIR = os.path.expanduser("~/.claude/phronosis_gates")
+_GATE_DIR = os.path.expanduser("~/.claude/scopenos_gates")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _project_id() -> str:
     """Resolve project ID from env, git remote, or repo dirname."""
-    pid = os.environ.get("PHRONOSIS_PROJECT", "")
+    pid = os.environ.get("SCOPENOS_PROJECT", "")
     if pid:
         return pid
     try:
@@ -59,10 +59,10 @@ def _project_id() -> str:
 
 
 def _get_project_home(project_id: str) -> dict:
-    """Fetch the Phronosis project home snapshot; returns empty dict on any error."""
+    """Fetch the Scopenos project home snapshot; returns empty dict on any error."""
     try:
         safe = urllib.request.quote(project_id, safe="")
-        url = f"{PHRONOSIS_URL}/api/project-home/{safe}"
+        url = f"{SCOPENOS_URL}/api/project-home/{safe}"
         with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
             return json.loads(r.read())
     except Exception:
@@ -120,11 +120,11 @@ try:
             and not re.search(r"\b(git|pytest|rtk|ruff|mypy|test)\b", cmd)
         ):
             print(
-                "[Phronosis] grep on source — MCP is faster and cross-file:\n"
+                "[Scopenos] grep on source — MCP is faster and cross-file:\n"
                 "  get_callers(fn) · get_callees(fn) · query_similar_functions(snippet)"
             )
 
-    # ── Read: gate — fetch Phronosis context on first access, block until seen ─────
+    # ── Read: gate — fetch Scopenos context on first access, block until seen ─────
     elif tool == "Read":
         path = inp.get("file_path", "")
         if not re.search(r"\.(py|ts|tsx|js|jsx)$", path):
@@ -140,18 +140,18 @@ try:
             # Gate is fresh — pass silently
             sys.exit(0)
 
-        # Gate expired or absent — fetch Phronosis context, display it, then block.
+        # Gate expired or absent — fetch Scopenos context, display it, then block.
         home = _get_project_home(project_id)
         if not home:
-            # Phronosis unreachable — nudge only, never hard-block
+            # Scopenos unreachable — nudge only, never hard-block
             print(
-                "[Phronosis] Reading source — if exploring structure, MCP is faster:\n"
+                "[Scopenos] Reading source — if exploring structure, MCP is faster:\n"
                 "  get_impact_radius(fn) · get_decision_history(fn) · get_callers(fn)"
             )
             sys.exit(0)
 
         # Print architectural summary so the agent actually sees it
-        print(f"[Phronosis] Architectural context — {project_id} "
+        print(f"[Scopenos] Architectural context — {project_id} "
               f"({home.get('function_count', '?')} functions)")
         print(f"  Chokepoints : {_fmt_ids(home.get('chokepoints', []))}")
         print(f"  Risk surface: {_fmt_ids(home.get('risk_surface', []))}")
@@ -170,7 +170,7 @@ try:
                   f"({gaps[0].get('caller_count', 0)} callers, no docstring/decisions)")
 
         print()
-        print("[Phronosis] Context loaded. Retry your Read — this message won't repeat "
+        print("[Scopenos] Context loaded. Retry your Read — this message won't repeat "
               f"for {GATE_TTL // 60} minutes.")
 
         # Write gate so the immediate retry passes
@@ -192,7 +192,7 @@ try:
         if not home:
             sys.exit(0)
 
-        # A successful Edit-time Phronosis call also refreshes the gate
+        # A successful Edit-time Scopenos call also refreshes the gate
         _write_gate(project_id)
 
         warnings = []
@@ -214,7 +214,7 @@ try:
                 )
 
         if warnings:
-            print(f"[Phronosis] High-risk edit in {os.path.basename(path)}:")
+            print(f"[Scopenos] High-risk edit in {os.path.basename(path)}:")
             for w in warnings:
                 print(w)
             print("  Before editing, run:")
@@ -224,7 +224,7 @@ try:
         else:
             fn_hint = module.split(".")[-1] if module else "fn"
             print(
-                f"[Phronosis] Pre-edit: get_impact_radius({fn_hint}) · "
+                f"[Scopenos] Pre-edit: get_impact_radius({fn_hint}) · "
                 f"get_decision_history({fn_hint}) · "
                 f"query_similar_functions(snippet)"
             )

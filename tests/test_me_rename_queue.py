@@ -229,7 +229,7 @@ async def test_queue_depth_allows_jobs_under_limit(monkeypatch):
 
     job = server_mod._check_and_enqueue("user-1", noop, job_timeout=60)
     assert job is not None
-    assert fake_redis.zcard("phronosis:user_queue_depth:user-1") == 1
+    assert fake_redis.zcard("scopenos:user_queue_depth:user-1") == 1
 
 
 @_fakeredis_mark

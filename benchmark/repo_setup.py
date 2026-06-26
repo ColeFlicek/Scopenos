@@ -1,6 +1,6 @@
 """
 Clone a repo at a specific commit, create a venv, and optionally index it
-with Phronosis via the HTTP API (no direct Postgres access needed).
+with Scopenos via the HTTP API (no direct Postgres access needed).
 
 Clone strategy: one shared base clone per repo (full history), then
 git worktree per task. Avoids re-downloading the full repo for every task.
@@ -26,11 +26,11 @@ _base_clones: dict[str, str] = {}
 # indexed commits: base_commit → project_id (skip re-index if same commit appears twice)
 _indexed_commits: dict[str, str] = {}
 
-PHRONOSIS_URL = os.getenv("PHRONOSIS_URL", "http://100.71.88.106:3004")
-PHRONOSIS_API_KEY = os.getenv("PHRONOSIS_API_KEY", "")
+SCOPENOS_URL = os.getenv("SCOPENOS_URL", "http://100.71.88.106:3004")
+SCOPENOS_API_KEY = os.getenv("SCOPENOS_API_KEY", "")
 
 # Persistent base-clone location (survives across Python sessions via disk)
-_BASE_CLONE_ROOT = Path(os.getenv("BENCH_CLONE_ROOT", "/tmp/phronosis-bench-base"))
+_BASE_CLONE_ROOT = Path(os.getenv("BENCH_CLONE_ROOT", "/tmp/scopenos-bench-base"))
 
 
 @dataclass
@@ -38,16 +38,16 @@ class RepoContext:
     task: BenchmarkTask
     repo_path: str        # absolute path to the worktree for this task
     venv_python: str      # absolute path to venv python binary
-    project_id: str       # Phronosis project_id (Path B only, else "")
-    phronosis_indexed: bool
+    project_id: str       # Scopenos project_id (Path B only, else "")
+    scopenos_indexed: bool
 
 
 def setup_repo(
     task: BenchmarkTask,
     *,
-    phronosis_index: bool = False,
+    scopenos_index: bool = False,
     workdir: str | None = None,
-    phronosis_dsn: str = "",
+    scopenos_dsn: str = "",
 ) -> RepoContext:
     """
     Set up an isolated working directory for a benchmark task.
@@ -61,7 +61,7 @@ def setup_repo(
     base_clone = _ensure_base_clone(task.repo, slug)
 
     # Worktree path — one per task, in the workdir or a temp dir
-    parent = workdir or tempfile.mkdtemp(prefix="phronosis-bench-")
+    parent = workdir or tempfile.mkdtemp(prefix="scopenos-bench-")
     worktree_path = os.path.join(parent, task.instance_id)
 
     if not os.path.exists(worktree_path):
@@ -79,8 +79,8 @@ def setup_repo(
 
     project_id = ""
     indexed = False
-    if phronosis_index:
-        project_id = _ensure_indexed(task, worktree_path, base_clone, dsn=phronosis_dsn)
+    if scopenos_index:
+        project_id = _ensure_indexed(task, worktree_path, base_clone, dsn=scopenos_dsn)
         indexed = True
 
     return RepoContext(
@@ -88,7 +88,7 @@ def setup_repo(
         repo_path=worktree_path,
         venv_python=venv_python,
         project_id=project_id,
-        phronosis_indexed=indexed,
+        scopenos_indexed=indexed,
     )
 
 
@@ -214,14 +214,14 @@ def _create_venv(repo_path: str) -> str:
 
 def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn: str = "") -> str:
     """
-    Index the repo with Phronosis via /api/index-bulk.
+    Index the repo with Scopenos via /api/index-bulk.
     Only sends src/**/*.py files — test files are not needed for call graph nav.
     Reuses the index if this commit was already indexed this session.
     If dsn is provided, seeds co_change history from the canonical source project.
     """
     commit = task.base_commit
     if commit in _indexed_commits:
-        print(f"[setup] reusing Phronosis index for {commit[:8]}")
+        print(f"[setup] reusing Scopenos index for {commit[:8]}")
         return _indexed_commits[commit]
 
     project_id = f"bench-{task.instance_id}"
@@ -235,7 +235,7 @@ def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn
             if "/.bench-venv/" not in f and "/test" not in f.split(repo_path)[-1][:20]
         ]
 
-    print(f"[setup] sending {len(src_files)} source files to Phronosis…")
+    print(f"[setup] sending {len(src_files)} source files to Scopenos…")
 
     batch_size = 50
     total_fns = 0
@@ -257,11 +257,11 @@ def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn
         }).encode()
 
         req = urllib.request.Request(
-            f"{PHRONOSIS_URL}/api/index-bulk",
+            f"{SCOPENOS_URL}/api/index-bulk",
             data=payload,
             headers={
                 "Content-Type": "application/json",
-                "X-API-Key": PHRONOSIS_API_KEY,
+                "X-API-Key": SCOPENOS_API_KEY,
             },
             method="POST",
         )

@@ -7,7 +7,7 @@ from typing import Any
 
 
 def _data_dir() -> Path:
-    """Return the directory containing the Phronosis SQLite database."""
+    """Return the directory containing the Scopenos SQLite database."""
     return Path(os.getenv("SQLITE_PATH", "/data/call_graph.db")).parent
 
 

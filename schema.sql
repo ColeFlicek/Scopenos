@@ -1,6 +1,14 @@
--- Phronosis Postgres schema
--- Run once per database: psql -d phronosis -f schema.sql
--- pgvector extension is created here; requires superuser (POSTGRES_USER is superuser in Docker/K8s).
+-- DEPRECATED: schema.sql is superseded by the split schema files.
+-- Do not apply this file to new databases.
+--
+--   schema_control_plane.sql  →  scopenos_control database (auth plane)
+--   schema_org.sql            →  org_{slug} databases (one per org)
+--   schema_demos.sql          →  demos database
+--
+-- This file is retained only as a migration reference.
+-- The server now applies schema_org.sql via CallGraphDB.init().
+
+-- Scopenos Postgres schema (DEPRECATED — see above)
 CREATE EXTENSION IF NOT EXISTS vector;
 -- In local dev, run: scripts/setup_db.sh
 

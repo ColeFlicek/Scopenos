@@ -49,7 +49,7 @@ paths and resolve them against the project root.
 
 ### 3. 🔧 `check_performance` too noisy — flags test code and batch operations
 
-57 new findings on Phronosis itself, including:
+57 new findings on Scopenos itself, including:
 - Test helper functions (`_seed`, `_seed_project`) in test files
 - Batch operations correctly using `executemany` (7 auto-acknowledged, but 20+ remain)
 - The `check_performance` function itself flagged as N+1
@@ -58,25 +58,25 @@ Before Phase 17: either filter `tests/` by default, or pre-dismiss the known fal
 positives in test and batch code. Agents seeing 57 "high severity" findings on a clean
 codebase will lose trust in the tool.
 
-### 4. 🔧 `setup_phronosis_client` hardcodes `http://localhost:3004`
+### 4. 🔧 `setup_scopenos_client` hardcodes `http://localhost:3004`
 
-The generated setup script and CLAUDE.md always contain `PHRONOSIS_URL = "http://localhost:3004"`
-regardless of the actual server URL. Users connecting to a hosted Phronosis instance
-(e.g. `https://api.phronosis.dev`) will get scripts pointing to localhost.
+The generated setup script and CLAUDE.md always contain `SCOPENOS_URL = "http://localhost:3004"`
+regardless of the actual server URL. Users connecting to a hosted Scopenos instance
+(e.g. `https://api.scopenos.dev`) will get scripts pointing to localhost.
 
-**Fix:** Use the actual request URL or a `PHRONOSIS_URL` env var when generating the script.
+**Fix:** Use the actual request URL or a `SCOPENOS_URL` env var when generating the script.
 
 ### 5. 🔧 `list_external_dependencies` / `get_library_dependents` return empty without explanation
 
 Both return `[]` when SCIP augmentation hasn't been run. No `_guidance` note explains why.
-A user calling `get_library_dependents("asyncpg", "Phronosis")` gets an empty result with
+A user calling `get_library_dependents("asyncpg", "Scopenos")` gets an empty result with
 no indication that asyncpg IS used heavily throughout the codebase — just not tracked as
 external nodes because SCIP hasn't run.
 
 **Fix:** Add a `_guidance` note: "External dependency data requires SCIP augmentation.
 Run `index_project` on a codebase where `scip-python` is installed to populate this."
 
-### 6. 🔧 `get_dependency_fingerprint` returns 0 libraries for Phronosis itself
+### 6. 🔧 `get_dependency_fingerprint` returns 0 libraries for Scopenos itself
 
 Same root cause as #5. The tool works and returns correct schema, but the data is empty.
 **Fix:** Same as #5 — surface the "no SCIP data" signal explicitly.
@@ -123,7 +123,7 @@ Network-restrict port 3004 to trusted IP ranges before public launch."
 | `check_contracts` | Returns empty violations correctly |
 | `list_improvements` | Returns empty when no open improvements |
 | `check_performance` | Works, returns findings with structural_causes — needs noise reduction (#3) |
-| `setup_phronosis_client` | Generates correct hooks, settings, CLAUDE.md, memory, skill — URL issue (#4) |
+| `setup_scopenos_client` | Generates correct hooks, settings, CLAUDE.md, memory, skill — URL issue (#4) |
 | `log_decision` | Auth protected via `check_permission` ✅ |
 | `index_project` | Auth protected ✅ |
 | `index_changes` | Auth protected ✅ |
@@ -222,9 +222,9 @@ used by the UI return correct responses; the risk is rendering bugs.
 
 | Hook | Status |
 |---|---|
-| `phronosis-suggest.py` (PreToolUse: Bash/Read/Edit) | Installed at `~/.claude/hooks/`. Fires on every Edit with chokepoint/risk-surface warnings. Gate valid 30 min. ✅ |
-| `phronosis-post-edit.py` (PostToolUse: Edit) | Auto-indexes edited `.py/.ts/.tsx` files in background. Template staleness warnings. ✅ |
-| `phronosis-push-review.py` (PostToolUse: git push?) | Exists at `~/.claude/hooks/`. Not tested this session. ⚠️ |
+| `scopenos-suggest.py` (PreToolUse: Bash/Read/Edit) | Installed at `~/.claude/hooks/`. Fires on every Edit with chokepoint/risk-surface warnings. Gate valid 30 min. ✅ |
+| `scopenos-post-edit.py` (PostToolUse: Edit) | Auto-indexes edited `.py/.ts/.tsx` files in background. Template staleness warnings. ✅ |
+| `scopenos-push-review.py` (PostToolUse: git push?) | Exists at `~/.claude/hooks/`. Not tested this session. ⚠️ |
 | Post-commit git hook | Installed at `.git/hooks/post-commit`. Fires on commits — confirmed from output during today's commits. ✅ |
 
 ---
@@ -245,7 +245,7 @@ used by the UI return correct responses; the risk is rendering bugs.
 1. HTTP write endpoints — no auth — including delete project
 2. LSP tools — path resolution broken for remote clients
 3. `check_performance` — too noisy for first-time users
-4. `setup_phronosis_client` — hardcodes localhost URL
+4. `setup_scopenos_client` — hardcodes localhost URL
 5. `list_external_dependencies` + `get_library_dependents` — empty without explanation
 6. `get_dependency_fingerprint` — empty without explanation
 

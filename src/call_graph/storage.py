@@ -125,25 +125,52 @@ class _QueryContext:
         pass
 
 
-# Schema is in schema.sql — applied at init() via asyncpg.
+# Org database schema applied at init() via asyncpg.
+# schema_org.sql creates public-schema org tables and the create_project_schema()
+# / drop_project_schema() PL/pgSQL functions. Per-project schemas are created
+# on demand by CallGraphDB.create_project_schema().
+
+_DEFAULT_DSN = "postgresql://scopenos:scopenos@localhost/scopenos"
+_SCHEMA_SQL = Path(__file__).parent.parent.parent / "schema_org.sql"
 
 
-_DEFAULT_DSN = "postgresql://phronosis:phronosis@localhost/phronosis"
-_SCHEMA_SQL = Path(__file__).parent.parent.parent / "schema.sql"
+def derive_schema_name(project_id: str) -> str:
+    """Derive a valid PostgreSQL schema name from a project slug.
+
+    Rules:
+    - Replace all non-alphanumeric characters with underscores
+    - Ensure the name starts with a letter (prefix 'p' if it starts with a digit)
+    - Truncate to 63 characters (Postgres identifier limit)
+    - Result is always lowercase
+    """
+    import re
+    slug = re.sub(r"[^a-zA-Z0-9]", "_", project_id).lower()
+    if slug and slug[0].isdigit():
+        slug = "p" + slug
+    return slug[:63] or "project"
 
 
 class CallGraphDB:
-    def __init__(self, dsn: str) -> None:
-        """Store the DSN; connection pool is opened by init()."""
+    def __init__(self, dsn: str, schema: str = "") -> None:
+        """Store the DSN and optional project schema; connection pool opened by init().
+
+        schema: the Postgres schema for per-project tables (e.g. 'django').
+                When set, all connections use SET search_path TO "{schema}", public
+                so unqualified table names resolve to the project schema first,
+                then fall back to public for org-level tables.
+                Leave empty to use the default search_path (public only).
+        """
         self._dsn = dsn
+        self._schema = schema
         self._pool: asyncpg.Pool | None = None
         self._db: _DB | None = None
+        self._project_dbs: dict[str, "CallGraphDB"] = {}
 
     @classmethod
-    async def create(cls, dsn: str = "") -> "CallGraphDB":
+    async def create(cls, dsn: str = "", schema: str = "") -> "CallGraphDB":
         """Async factory — create and fully initialize a CallGraphDB instance."""
         resolved = dsn or os.getenv("DATABASE_URL", _DEFAULT_DSN)
-        obj = cls(resolved)
+        obj = cls(resolved, schema=schema)
         await obj.init()
         return obj
 
@@ -153,20 +180,35 @@ class CallGraphDB:
 
         # Bootstrap the extension before the pool so register_vector succeeds
         # on each connection's init callback (it does a type lookup on vector).
+        # Silently ignores InsufficientPrivilegeError — the extension is pre-created
+        # by the provisioner (superuser) and may already exist.
         bootstrap = await asyncpg.connect(self._dsn)
         try:
             await bootstrap.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except asyncpg.exceptions.InsufficientPrivilegeError:
+            pass  # extension already created by provisioner; non-superuser can't re-create
         finally:
             await bootstrap.close()
 
+        _schema = self._schema
+
         async def _init_conn(conn: asyncpg.Connection) -> None:
             await register_vector(conn)
+
+        async def _setup_conn(conn: asyncpg.Connection) -> None:
+            if _schema:
+                # Re-applied on every acquire because asyncpg resets session state
+                # (including search_path) when a connection is released to the pool.
+                # search_path routes per-project table reads/writes to the project
+                # schema first, falling back to public for org-level tables.
+                await conn.execute(f'SET search_path TO "{_schema}", public')
 
         self._pool = await asyncpg.create_pool(
             self._dsn,
             min_size=2,
             max_size=10,
             init=_init_conn,
+            setup=_setup_conn,
             # Recycle idle connections every 5 minutes so stale connections
             # after a Postgres restart are replaced rather than hanging indefinitely.
             max_inactive_connection_lifetime=300.0,
@@ -174,44 +216,129 @@ class CallGraphDB:
             command_timeout=30.0,
         )
         self._db = _DB(self._pool)
-        schema = _SCHEMA_SQL.read_text()
+        schema_sql = _SCHEMA_SQL.read_text()
         async with self._pool.acquire() as conn:
-            await conn.execute(schema)
+            await conn.execute(schema_sql)
 
     async def close(self) -> None:
-        """Close the connection pool."""
+        """Close the connection pool and all cached project-scoped pools."""
+        for pdb in list(self._project_dbs.values()):
+            if pdb._db:
+                await pdb._db.close()
+        self._project_dbs.clear()
         if self._db:
             await self._db.close()
+
+    async def project_db(self, schema_name: str) -> "CallGraphDB":
+        """Return a project-scoped CallGraphDB whose pool has search_path set to schema_name.
+
+        Pools are cached by schema_name on this instance so repeated calls for
+        the same project reuse the same pool without reconnecting. The schema
+        must already exist — call create_project_schema() first.
+        """
+        if schema_name in self._project_dbs:
+            return self._project_dbs[schema_name]
+
+        from pgvector.asyncpg import register_vector as _rv
+        _s = schema_name
+
+        async def _init_conn(conn: asyncpg.Connection) -> None:
+            await _rv(conn)
+
+        async def _setup_conn(conn: asyncpg.Connection) -> None:
+            await conn.execute(f'SET search_path TO "{_s}", public')
+
+        pool = await asyncpg.create_pool(
+            self._dsn,
+            min_size=1,
+            max_size=5,
+            init=_init_conn,
+            setup=_setup_conn,
+            max_inactive_connection_lifetime=300.0,
+            command_timeout=30.0,
+        )
+        db = CallGraphDB.__new__(CallGraphDB)
+        db._dsn = self._dsn
+        db._schema = schema_name
+        db._pool = pool
+        db._db = _DB(pool)
+        db._project_dbs = {}   # project-scoped DBs don't nest
+        self._project_dbs[schema_name] = db
+        return db
+
+    async def create_project_schema(self, schema_name: str) -> None:
+        """Create the project schema if it doesn't already exist (idempotent)."""
+        await self._db.execute("SELECT create_project_schema(?)", (schema_name,))
+
+    async def get_schema_name_for_project(self, project_id: str) -> str:
+        """Look up the stored schema_name for a project, falling back to derive_schema_name."""
+        async with self._db.execute(
+            "SELECT schema_name FROM projects WHERE id = ?", (project_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row and row["schema_name"]:
+            return str(row["schema_name"])
+        return derive_schema_name(project_id)
+
+    async def _project_scoped(self, project_id: str) -> "CallGraphDB":
+        """Return a project-scoped CallGraphDB for the given project_id.
+
+        If this instance already has a schema set (it IS a project-scoped DB),
+        return self — no re-routing needed. Otherwise look up (or derive) the
+        project schema name and return a cached project_db instance.
+
+        This is the standard way for read methods to transparently route to the
+        correct schema without the caller needing to know about schema routing.
+        """
+        if self._schema:
+            return self
+        schema_name = await self.get_schema_name_for_project(project_id)
+        return await self.project_db(schema_name)
 
     # ── Projects ───────────────────────────────────────────────────────────
 
     async def upsert_project(
-        self, project_id: str, name: str, root: str = "",
-        branch: str = "", head_commit: str = "",
+        self,
+        project_id: str,
+        name: str,
+        root: str = "",
+        branch: str = "",
+        head_commit: str = "",
+        schema_name: str = "",
+        node_count: int | None = None,
+        edge_count: int | None = None,
     ) -> None:
         """Insert or update a project record, refreshing the last_indexed timestamp."""
         now = datetime.now(timezone.utc).isoformat()
+        sname = schema_name or self._schema or derive_schema_name(project_id)
+        count_clause = ""
+        count_params: tuple = ()
+        if node_count is not None and edge_count is not None:
+            count_clause = ", node_count=excluded.node_count, edge_count=excluded.edge_count"
+            count_params = (node_count, edge_count)
         await self._db.execute(
-            """INSERT INTO projects(id, name, root, branch, head_commit, created_at, last_indexed)
-               VALUES(?, ?, ?, ?, ?, ?, ?)
+            f"""INSERT INTO projects(id, name, root, branch, head_commit, schema_name, created_at, last_indexed{', node_count, edge_count' if count_params else ''})
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?{', ?, ?' if count_params else ''})
                ON CONFLICT(id) DO UPDATE SET
                    name=excluded.name, root=excluded.root,
                    branch=excluded.branch, head_commit=excluded.head_commit,
-                   last_indexed=excluded.last_indexed""",
-            (project_id, name, root, branch, head_commit, now, now),
+                   schema_name=excluded.schema_name,
+                   last_indexed=excluded.last_indexed{count_clause}""",
+            (project_id, name, root, branch, head_commit, sname, now, now, *count_params),
         )
         await self._db.commit()
+        # Ensure the project schema exists (idempotent — IF NOT EXISTS inside function)
+        await self._db.execute("SELECT create_project_schema(?)", (sname,))
 
     async def list_projects(self) -> list[dict]:
         """Return all registered projects with node and edge counts."""
         async with self._db.execute(
             """
-            SELECT p.id, p.name, p.root, p.branch, p.head_commit,
-                   p.created_at, p.last_indexed,
-                   (SELECT COUNT(*) FROM nodes n WHERE n.project_id = p.id) AS node_count,
-                   (SELECT COUNT(*) FROM edges e WHERE e.project_id = p.id) AS edge_count
-            FROM projects p
-            ORDER BY p.created_at
+            SELECT id, name, root, branch, head_commit, schema_name,
+                   is_fork, parent_schema, created_at, last_indexed,
+                   node_count, edge_count
+            FROM projects
+            ORDER BY created_at
             """
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
@@ -377,7 +504,7 @@ class CallGraphDB:
         async with self._db.execute(
             """
             SELECT p.id, p.name, p.root, p.last_indexed, pa.role,
-                   (SELECT COUNT(*) FROM nodes n WHERE n.project_id = p.id) AS node_count
+                   p.schema_name, p.node_count, p.edge_count
             FROM project_access pa
             JOIN projects p ON p.id = pa.project_id
             WHERE pa.user_id = ?
@@ -390,7 +517,7 @@ class CallGraphDB:
         async with self._db.execute(
             """
             SELECT p.id, p.name, '' AS root, p.last_indexed, 'viewer' AS role,
-                   (SELECT COUNT(*) FROM nodes n WHERE n.project_id = p.id) AS node_count
+                   p.schema_name, p.node_count, p.edge_count
             FROM demo_projects dp
             JOIN projects p ON p.id = dp.project_id
             ORDER BY p.last_indexed DESC
@@ -401,31 +528,29 @@ class CallGraphDB:
         return private + demos
 
     async def delete_project(self, project_id: str) -> dict:
-        """Delete all data for a project: nodes, edges, decisions, snapshots, violations."""
+        """Delete a project by dropping its schema and removing the projects row.
+
+        Uses drop_project_schema() SQL function which does DROP SCHEMA CASCADE,
+        removing all per-project tables atomically. Contracts referencing this
+        project are updated to remove it from their project_ids list.
+        """
         import json
-        async with self._db.execute(
-            "SELECT COUNT(*) FROM nodes WHERE project_id = ?", (project_id,)
-        ) as cur:
-            node_count = (await cur.fetchone())[0]
-        async with self._db.execute(
-            "SELECT COUNT(*) FROM edges WHERE project_id = ?", (project_id,)
-        ) as cur:
-            edge_count = (await cur.fetchone())[0]
 
-        await self._db.execute("DELETE FROM nodes WHERE project_id = ?", (project_id,))
-        await self._db.execute("DELETE FROM edges WHERE project_id = ?", (project_id,))
-        await self._db.execute("DELETE FROM decisions WHERE project_id = ?", (project_id,))
-        await self._db.execute("DELETE FROM contract_violations WHERE project_id = ?", (project_id,))
-        await self._db.execute("DELETE FROM agent_improvements WHERE project_id = ?", (project_id,))
-        await self._db.execute("DELETE FROM project_home_snapshots WHERE project_id = ?", (project_id,))
-
-        # Remove project_id from any contracts that reference it.
+        # Capture counts before deletion for the response
         async with self._db.execute(
-            "SELECT id, project_ids FROM contracts", ()
+            "SELECT schema_name, node_count, edge_count FROM projects WHERE id = ?",
+            (project_id,),
         ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return {"project_id": project_id, "nodes_deleted": 0, "edges_deleted": 0}
+        schema_name, node_count, edge_count = row["schema_name"], row["node_count"], row["edge_count"]
+
+        # Remove project from any contracts that reference it
+        async with self._db.execute("SELECT id, project_ids FROM contracts") as cur:
             contracts = await cur.fetchall()
-        for row in contracts:
-            cid, pids_json = row
+        for crow in contracts:
+            cid, pids_json = crow
             pids = json.loads(pids_json or "[]")
             if project_id in pids:
                 pids.remove(project_id)
@@ -434,9 +559,155 @@ class CallGraphDB:
                     (json.dumps(pids), cid),
                 )
 
-        await self._db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        # Drop the project schema (CASCADE removes all per-project tables) and
+        # the projects row. drop_project_schema() is a SQL function in schema_org.sql.
+        if schema_name:
+            await self._db.execute("SELECT drop_project_schema(?)", (schema_name,))
+        else:
+            await self._db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         await self._db.commit()
         return {"project_id": project_id, "nodes_deleted": node_count, "edges_deleted": edge_count}
+
+    async def create_project_schema(self, schema_name: str) -> None:
+        """Create a new per-project schema with all required tables.
+
+        Calls the create_project_schema() SQL function defined in schema_org.sql.
+        Safe to call multiple times (uses CREATE SCHEMA IF NOT EXISTS internally).
+        """
+        await self._db.execute("SELECT create_project_schema(?)", (schema_name,))
+        await self._db.commit()
+
+    async def fork_schema(
+        self,
+        parent_schema: str,
+        fork_schema_name: str,
+        skip_tables: list[str] | None = None,
+    ) -> None:
+        """Create a fork schema by copying structural tables from the parent.
+
+        Tables copied: nodes, edges, function_embeddings, module_patterns,
+            commit_function_changes, branch_function_changes, dependency_fingerprints,
+            project_home_snapshots, schema_object_embeddings, agent_improvements.
+
+        Tables NOT copied (fork starts empty):
+            decisions, decision_embeddings, decision_functions,
+            contracts, contract_violations, contract_examples.
+        """
+        _skip = set(skip_tables or [
+            "decisions", "decision_embeddings", "decision_functions",
+        ])
+
+        _copy_tables = [
+            "nodes", "edges", "function_embeddings", "module_patterns",
+            "commit_function_changes", "branch_function_changes",
+            "dependency_fingerprints", "project_home_snapshots",
+            "schema_object_embeddings", "agent_improvements",
+        ]
+
+        async with self._pool.acquire() as conn:
+            # Create the fork schema with all empty tables
+            await conn.execute("SELECT create_project_schema($1)", fork_schema_name)
+
+            # Copy structural tables from parent
+            for table in _copy_tables:
+                if table not in _skip:
+                    await conn.execute(
+                        f'INSERT INTO "{fork_schema_name}".{table} '
+                        f'SELECT * FROM "{parent_schema}".{table}'
+                    )
+        await self._db.commit()
+
+    # ── Fork schema helpers (pool access isolated here) ────────────────────
+
+    async def get_node_hashes_in_schema(
+        self, schema_name: str, file_paths: list[str]
+    ) -> dict[str, str]:
+        """Return {node_id: body_hash} for nodes in the given files within schema_name."""
+        if not file_paths:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f'SELECT id, body_hash FROM "{schema_name}".nodes WHERE file = ANY($1)',
+                file_paths,
+            )
+        return {str(r["id"]): str(r["body_hash"]) for r in rows}
+
+    async def upsert_nodes_into_schema(
+        self, schema_name: str, rows: list[tuple], project_id: str
+    ) -> None:
+        """Bulk-upsert node rows (already serialized) into a named schema's nodes table."""
+        if not rows:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.executemany(
+                f"""INSERT INTO "{schema_name}".nodes
+                       (project_id,id,file,module,type,name,signature,docstring,summary,
+                        body,body_hash,decorators,is_external,start_line,end_line,
+                        return_type,is_async,parameter_names,enclosing_class,structural_layer)
+                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,'',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+                    ON CONFLICT(project_id,id) DO UPDATE SET
+                        file=excluded.file, module=excluded.module, type=excluded.type,
+                        name=excluded.name, signature=excluded.signature,
+                        docstring=excluded.docstring, body=excluded.body,
+                        body_hash=excluded.body_hash,
+                        decorators=excluded.decorators, is_external=excluded.is_external,
+                        start_line=excluded.start_line, end_line=excluded.end_line,
+                        return_type=excluded.return_type, is_async=excluded.is_async,
+                        parameter_names=excluded.parameter_names,
+                        enclosing_class=excluded.enclosing_class,
+                        structural_layer=excluded.structural_layer""",
+                rows,
+            )
+
+    async def delete_nodes_from_schema_by_ids(
+        self, schema_name: str, node_ids: list[str]
+    ) -> None:
+        """Delete nodes by ID list from a named schema's nodes table."""
+        if not node_ids:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                f'DELETE FROM "{schema_name}".nodes WHERE id = ANY($1)',
+                node_ids,
+            )
+
+    async def insert_fork_project(
+        self,
+        fork_project_id: str,
+        name: str,
+        root: str,
+        head_commit: str,
+        fork_schema_name: str,
+        parent_schema: str,
+        now: str,
+    ) -> None:
+        """Insert a fork project row into public.projects with is_fork=TRUE."""
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO projects
+                       (id, name, root, branch, head_commit, schema_name,
+                        created_at, last_indexed, is_fork, parent_schema)
+                   VALUES($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9)
+                   ON CONFLICT(id) DO UPDATE SET
+                       name=excluded.name, root=excluded.root,
+                       head_commit=excluded.head_commit,
+                       schema_name=excluded.schema_name,
+                       last_indexed=excluded.last_indexed,
+                       is_fork=TRUE,
+                       parent_schema=excluded.parent_schema""",
+                fork_project_id, name, root, "", head_commit,
+                fork_schema_name, now, now, parent_schema,
+            )
+
+    async def get_project_is_fork(self, project_id: str) -> bool | None:
+        """Return is_fork for the given project, or None if project not found."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT is_fork FROM projects WHERE id = $1", project_id
+            )
+        if row is None:
+            return None
+        return bool(row["is_fork"])
 
     # ── Nodes ──────────────────────────────────────────────────────────────
 
@@ -1567,22 +1838,26 @@ class CallGraphDB:
         ) as cur:
             return {r["function_id"]: r["description"] for r in await cur.fetchall()}
 
-    async def get_db_schema(self) -> dict[str, dict]:
-        """Database schema for all public tables: columns, FK refs, and row estimates.
+    async def get_db_schema(self, schema_name: str = "") -> dict[str, dict]:
+        """Database schema for tables in the given schema: columns, FK refs, row estimates.
 
+        Defaults to self._schema if set, otherwise 'public'.
         Returns a dict keyed by table_name, each value containing:
           columns: [{name, type}, ...]
           refs_out: [table, ...]   (tables this table references via FK)
           refs_in:  [table, ...]   (tables that reference this table via FK)
           row_count: int | None    (pg_class estimate, may be -1 before ANALYZE)
         """
+        target_schema = schema_name or self._schema or "public"
+
         async with self._db.execute(
             """
             SELECT table_name, column_name, data_type
             FROM information_schema.columns
-            WHERE table_schema = 'public'
+            WHERE table_schema = ?
             ORDER BY table_name, ordinal_position
-            """
+            """,
+            (target_schema,),
         ) as cur:
             col_rows = await cur.fetchall()
 
@@ -1604,8 +1879,9 @@ class CallGraphDB:
             JOIN information_schema.key_column_usage ccu
                 ON rc.unique_constraint_name = ccu.constraint_name
             WHERE tc.constraint_type = 'FOREIGN KEY'
-              AND tc.table_schema = 'public'
-            """
+              AND tc.table_schema = ?
+            """,
+            (target_schema,),
         ) as cur:
             for r in await cur.fetchall():
                 if r["from_table"] in tables:
@@ -1618,9 +1894,10 @@ class CallGraphDB:
             SELECT relname AS table_name, reltuples::BIGINT AS row_estimate
             FROM pg_class
             WHERE relkind = 'r' AND relnamespace = (
-                SELECT oid FROM pg_namespace WHERE nspname = 'public'
+                SELECT oid FROM pg_namespace WHERE nspname = ?
             )
-            """
+            """,
+            (target_schema,),
         ) as cur:
             for r in await cur.fetchall():
                 if r["table_name"] in tables:

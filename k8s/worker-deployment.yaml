@@ -1,28 +1,28 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: phronosis-worker
-  namespace: phronosis
+  name: scopenos-worker
+  namespace: scopenos
 spec:
   replicas: 1
   revisionHistoryLimit: 2
   selector:
     matchLabels:
-      app: phronosis-worker
+      app: scopenos-worker
   template:
     metadata:
       labels:
-        app: phronosis-worker
+        app: scopenos-worker
     spec:
       containers:
-        - name: phronosis-worker
-          image: ghcr.io/coleflicek/phronosis:latest  # same image as API
+        - name: scopenos-worker
+          image: ghcr.io/coleflicek/scopenos:latest  # same image as API
           command: ["python", "-m", "src.worker"]
           envFrom:
             - secretRef:
-                name: phronosis-secrets
+                name: scopenos-secrets
             - configMapRef:
-                name: phronosis-config
+                name: scopenos-config
           resources:
             requests:
               memory: "512Mi"   # indexing is memory-hungry
