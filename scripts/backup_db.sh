@@ -18,10 +18,10 @@
 #   PG_IMAGE       Postgres Docker image   (default: postgres:16-alpine)
 #
 # Usage:
-#   DATABASE_URL="postgresql://acip:...@localhost/acip" bash scripts/backup_db.sh
+#   DATABASE_URL="postgresql://scopenos:...@localhost/scopenos" bash scripts/backup_db.sh
 #
 # Install as daily cron in Unraid's Settings → Scheduled Tasks (or crontab):
-#   0 2 * * * DATABASE_URL="postgresql://acip:...@localhost/acip" \
+#   0 2 * * * DATABASE_URL="postgresql://scopenos:...@localhost/scopenos" \
 #             /mnt/user/appdata/scopenos/scripts/backup_db.sh \
 #             >> /var/log/scopenos-backup.log 2>&1
 

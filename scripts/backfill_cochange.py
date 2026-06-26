@@ -10,7 +10,7 @@ hints in get_impact_radius responses.
 This is a one-time script per project. Re-running is safe (ON CONFLICT DO NOTHING).
 
 Usage:
-    DATABASE_URL=postgresql://acip:...@172.21.0.1/acip \\
+    DATABASE_URL=postgresql://scopenos:...@172.21.0.1/scopenos \\
         python3 scripts/backfill_cochange.py \\
         --project-id django \\
         --repo-path /tmp/scopenos-demos/django
@@ -312,7 +312,7 @@ def main() -> None:
         print(
             "ERROR: DATABASE_URL not set.\n"
             "Export it before running:\n"
-            "  export DATABASE_URL=postgresql://acip:PASSWORD@HOST/acip",
+            "  export DATABASE_URL=postgresql://scopenos:PASSWORD@HOST/scopenos",
             file=sys.stderr,
         )
         sys.exit(1)

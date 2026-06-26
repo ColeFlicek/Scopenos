@@ -91,7 +91,7 @@ SQL
         ;;
 
     test)
-        DB_NAME="${TEST_DB_NAME:-phronosis_test}"
+        DB_NAME="${TEST_DB_NAME:-scopenos_test}"
         echo "[grant] Granting scopenos_test_runner on ${DB_NAME}..."
         "${PSQL[@]}" -d "$DB_NAME" <<SQL
 GRANT CONNECT ON DATABASE "${DB_NAME}" TO scopenos_test_runner;

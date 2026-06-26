@@ -9,7 +9,7 @@
 #   scopenos_control_rw   — LOGIN, read/write on the scopenos_control database.
 #   scopenos_demos_writer — LOGIN, read/write on the demos database.
 #   scopenos_demos_reader — LOGIN, read-only on the demos database.
-#   scopenos_test_runner  — LOGIN, read/write on phronosis_test, read on demos.
+#   scopenos_test_runner  — LOGIN, read/write on scopenos_test, read on demos.
 #
 # Usage:
 #   CONTROL_RW_PASSWORD=... DEMOS_WRITER_PASSWORD=... \
