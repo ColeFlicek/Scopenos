@@ -1,0 +1,127 @@
+---
+# Scopenos Claude Code session RBAC
+#
+# Two sessions need kubeconfig access — reader and deployer.
+# All other sessions (indexer, migrator, tester, provisioner) have no kubectl access.
+#
+# Apply once:
+#   kubectl apply -f k8s/session-rbac.yaml
+#
+# Then generate kubeconfigs:
+#   bash scripts/generate_session_kubeconfigs.sh
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scopenos
+
+---
+# ── scopenos-reader ───────────────────────────────────────────────────────────
+# Read-only view of the cluster. Can see pod state and logs.
+# Explicitly cannot: get secrets, exec into pods, modify anything.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scopenos-reader
+  namespace: scopenos
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scopenos-reader
+  namespace: scopenos
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  # Explicitly omitted: secrets, pods/exec, pods/portforward
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scopenos-reader
+  namespace: scopenos
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scopenos-reader
+subjects:
+  - kind: ServiceAccount
+    name: scopenos-reader
+    namespace: scopenos
+
+---
+# Long-lived token secret for scopenos-reader kubeconfig
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scopenos-reader-token
+  namespace: scopenos
+  annotations:
+    kubernetes.io/service-account.name: scopenos-reader
+type: kubernetes.io/service-account-token
+
+---
+# ── scopenos-deployer ─────────────────────────────────────────────────────────
+# Can restart deployments and read pod health/logs.
+# Explicitly cannot: get secrets, exec into pods, read configmaps, apply manifests.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scopenos-deployer
+  namespace: scopenos
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scopenos-deployer
+  namespace: scopenos
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch"]
+    # patch covers: kubectl rollout restart (sends a patch with a restart annotation)
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  # Explicitly omitted: secrets, pods/exec, pods/portforward, configmaps, create/delete/apply
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scopenos-deployer
+  namespace: scopenos
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scopenos-deployer
+subjects:
+  - kind: ServiceAccount
+    name: scopenos-deployer
+    namespace: scopenos
+
+---
+# Long-lived token secret for scopenos-deployer kubeconfig
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scopenos-deployer-token
+  namespace: scopenos
+  annotations:
+    kubernetes.io/service-account.name: scopenos-deployer
+type: kubernetes.io/service-account-token

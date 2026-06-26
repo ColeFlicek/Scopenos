@@ -5,7 +5,7 @@
 # Idempotent — GRANT is safe to re-run.
 #
 # Usage:
-#   bash scripts/grant_db_access.sh {control|demos|test|org_<slug>}
+#   bash scripts/grant_db_access.sh {control|read|migrator|demos|test|org_<slug>}
 #
 # Optional overrides:
 #   PGHOST  (default: localhost)
@@ -13,10 +13,12 @@
 #   PGUSER  (default: postgres)
 #
 # DB type → role mapping:
-#   control    → scopenos_control_rw  (CONNECT + ALL TABLES)
+#   control    → scopenos_control_rw  (CONNECT + ALL TABLES)  — scopenos-indexer session
+#   read       → scopenos_read        (CONNECT + SELECT only)  — scopenos-reader session
+#   migrator   → scopenos_migrator    (CONNECT + CREATE SCHEMA + SELECT public) — scopenos-migrator session
 #   demos      → scopenos_demos_writer (CONNECT + ALL TABLES)
 #              → scopenos_demos_reader (CONNECT + SELECT)
-#   test       → scopenos_test_runner  (CONNECT + ALL TABLES)
+#   test       → scopenos_test_runner  (CONNECT + ALL TABLES)  — scopenos-tester session
 #   org_<slug> → org_<slug>_rw        (CONNECT + ALL TABLES, created by provision_org.py)
 
 set -euo pipefail
@@ -88,6 +90,51 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE
 REVOKE CONNECT ON DATABASE "${DB_NAME}" FROM PUBLIC;
 SQL
         echo "[grant] Done: scopenos_demos_writer and scopenos_demos_reader set up on ${DB_NAME}."
+        ;;
+
+    read)
+        DB_NAME="${CONTROL_DB_NAME:-scopenos_control}"
+        echo "[grant] Granting scopenos_read (SELECT only) on ${DB_NAME}..."
+        "${PSQL[@]}" -d "$DB_NAME" <<SQL
+GRANT CONNECT ON DATABASE "${DB_NAME}" TO scopenos_read;
+GRANT USAGE ON SCHEMA public TO scopenos_read;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO scopenos_read;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO scopenos_read;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT ON TABLES TO scopenos_read;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT ON SEQUENCES TO scopenos_read;
+-- Explicitly deny writes even if a future GRANT ALL is run accidentally
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE
+    ON ALL TABLES IN SCHEMA public FROM scopenos_read;
+REVOKE CONNECT ON DATABASE "${DB_NAME}" FROM PUBLIC;
+SQL
+        echo "[grant] Done: scopenos_read has SELECT-only access to ${DB_NAME}."
+        ;;
+
+    migrator)
+        DB_NAME="${CONTROL_DB_NAME:-scopenos_control}"
+        echo "[grant] Granting scopenos_migrator (DDL, no DROP DATABASE) on ${DB_NAME}..."
+        "${PSQL[@]}" -d "$DB_NAME" <<SQL
+GRANT CONNECT ON DATABASE "${DB_NAME}" TO scopenos_migrator;
+
+-- Allow creating new schemas (required for migrate_to_schemas.py)
+GRANT CREATE ON DATABASE "${DB_NAME}" TO scopenos_migrator;
+
+-- Full access to public schema to read source data during migration
+GRANT USAGE ON SCHEMA public TO scopenos_migrator;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO scopenos_migrator;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO scopenos_migrator;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT ON TABLES TO scopenos_migrator;
+
+-- scopenos_migrator owns the schemas it creates, so no additional grants
+-- are needed for tables within those schemas.
+
+-- Deny access from PUBLIC
+REVOKE CONNECT ON DATABASE "${DB_NAME}" FROM PUBLIC;
+SQL
+        echo "[grant] Done: scopenos_migrator can CREATE SCHEMA and SELECT from public on ${DB_NAME}."
         ;;
 
     test)
