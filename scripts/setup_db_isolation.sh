@@ -28,7 +28,7 @@ set -euo pipefail
 
 : "${PGHOST:=localhost}"
 : "${PGPORT:=5432}"
-: "${PGUSER:=postgres}"
+: "${PGUSER:=acip}"
 
 : "${PROVISIONER_PASSWORD:?must set PROVISIONER_PASSWORD}"
 : "${CONTROL_RW_PASSWORD:?must set CONTROL_RW_PASSWORD}"

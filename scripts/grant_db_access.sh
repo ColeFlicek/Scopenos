@@ -25,7 +25,7 @@ set -euo pipefail
 
 : "${PGHOST:=localhost}"
 : "${PGPORT:=5432}"
-: "${PGUSER:=postgres}"
+: "${PGUSER:=acip}"
 
 DB_TYPE="${1:?Usage: $0 {control|demos|test|org_<slug>}}"
 

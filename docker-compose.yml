@@ -1,6 +1,7 @@
 services:
   postgres:
     image: pgvector/pgvector:pg17
+    container_name: scopenos-postgres
     environment:
       POSTGRES_USER: scopenos
       POSTGRES_PASSWORD: scopenos
