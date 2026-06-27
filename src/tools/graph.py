@@ -263,6 +263,11 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
             }
         else:
             out = {"impact_radius": results}
+            if len(results) > 20:
+                out["_tip"] = (
+                    f"{len(results)} nodes returned. Call with compact=True for "
+                    "a module-level summary (total, by_module, by_depth) instead."
+                )
 
         if hints:
             out["co_change_hints"] = hints
