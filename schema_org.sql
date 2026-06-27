@@ -71,6 +71,12 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS fork_commit   TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS node_count    INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS edge_count    INTEGER NOT NULL DEFAULT 0;
 
+-- ── Migrations: add org_id to api_keys for multi-tenant routing ────────────
+-- NULL = single-tenant default (routes to this org's DB, no control-plane lookup).
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id) WHERE org_id IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_projects_schema ON projects(schema_name);
 CREATE INDEX IF NOT EXISTS idx_projects_fork   ON projects(parent_schema) WHERE is_fork = TRUE;
 

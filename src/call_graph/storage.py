@@ -2103,12 +2103,12 @@ class CallGraphDB:
         return raw_key
 
     async def get_user_by_key(self, raw_key: str) -> dict | None:
-        """Look up the user for a raw API key. Returns user dict or None."""
+        """Look up the user for a raw API key. Returns user dict (with org_id) or None."""
         import hashlib
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         now = datetime.now(timezone.utc).isoformat()
         async with self._db.execute(
-            """SELECT u.id, u.email, u.plan, u.created_at
+            """SELECT u.id, u.email, u.plan, u.created_at, k.org_id
                FROM api_keys k JOIN users u ON u.id = k.user_id
                WHERE k.key_hash = ? AND k.revoked_at IS NULL""",
             (key_hash,),
@@ -2122,6 +2122,21 @@ class CallGraphDB:
         )
         await self._db.commit()
         return dict(row)
+
+    async def get_org_db_url(self, org_id: str) -> str:
+        """Return the db_url for the given org_id from the organizations table.
+
+        Returns '' if not found or if the organizations table does not exist
+        (single-tenant deployments that have not run schema_control_plane.sql).
+        """
+        try:
+            async with self._db.execute(
+                "SELECT db_url FROM organizations WHERE id = ?", (org_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            return str(row["db_url"]) if row else ""
+        except Exception:
+            return ""
 
     async def has_any_users(self) -> bool:
         """Return True if at least one user exists. Used to lock the /setup endpoint."""

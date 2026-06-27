@@ -26,7 +26,7 @@ from .embeddings.embedder import EmbeddingStore
 from .embeddings.pipeline import EmbeddingPipeline
 from .indexer import Indexer, _derive_project_id
 from .web.routes import register_routes
-from .auth import AuthMiddleware, set_auth_db, get_current_user, check_permission, require_user
+from .auth import AuthMiddleware, set_org_router, get_current_user, get_current_org_db, check_permission, require_user
 from .email_sender import get_email_sender
 from .jobs import run_enrich_summaries
 from .tools._shared import check_and_enqueue as _check_and_enqueue
@@ -45,48 +45,82 @@ class Services:
     arch: ArchitectureService | None = None
 
 
-_services: Services | None = None
+# Per-org services cache: keyed by org_id (None = single-tenant / default org).
+# Each entry holds services backed by that org's CallGraphDB pool.
+_services_cache: dict[str | None, Services] = {}
 _services_lock = asyncio.Lock()
 
 
+async def _make_services(db: CallGraphDB) -> Services:
+    """Construct a Services container backed by the given CallGraphDB."""
+    embeddings = await EmbeddingStore.create(db)
+    pipeline = EmbeddingPipeline(db, embeddings)
+    decisions = await DecisionMemory.create(db, embeddings)
+    indexer = Indexer(db, pipeline)
+    contracts = ContractManager(db, embeddings)
+    return Services(
+        db=db, embeddings=embeddings, pipeline=pipeline,
+        decisions=decisions, indexer=indexer, contracts=contracts,
+        checker=DependencyChecker(),
+        arch=ArchitectureService(db),
+    )
+
+
 async def _get_services() -> Services:
-    """Return the shared service container, initializing it on first call."""
-    global _services
-    if _services is not None:
-        return _services
+    """Return the Services for the current request's org, creating on first use.
+
+    Reads org_id from the authenticated user (set by AuthMiddleware).
+    org_id=None covers: unauthenticated requests, single-tenant mode, and
+    the initial lifespan startup call (which pre-warms the default services).
+    """
+    user = get_current_user()
+    org_id: str | None = user.get("org_id") if user else None
+
+    if org_id in _services_cache:
+        return _services_cache[org_id]
+
     async with _services_lock:
-        if _services is not None:
-            return _services
-        db = await CallGraphDB.create()
-        embeddings = await EmbeddingStore.create(db)
-        pipeline = EmbeddingPipeline(db, embeddings)
-        decisions = await DecisionMemory.create(db, embeddings)
-        indexer = Indexer(db, pipeline)
-        contracts = ContractManager(db, embeddings)
-        _services = Services(
-            db=db, embeddings=embeddings, pipeline=pipeline,
-            decisions=decisions, indexer=indexer, contracts=contracts,
-            checker=DependencyChecker(),
-            arch=ArchitectureService(db),
-        )
-    return _services
+        if org_id in _services_cache:
+            return _services_cache[org_id]
+
+        org_db = get_current_org_db()
+        if org_db is None:
+            org_db = await CallGraphDB.create()
+
+        svcs = await _make_services(org_db)
+        _services_cache[org_id] = svcs
+        return svcs
 
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
-    """FastMCP lifespan — initialize all services on startup and close DB on shutdown."""
+    """FastMCP lifespan — initialize routing + services on startup, close on shutdown."""
     from .file_watcher import start_file_watcher
-    svcs = await _get_services()
-    set_auth_db(svcs.db)
-    watcher_task = await start_file_watcher(svcs.db, svcs.indexer)
+    from .org_router import OrgRouter
+
+    router = await OrgRouter.create()
+    set_org_router(router)
+
+    # Pre-warm default (org_id=None) services using the control DB so the
+    # first request doesn't pay the initialization cost.
+    default_svcs = await _make_services(router.control_db)
+    _services_cache[None] = default_svcs
+
+    watcher_task = await start_file_watcher(default_svcs.db, default_svcs.indexer)
     yield
     watcher_task.cancel()
     try:
         await watcher_task
     except asyncio.CancelledError:
         pass
-    if _services is not None:
-        await _services.db.close()
+
+    # Close all per-org DB pools (control_db is closed by router.close()).
+    for org_id, svcs in list(_services_cache.items()):
+        if svcs.db is not router.control_db:
+            await svcs.db.close()
+    _services_cache.clear()
+    await router.close()
+    await router.control_db.close()
 
 
 # ── FastMCP server ────────────────────────────────────────────────────────────
@@ -155,7 +189,7 @@ async def http_get_functions_for_files(request: Request) -> JSONResponse:
         svcs_pre = await _get_services()
         data = await request.json()
         _pid_ff = data.get("project_id", "")
-        await _require_http_read(request, svcs_pre.db, _pid_ff)
+        await _require_http_read(svcs_pre.db, _pid_ff)
         files: list[str] = data.get("files", [])
         project_id: str | None = data.get("project_id") or None
         if not files:
