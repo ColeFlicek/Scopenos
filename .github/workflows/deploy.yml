@@ -168,6 +168,27 @@ jobs:
           kubectl rollout status deployment/scopenos-api -n scopenos --timeout=5m
           kubectl rollout status deployment/scopenos-worker -n scopenos --timeout=5m
 
+      # ── Smoke test — verify the live pod actually responds ─────────────────
+      # Tailscale is already connected above. Hit /api/health through the
+      # Tailscale IP; retry for up to 30s to allow the app to bind.
+      # On failure: roll back the API deployment before surfacing the error.
+      - name: Smoke test
+        run: |
+          echo "Waiting for app to bind..."
+          for i in $(seq 1 6); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://100.71.88.106:3004/api/health || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Smoke test passed."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Smoke test failed — rolling back API deployment."
+          kubectl rollout undo deployment/scopenos-api -n scopenos
+          kubectl rollout status deployment/scopenos-api -n scopenos --timeout=3m
+          exit 1
+
       - name: Dump pod logs on failure
         if: failure()
         run: |
