@@ -19,7 +19,9 @@ from src.auth import set_auth_db
 def make_app(db, email_sender=None):
     """Minimal ASGI app with routes under test (me, rename, signup)."""
     from fastmcp import FastMCP
+    from starlette.middleware import Middleware
     from src.web.routes import register_routes
+    from src.auth import AuthMiddleware
 
     async def get_services():
         class _Svc:
@@ -30,7 +32,7 @@ def make_app(db, email_sender=None):
 
     mcp = FastMCP("test")
     register_routes(mcp, get_services, email_sender=email_sender or (lambda *_: None))
-    return mcp.http_app()
+    return mcp.http_app(middleware=[Middleware(AuthMiddleware)])
 
 
 async def _get(app, path, headers=None):

@@ -608,9 +608,27 @@ class CallGraphDB:
             # Create the fork schema with all empty tables
             await conn.execute("SELECT create_project_schema($1)", fork_schema_name)
 
-            # Copy structural tables from parent
+            # Copy structural tables from parent, skipping generated columns
+            # (e.g. tsv tsvector GENERATED ALWAYS AS ... STORED — Postgres rejects
+            # explicit inserts into them even from a SELECT *)
             for table in _copy_tables:
-                if table not in _skip:
+                if table in _skip:
+                    continue
+                col_rows = await conn.fetch(
+                    """SELECT column_name
+                       FROM information_schema.columns
+                       WHERE table_schema = $1 AND table_name = $2
+                         AND is_generated = 'NEVER'
+                       ORDER BY ordinal_position""",
+                    parent_schema, table,
+                )
+                if col_rows:
+                    cols = ", ".join(f'"{r["column_name"]}"' for r in col_rows)
+                    await conn.execute(
+                        f'INSERT INTO "{fork_schema_name}".{table} ({cols}) '
+                        f'SELECT {cols} FROM "{parent_schema}".{table}'
+                    )
+                else:
                     await conn.execute(
                         f'INSERT INTO "{fork_schema_name}".{table} '
                         f'SELECT * FROM "{parent_schema}".{table}'

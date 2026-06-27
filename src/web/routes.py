@@ -4,6 +4,7 @@ import asyncio
 import os
 from typing import Awaitable, Callable
 
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
@@ -185,16 +186,14 @@ def register_routes(
     @mcp.custom_route("/api/me", methods=["GET"])
     async def api_me(request: Request) -> JSONResponse:
         """GET /api/me — returns the authenticated user's profile and accessible projects."""
+        from ..auth import require_user
         try:
-            raw_key = request.headers.get("X-API-Key")
-            if not raw_key:
-                return JSONResponse({"status": "error", "detail": "Authentication required"}, status_code=401)
+            user = require_user()
             svcs = await get_services()
-            user = await svcs.db.get_user_by_key(raw_key)
-            if not user:
-                return JSONResponse({"status": "error", "detail": "Invalid API key"}, status_code=401)
             projects = await svcs.db.list_user_projects(user["id"])
             return JSONResponse({"user": user, "projects": projects})
+        except HTTPException:
+            raise
         except Exception as exc:
             return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 

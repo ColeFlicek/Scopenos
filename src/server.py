@@ -26,7 +26,7 @@ from .embeddings.embedder import EmbeddingStore
 from .embeddings.pipeline import EmbeddingPipeline
 from .indexer import Indexer, _derive_project_id
 from .web.routes import register_routes
-from .auth import AuthMiddleware, set_auth_db, get_current_user, check_permission
+from .auth import AuthMiddleware, set_auth_db, get_current_user, check_permission, require_user
 from .email_sender import get_email_sender
 from .jobs import run_enrich_summaries
 from .tools._shared import check_and_enqueue as _check_and_enqueue
@@ -122,7 +122,6 @@ Use index_project_files (not index_project) when the project lives on a differen
 """
 
 mcp = FastMCP("scopenos", lifespan=lifespan, instructions=_SCOPENOS_MCP_INSTRUCTIONS)
-mcp.add_middleware(AuthMiddleware())
 register_routes(mcp, _get_services, email_sender=get_email_sender())
 
 
@@ -188,7 +187,7 @@ async def http_search(request: Request) -> JSONResponse:
         snippet    = data.get("snippet", "")
         project_id = data.get("project_id") or ""
         top_k      = int(data.get("top_k", 10))
-        await _require_http_read(request, svcs.db, project_id)
+        await _require_http_read(svcs.db, project_id)
         if not snippet:
             return JSONResponse({"results": []})
         results = await svcs.embeddings.query_similar(snippet, top_k, project_id or None)
@@ -206,7 +205,7 @@ async def http_list_projects(request: Request) -> JSONResponse:
     """GET /api/projects — returns all registered projects with stats."""
     try:
         svcs = await _get_services()
-        _user = await _require_valid_key(request, svcs.db)
+        _user = require_user()
         _accessible = await svcs.db.get_accessible_project_ids(_user["id"])
         _all = await svcs.db.list_projects()
         projects = [p for p in _all if p["id"] in _accessible]
@@ -219,20 +218,9 @@ async def http_list_projects(request: Request) -> JSONResponse:
 
 # ── HTTP auth helpers ─────────────────────────────────────────────────────────
 
-async def _require_valid_key(request: Request, db: "CallGraphDB") -> dict:
-    """Validate X-API-Key header for HTTP write endpoints. Raises 401 if missing/invalid."""
-    key = request.headers.get("X-API-Key")
-    if not key:
-        raise HTTPException(status_code=401, detail="Authentication required — include X-API-Key header")
-    user = await db.get_user_by_key(key)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return user
-
-
-async def _require_http_read(request: Request, db: "CallGraphDB", project_id: str = "") -> dict:
-    """Validate X-API-Key for HTTP GET/read endpoints; check project read access when project_id given."""
-    user = await _require_valid_key(request, db)
+async def _require_http_read(db: "CallGraphDB", project_id: str = "") -> dict:
+    """Validate auth and optionally check project read access."""
+    user = require_user()
     if project_id:
         await check_permission(user, project_id, "read", db)
     return user
@@ -253,7 +241,7 @@ async def http_index_bulk(request: Request) -> JSONResponse:
     """
     try:
         svcs = await _get_services()
-        _user = await _require_valid_key(request, svcs.db)
+        _user = require_user()
         data = await request.json()
         project_root: str = data.get("project_root", "")
         project_id: str = data.get("project_id", "") or _derive_project_id(project_root)
@@ -293,7 +281,7 @@ async def git_hook_index(request: Request) -> JSONResponse:
     """
     try:
         svcs = await _get_services()
-        await _require_valid_key(request, svcs.db)
+        require_user()
         data = await request.json()
         changed_files: list[str] = data.get("changed_files", [])
         project_root: str = data.get("project_root", "")
@@ -341,7 +329,7 @@ async def http_log_decision(request: Request) -> JSONResponse:
             return JSONResponse({"status": "error", "detail": "description required"}, status_code=400)
         project_id = data.get("project_id") or "default"
         svcs = await _get_services()
-        await _require_valid_key(request, svcs.db)
+        require_user()
         result = await svcs.decisions.log_decision(
             type=data.get("type", "Patch"),
             description=description,
@@ -365,7 +353,7 @@ async def http_list_contracts(request: Request) -> JSONResponse:
     try:
         project_id = request.query_params.get("project_id") or ""
         svcs = await _get_services()
-        await _require_http_read(request, svcs.db, project_id)
+        await _require_http_read(svcs.db, project_id)
         result = await svcs.contracts.list_contracts(project_id or None)
         return JSONResponse({"contracts": result})
     except HTTPException:
@@ -379,7 +367,7 @@ async def http_create_contract(request: Request) -> JSONResponse:
     """POST /api/contracts {title, natural_language, project_ids, function_ids}"""
     try:
         svcs = await _get_services()
-        _user = await _require_valid_key(request, svcs.db)
+        _user = require_user()
         data = await request.json()
         for _pid in data.get("project_ids") or []:
             await check_permission(_user, _pid, "write", svcs.db)
@@ -402,7 +390,7 @@ async def http_update_contract(request: Request) -> JSONResponse:
     try:
         contract_id = request.path_params["contract_id"]
         svcs = await _get_services()
-        _user = await _require_valid_key(request, svcs.db)
+        _user = require_user()
         _ct = await svcs.db.get_contract(contract_id)
         for _pid in (_ct or {}).get("project_ids") or []:
             await check_permission(_user, _pid, "write", svcs.db)
@@ -425,7 +413,7 @@ async def http_approve_contract(request: Request) -> JSONResponse:
     try:
         contract_id = request.path_params["contract_id"]
         svcs = await _get_services()
-        _user = await _require_valid_key(request, svcs.db)
+        _user = require_user()
         _ct = await svcs.db.get_contract(contract_id)
         for _pid in (_ct or {}).get("project_ids") or []:
             await check_permission(_user, _pid, "write", svcs.db)
@@ -449,7 +437,7 @@ async def http_deactivate_contract(request: Request) -> JSONResponse:
     try:
         contract_id = request.path_params["contract_id"]
         svcs = await _get_services()
-        _user = await _require_valid_key(request, svcs.db)
+        _user = require_user()
         _ct = await svcs.db.get_contract(contract_id)
         for _pid in (_ct or {}).get("project_ids") or []:
             await check_permission(_user, _pid, "write", svcs.db)
@@ -491,7 +479,7 @@ async def http_project_home(request: Request) -> JSONResponse:
     try:
         project_id = request.path_params["project_id"]
         svcs = await _get_services()
-        await _require_http_read(request, svcs.db, project_id)
+        await _require_http_read(svcs.db, project_id)
         result = await svcs.arch.get_project_home(project_id, max_age_seconds=1800)
         return JSONResponse(result)
     except HTTPException:
@@ -506,7 +494,7 @@ async def http_list_violations(request: Request) -> JSONResponse:
     try:
         project_id = request.query_params.get("project_id") or ""
         svcs = await _get_services()
-        await _require_http_read(request, svcs.db, project_id)
+        await _require_http_read(svcs.db, project_id)
         violations = await svcs.db.list_violations(project_id or None)
         return JSONResponse({"violations": violations})
     except HTTPException:
@@ -521,7 +509,7 @@ async def http_reembed_project(request: Request) -> JSONResponse:
     try:
         project_id = request.path_params["project_id"]
         svcs = await _get_services()
-        _user = await _require_valid_key(request, svcs.db)
+        _user = require_user()
         await check_permission(_user, project_id, "write", svcs.db)
         result = await svcs.indexer.reembed_project(project_id)
         return JSONResponse(result)
@@ -551,7 +539,7 @@ async def http_enrich_summaries(request: Request) -> JSONResponse:
         limit: int = int(body.get("limit", 500))
         force: bool = bool(body.get("force", False))
         svcs = await _get_services()
-        user = await _require_valid_key(request, svcs.db)
+        user = require_user()
         await check_permission(user, project_id, "write", svcs.db)
         user_id = user["id"]
         try:
@@ -597,7 +585,7 @@ async def http_list_keys(request: Request) -> JSONResponse:
     """GET /api/auth/keys — list active API keys for the authenticated user."""
     try:
         svcs = await _get_services()
-        user = await _require_valid_key(request, svcs.db)
+        user = require_user()
         keys = await svcs.db.list_api_keys(user["id"])
         return JSONResponse({"keys": keys})
     except HTTPException:
@@ -613,7 +601,7 @@ async def http_create_key(request: Request) -> JSONResponse:
     """
     try:
         svcs = await _get_services()
-        user = await _require_valid_key(request, svcs.db)
+        user = require_user()
         data = await request.json()
         name = (data.get("name") or "rotated").strip()
         revoke_current = data.get("revoke_current", True)
@@ -635,7 +623,7 @@ async def http_revoke_key(request: Request) -> JSONResponse:
     try:
         key_id = request.path_params["key_id"]
         svcs = await _get_services()
-        user = await _require_valid_key(request, svcs.db)
+        user = require_user()
         revoked = await svcs.db.revoke_api_key(key_id, user["id"])
         if not revoked:
             return JSONResponse({"detail": "Key not found or already revoked"}, status_code=404)
@@ -649,4 +637,8 @@ async def http_revoke_key(request: Request) -> JSONResponse:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=3004, stateless_http=False)
+    from starlette.middleware import Middleware
+    mcp.run(
+        transport="streamable-http", host="0.0.0.0", port=3004, stateless_http=False,
+        middleware=[Middleware(AuthMiddleware)],
+    )

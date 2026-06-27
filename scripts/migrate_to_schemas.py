@@ -93,12 +93,32 @@ async def migrate(db_url: str, dry_run: bool = True) -> None:
                         pid,
                     )
                     if count:
-                        await conn.execute(
-                            f'INSERT INTO "{schema}"."{table}" '
-                            f'SELECT * FROM public."{table}" WHERE project_id = $1 '
-                            f'ON CONFLICT DO NOTHING',
-                            pid,
+                        # Build explicit column list to skip generated columns
+                        # (e.g. tsv tsvector GENERATED ALWAYS — Postgres rejects
+                        # explicit inserts even from a SELECT *)
+                        col_rows = await conn.fetch(
+                            """SELECT column_name
+                               FROM information_schema.columns
+                               WHERE table_schema = 'public' AND table_name = $1
+                                 AND is_generated = 'NEVER'
+                               ORDER BY ordinal_position""",
+                            table,
                         )
+                        if col_rows:
+                            cols = ", ".join(f'"{r["column_name"]}"' for r in col_rows)
+                            await conn.execute(
+                                f'INSERT INTO "{schema}"."{table}" ({cols}) '
+                                f'SELECT {cols} FROM public."{table}" WHERE project_id = $1 '
+                                f'ON CONFLICT DO NOTHING',
+                                pid,
+                            )
+                        else:
+                            await conn.execute(
+                                f'INSERT INTO "{schema}"."{table}" '
+                                f'SELECT * FROM public."{table}" WHERE project_id = $1 '
+                                f'ON CONFLICT DO NOTHING',
+                                pid,
+                            )
                         print(f"    {table}: {count} row(s) migrated")
                     else:
                         print(f"    {table}: 0 rows (nothing to migrate)")
