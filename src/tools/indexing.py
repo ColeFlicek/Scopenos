@@ -78,6 +78,10 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> tuple:
         functions, and stores everything in Postgres + pgvector. Run once on
         initial setup; use index_changes for in-session updates.
 
+        The path must be accessible on the Scopenos server's filesystem. If
+        your project is on a different machine than the server, use
+        index_project_files instead (sends file contents directly).
+
         project_id: slug to identify this project (e.g. "myapp"). If omitted,
         derived from the last path component.
         branch: git branch name to record. If omitted, auto-detected from the
@@ -90,7 +94,6 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> tuple:
         if user and not await svcs.db.has_any_owner(pid):
             await svcs.db.grant_project_access(user["id"], pid, "owner")
         await check_permission(user, pid, "write", svcs.db)
-        user = get_current_user()
         user_id = user["id"] if user else "anon"
         try:
             job = check_and_enqueue(user_id, run_index_project, path, pid, job_timeout=3600)
@@ -109,6 +112,50 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> tuple:
                 ".git/hooks/post-commit && chmod +x .git/hooks/post-commit"
             )
         return json.dumps(response)
+
+    @mcp.tool()
+    async def index_project_files(
+        files: dict[str, str],
+        project_id: str,
+        project_root: str = "",
+    ) -> str:
+        """
+        Index a project by sending file contents directly from the client.
+
+        Use this when the project is on a DIFFERENT machine than the Scopenos
+        server (e.g. Claude Code running locally, server running on TheHive).
+        The client reads the files and passes their contents here — no server
+        filesystem access required.
+
+        files: dict of {relative_or_absolute_path: file_content} for every
+               source file to index. Pass all .py (or other language) files
+               in the project.
+        project_id: slug to identify this project (must be consistent across
+                    calls — use the same value as you would for index_project).
+        project_root: the local root path, used only for deriving module names
+                      (e.g. "/workspace/myapp"). Does not need to exist on
+                      the server.
+
+        For large projects, call this in batches of ~100 files. The index
+        accumulates across calls — repeated calls update changed files and
+        add new ones. Call index_changes for subsequent per-session updates.
+        """
+        svcs = await _tools_shared.get_services()
+        user = get_current_user()
+        if user and not await svcs.db.has_any_owner(project_id):
+            await svcs.db.grant_project_access(user["id"], project_id, "owner")
+        await check_permission(user, project_id, "write", svcs.db)
+        result = await svcs.indexer.index_changes(
+            list(files.keys()), files,
+            project_root=project_root, project_id=project_id,
+        )
+        written_ids = result.pop("function_ids", [])
+        if written_ids:
+            violations = await svcs.contracts.check_functions(project_id, written_ids)
+            result["contract_violations"] = violations
+        else:
+            result["contract_violations"] = []
+        return json.dumps(result)
 
     @mcp.tool()
     async def index_changes(
