@@ -30,15 +30,15 @@ from src.dependency_fingerprint import DependencyChecker
 
 
 @pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def bypass_auth():
-    """Bypass auth context for all tool tests — tools are tested for logic, not auth."""
-    with patch("src.tools._shared.check_read_access", AsyncMock(return_value=None)), \
-         patch("src.tools.memory.check_permission", AsyncMock(return_value=None)), \
-         patch("src.tools.memory.get_current_user", return_value={"id": "test-user"}), \
-         patch("src.tools.discovery.get_current_user", return_value={"id": "test-user"}), \
-         patch("src.server.get_current_user", return_value={"id": "test-user"}), \
-         patch("src.server.check_permission", AsyncMock(return_value=None)):
+    """Bypass auth for all tool tests — set contextvar + stub check_project_access."""
+    from src.auth import _current_user
+    from src.call_graph.storage import CallGraphDB
+    token = _current_user.set({"id": "test-user"})
+    with patch.object(CallGraphDB, "check_project_access", AsyncMock(return_value=True)):
         yield
+    _current_user.reset(token)
 
 
 @pytest_asyncio.fixture

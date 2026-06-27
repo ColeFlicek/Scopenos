@@ -14,7 +14,7 @@ from src.call_graph.storage import derive_schema_name
 # DSN used by all tests in this module.  Falls back to the default test DSN.
 _TEST_DB_URL = os.getenv(
     "TEST_DATABASE_URL",
-    "postgresql://phronosis:phronosis@172.21.0.1/phronosis_test",
+    "postgresql://scopenos:scopenos@localhost/scopenos_test",
 )
 
 

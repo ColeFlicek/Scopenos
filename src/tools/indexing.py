@@ -11,9 +11,10 @@ from ..auth import get_current_user, check_permission
 from ..indexer import _derive_project_id
 from ..jobs import run_index_project, run_enrich_summaries, run_reembed_project
 from ._shared import check_and_enqueue
+from . import _shared as _tools_shared
 
 
-def register(mcp: FastMCP, get_services: Callable) -> tuple:
+def register(mcp: FastMCP, _unused_get_services: Callable = None) -> tuple:
 
     @mcp.tool()
     async def warmup_pattern_prototypes() -> str:
@@ -30,7 +31,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
 
         Returns a summary of which roles were computed vs. loaded from cache.
         """
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         from ..pattern_prototypes import ROLE_DESCRIPTIONS, ensure_prototype, _description_hash
 
         computed, cached, failed = [], [], []
@@ -83,7 +84,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
         repo at path. Use this to index multiple branches of the same repo as
         separate project_ids (e.g. project_id="myapp/feature-x", branch="feature-x").
         """
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         pid = project_id or Path(path).name or "default"
         await check_permission(get_current_user(), pid, "write", svcs.db)
         user = get_current_user()
@@ -127,7 +128,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
         Fix or acknowledge violations before proceeding — writing code that violates
         an active contract is the primary adversarial failure vector for the system.
         """
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         pid = project_id or (_derive_project_id(project_root) if project_root else "default")
         await check_permission(get_current_user(), pid, "write", svcs.db)
         result = await svcs.indexer.index_changes(
@@ -157,7 +158,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
         new and changed functions automatically. After this completes, call
         enrich_summaries(project_id) to upgrade undocumented functions to LLM-quality embeddings.
         """
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         await check_permission(get_current_user(), project_id, "write", svcs.db)
         user = get_current_user()
         user_id = user["id"] if user else "anon"
@@ -189,7 +190,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
         project_id: the project to enrich (must match the value used in index_project).
         limit: max functions to process in this call. Call repeatedly to enrich all functions.
         """
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         await check_permission(get_current_user(), project_id, "write", svcs.db)
         user = get_current_user()
         user_id = user["id"] if user else "anon"
@@ -217,7 +218,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
         - Ingesting multi-repo or monorepo indexes built in CI
         - Bootstrapping a project from an existing Sourcegraph or GitHub index export
         """
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         await check_permission(get_current_user(), project_id or "default", "write", svcs.db)
         result = await svcs.indexer.index_lsif(path, project_id=project_id)
         return json.dumps(result)
@@ -238,7 +239,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
         path: absolute path to the .scip.json file on the Scopenos server filesystem.
         project_id: namespace for the indexed symbols (defaults to the filename stem).
         """
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         await check_permission(get_current_user(), project_id or "default", "write", svcs.db)
         result = await svcs.indexer.index_scip(path, project_id=project_id)
         return json.dumps(result)
@@ -263,7 +264,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
         Run this after index_project to enable object-embedding-enhanced scoring.
         """
         from ..schema_objects import index_schema_objects as _index
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         await check_permission(get_current_user(), project_id, "write", svcs.db)
         result = await _index(
             svcs.db, svcs.embeddings, project_id,
@@ -296,7 +297,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
         import subprocess
         from ..fork import create_fork
 
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         await check_permission(get_current_user(), project_id, "write", svcs.db)
 
         repo_root = await svcs.db.get_project_root(project_id)
@@ -341,7 +342,7 @@ def register(mcp: FastMCP, get_services: Callable) -> tuple:
 
         fork_project_id: must match the fork_project_id returned by fork_project.
         """
-        svcs = await get_services()
+        svcs = await _tools_shared.get_services()
         await check_permission(get_current_user(), fork_project_id, "write", svcs.db)
 
         # Check that this is actually a fork before deleting
