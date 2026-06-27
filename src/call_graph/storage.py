@@ -1391,6 +1391,20 @@ class CallGraphDB:
         ) as cur:
             return [row[0] for row in await cur.fetchall()]
 
+    async def get_distinct_callee_names(self, project_id: str, limit: int = 80) -> list[str]:
+        """Return a sample of distinct callee IDs from the project's call graph.
+
+        Used by ContractManager.generate_draft to ground the LLM's prohibited_patterns
+        in actual function names that appear in the codebase, rather than abstract
+        semantic descriptions.
+        """
+        async with self._db.execute(
+            "SELECT DISTINCT callee_id FROM edges WHERE project_id = ? LIMIT ?",
+            (project_id, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [row[0] for row in rows]
+
     async def get_nodes_with_null_content(self, project_id: str) -> list[str]:
         """
         Return IDs of nodes that have been embedded but from empty content —
