@@ -407,6 +407,31 @@ async def http_update_contract(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
+@mcp.custom_route("/api/contracts/{contract_id}/structural", methods=["PUT"])
+async def http_update_contract_structural(request: Request) -> JSONResponse:
+    """PUT /api/contracts/{id}/structural {"structural_expression": {...}}
+    Replace the structural_expression on a contract in-place.
+    Useful for correcting abstract LLM-generated patterns with concrete function names.
+    """
+    try:
+        contract_id = request.path_params["contract_id"]
+        svcs = await _get_services()
+        _user = require_user()
+        _ct = await svcs.db.get_contract(contract_id)
+        for _pid in (_ct or {}).get("project_ids") or []:
+            await check_permission(_user, _pid, "write", svcs.db)
+        data = await request.json()
+        expr = data.get("structural_expression")
+        if not isinstance(expr, dict):
+            return JSONResponse({"status": "error", "detail": "structural_expression must be a JSON object"}, status_code=400)
+        result = await svcs.contracts.update_structural_expression(contract_id, expr)
+        return JSONResponse(result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
 @mcp.custom_route("/api/contracts/{contract_id}/approve", methods=["POST"])
 async def http_approve_contract(request: Request) -> JSONResponse:
     """POST /api/contracts/{id}/approve"""

@@ -50,7 +50,26 @@ class ContractManager:
 
         Returns the saved draft contract with generated examples.
         """
-        parsed = await self._llm_parse_contract(natural_language)
+        # Ground the LLM in actual callee names from this project's call graph.
+        # Without this, the LLM generates abstract semantic descriptions instead of
+        # real Python identifiers, and the structural checker never fires.
+        callee_context = ""
+        if project_ids:
+            try:
+                raw_ids = await self._db.get_distinct_callee_names(project_ids[0], limit=80)
+                if raw_ids:
+                    # Bare names (last segment) are what the rule engine matches on.
+                    bare = sorted({cid.split(".")[-1] for cid in raw_ids if cid})
+                    callee_context = (
+                        f"\n\nActual function/method names called within this project "
+                        f"(last segment of each call graph edge callee ID):\n{json.dumps(bare)}\n"
+                        "When building prohibited_patterns, prefer names from this list "
+                        "that match the type of access described in the rule."
+                    )
+            except Exception:
+                pass  # Non-fatal: contract is still useful without grounding
+
+        parsed = await self._llm_parse_contract(natural_language, callee_context=callee_context)
         contract_id = str(uuid.uuid4())
 
         await self._db.create_contract(
@@ -76,13 +95,13 @@ class ContractManager:
 
         return await self._contract_with_examples(contract_id)
 
-    async def _llm_parse_contract(self, natural_language: str) -> dict:
+    async def _llm_parse_contract(self, natural_language: str, callee_context: str = "") -> dict:
         """Call Claude Haiku to parse a natural-language rule into structured contract fields."""
         prompt = f"""You are helping build a code contract enforcement system.
 
 A user has written this architectural rule:
 "{natural_language}"
-
+{callee_context}
 Your job is to extract structured information from this rule.
 
 Return a JSON object with these fields:
@@ -91,11 +110,21 @@ Return a JSON object with these fields:
   - BOUNDARY: rule about which modules/layers may call which
   - PRESENCE: rule about whether specific metadata (e.g. docstrings, comments) must be present on all functions
 - "structural_expression": a JSON object with:
-  - "prohibited_patterns": list of function/method names that are forbidden (e.g. ["execute", "raw_query"])
-  - "required_callee": the function that MUST be used instead (e.g. "read_secrets"), or null
-  - "scope_exclusions": list of bare function names or name prefixes that are explicitly exempt (e.g. ["__repr__", "__str__"])
-  - "missing_metadata": for PRESENCE rules only — list of node fields that must be non-empty on every function. Use ["docstring"] if the rule requires docstrings/comments on all functions. Leave as [] for non-PRESENCE rules.
-- "violation_examples": list of 4-5 short Python code snippets (3-8 lines each) that VIOLATE this rule. Make them look realistic — different ways to express the same violation.
+  - "prohibited_patterns": CRITICAL — these must be REAL Python function or method name fragments
+    (bare identifiers like "execute", "fetch", "raw_query") that actually appear in call graph edges.
+    The rule engine does exact last-segment matching: "execute" matches any callee whose name IS
+    "execute" or starts/ends with "_execute". Do NOT use abstract descriptions like
+    "database_access_without_auth" — those will never match anything. If the project's actual
+    callee names are provided above, prefer those. Leave as [] only if no specific call is forbidden.
+  - "required_callee": the bare function name that MUST be called alongside any prohibited one
+    (e.g. "require_user", "read_secrets"). The rule fires when a function calls a prohibited
+    pattern WITHOUT also calling required_callee. Set to null if there is no required companion.
+  - "scope_exclusions": list of function ID prefixes that are explicitly exempt from this rule.
+    Use module path prefixes (e.g. "src.call_graph.storage", "api_signup") — the checker does
+    prefix matching on full function IDs.
+  - "missing_metadata": for PRESENCE rules only — list ["docstring"] if all functions must have
+    docstrings. Leave as [] for non-PRESENCE rules.
+- "violation_examples": list of 4-5 short Python code snippets (3-8 lines each) that VIOLATE this rule.
 - "compliance_examples": list of 2-3 short Python code snippets (3-8 lines each) that CORRECTLY FOLLOW this rule.
 
 Return ONLY the JSON object, no markdown, no explanation."""
@@ -140,6 +169,23 @@ Return ONLY the JSON object, no markdown, no explanation."""
             contract_id, violation_codes, compliance_codes
         )
         await self._db.update_contract_status(contract_id, "active")
+        return await self._contract_with_examples(contract_id)
+
+    async def update_structural_expression(
+        self, contract_id: str, structural_expression: dict
+    ) -> dict:
+        """Replace the structural_expression of a contract.
+
+        Useful for correcting LLM-generated abstract patterns with concrete
+        function name fragments after a contract has been created.
+        Does not change status — an active contract stays active.
+        """
+        contract = await self._db.get_contract(contract_id)
+        if not contract:
+            raise ValueError(f"Contract {contract_id} not found")
+        await self._db.update_contract_structural(
+            contract_id, json.dumps(structural_expression)
+        )
         return await self._contract_with_examples(contract_id)
 
     async def deactivate(self, contract_id: str) -> None:
