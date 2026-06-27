@@ -249,22 +249,73 @@ class EmbeddingStore:
     async def query_similar(
         self, snippet: str, top_k: int = 10, project_id: str | None = None
     ) -> list[dict[str, Any]]:
-        """KNN search returning the top-k functions semantically similar to a code snippet."""
+        """Hybrid BM25 + cosine search (RRF fusion). Falls back to cosine-only on old schemas."""
         embedding = await self._embed_single(snippet)
         conn = self._db._db
+        candidate_k = min(top_k * 4, 100)
 
         if project_id:
-            async with conn.execute(
-                """SELECT fe.id, (fe.embedding <=> ?) AS distance,
-                          n.file, n.module, n.name, n.signature, n.summary, n.project_id,
-                          n.start_line, n.end_line, n.is_async, n.structural_layer
-                   FROM function_embeddings fe
-                   JOIN nodes n ON n.id = fe.id AND n.project_id = fe.project_id
-                   WHERE fe.project_id = ?
-                   ORDER BY distance LIMIT ?""",
-                (embedding, project_id, top_k),
-            ) as cur:
-                rows = [dict(r) for r in await cur.fetchall()]
+            try:
+                async with conn.execute(
+                    """WITH
+                       tsq AS (
+                           SELECT websearch_to_tsquery('english', ?) AS q
+                       ),
+                       sem AS (
+                           SELECT id, project_id,
+                                  ROW_NUMBER() OVER (ORDER BY dist) AS rk,
+                                  dist
+                           FROM (
+                               SELECT fe.id, fe.project_id,
+                                      (fe.embedding <=> ?) AS dist
+                               FROM function_embeddings fe
+                               WHERE fe.project_id = ?
+                               ORDER BY dist LIMIT ?
+                           ) sub
+                       ),
+                       kw AS (
+                           SELECT n.id, n.project_id,
+                                  ROW_NUMBER() OVER (
+                                      ORDER BY ts_rank_cd(n.tsv, tsq.q) DESC
+                                  ) AS rk
+                           FROM nodes n, tsq
+                           WHERE n.project_id = ?
+                             AND n.tsv @@ tsq.q
+                           LIMIT ?
+                       ),
+                       rrf AS (
+                           SELECT COALESCE(s.id, k.id) AS id,
+                                  COALESCE(s.project_id, k.project_id) AS project_id,
+                                  COALESCE(1.0/(60.0+s.rk), 0.0)
+                                + COALESCE(1.0/(60.0+k.rk), 0.0) AS rrf_score,
+                                  COALESCE(s.dist, 2.0) AS dist
+                           FROM sem s
+                           FULL OUTER JOIN kw k ON s.id = k.id AND s.project_id = k.project_id
+                       )
+                       SELECT r.id, r.dist AS distance,
+                              n.file, n.module, n.name, n.signature, n.summary, r.project_id,
+                              n.start_line, n.end_line, n.is_async, n.structural_layer
+                       FROM rrf r
+                       JOIN nodes n ON n.id = r.id AND n.project_id = r.project_id
+                       ORDER BY r.rrf_score DESC
+                       LIMIT ?""",
+                    (snippet, embedding, project_id, candidate_k,
+                     project_id, candidate_k, top_k),
+                ) as cur:
+                    rows = [dict(r) for r in await cur.fetchall()]
+            except Exception:
+                # tsv column not yet present on this schema — degrade to cosine-only
+                async with conn.execute(
+                    """SELECT fe.id, (fe.embedding <=> ?) AS distance,
+                              n.file, n.module, n.name, n.signature, n.summary, n.project_id,
+                              n.start_line, n.end_line, n.is_async, n.structural_layer
+                       FROM function_embeddings fe
+                       JOIN nodes n ON n.id = fe.id AND n.project_id = fe.project_id
+                       WHERE fe.project_id = ?
+                       ORDER BY distance LIMIT ?""",
+                    (embedding, project_id, top_k),
+                ) as cur:
+                    rows = [dict(r) for r in await cur.fetchall()]
         else:
             async with conn.execute(
                 """SELECT fe.id, (fe.embedding <=> ?) AS distance,
@@ -278,7 +329,7 @@ class EmbeddingStore:
                 rows = [dict(r) for r in await cur.fetchall()]
 
         for r in rows:
-            r["similarity"] = round(1.0 - r["distance"] / 2.0, 4)
+            r["similarity"] = round(1.0 - r.pop("distance") / 2.0, 4)
         return rows
 
     async def count_embeddings(self, project_id: str | None = None) -> int:

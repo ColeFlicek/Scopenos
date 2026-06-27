@@ -91,7 +91,37 @@ async def lifespan(server: FastMCP):
 
 # ── FastMCP server ────────────────────────────────────────────────────────────
 
-mcp = FastMCP("scopenos", lifespan=lifespan)
+_SCOPENOS_MCP_INSTRUCTIONS = """
+Scopenos provides call graph traversal, semantic + keyword search, and decision memory for codebases.
+
+Three-tier retrieval ladder — follow this order every session:
+
+1. get_project_home(project_id) — one call, full architectural picture. Run first.
+   Returns subsystems, chokepoints, entry points, recent decisions, and risk surface.
+
+2. query_similar_functions(concept, project_id=...) — find which function to touch.
+   Uses hybrid BM25 + semantic search (RRF fusion). Before editing any function:
+   - get_impact_radius(fn, depth=2) — what breaks if this changes?
+   - get_decision_history(fn) — why was it designed this way?
+
+3. Read the file — only after you know exactly which lines to modify.
+
+Core tools:
+- get_project_home: subsystems, chokepoints, entry points, recent decisions
+- query_similar_functions: hybrid semantic + keyword search across indexed codebase
+- get_callers / get_callees: call graph traversal
+- get_impact_radius(fn, depth=2): full recursive dependency tree
+- get_decision_history: architectural decisions, rejected alternatives, concurrent edits
+- log_decision: record trade-offs and rejected alternatives (call mid-session, not just at end)
+- index_project_files: index a project from the CLIENT machine (sends file contents to server)
+- index_changes: incremental update after editing files within a session
+- check_contracts: verify invariants; contract_violations in index responses are blocking
+
+project_id is a stable slug (e.g. "scopenos", "django"). Use the same value consistently.
+Use index_project_files (not index_project) when the project lives on a different machine than the server.
+"""
+
+mcp = FastMCP("scopenos", lifespan=lifespan, instructions=_SCOPENOS_MCP_INSTRUCTIONS)
 mcp.add_middleware(AuthMiddleware())
 register_routes(mcp, _get_services, email_sender=get_email_sender())
 

@@ -207,10 +207,18 @@ ALTER TABLE nodes ADD COLUMN IF NOT EXISTS is_async         INTEGER NOT NULL DEF
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS parameter_names  TEXT    NOT NULL DEFAULT '[]';
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS enclosing_class  TEXT    NOT NULL DEFAULT '';
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS structural_layer TEXT    NOT NULL DEFAULT 'precision';
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS tsv tsvector
+    GENERATED ALWAYS AS (
+        setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(signature, '')), 'B') ||
+        setweight(to_tsvector('english', coalesce(summary, '')), 'B') ||
+        setweight(to_tsvector('english', coalesce(docstring, '')), 'C')
+    ) STORED;
 
 CREATE INDEX IF NOT EXISTS idx_nodes_file    ON nodes(file);
 CREATE INDEX IF NOT EXISTS idx_nodes_name    ON nodes(name);
 CREATE INDEX IF NOT EXISTS idx_nodes_project ON nodes(project_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_tsv     ON nodes USING GIN(tsv);
 
 CREATE TABLE IF NOT EXISTS edges (
     id         BIGSERIAL PRIMARY KEY,
@@ -382,6 +390,17 @@ BEGIN
         p_schema || '_idx_nodes_file', p_schema);
     EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I.nodes(name)',
         p_schema || '_idx_nodes_name', p_schema);
+    EXECUTE format($sql$
+        ALTER TABLE %I.nodes ADD COLUMN IF NOT EXISTS tsv tsvector
+            GENERATED ALWAYS AS (
+                setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+                setweight(to_tsvector('english', coalesce(signature, '')), 'B') ||
+                setweight(to_tsvector('english', coalesce(summary, '')), 'B') ||
+                setweight(to_tsvector('english', coalesce(docstring, '')), 'C')
+            ) STORED
+    $sql$, p_schema);
+    EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I.nodes USING GIN(tsv)',
+        p_schema || '_idx_nodes_tsv', p_schema);
 
     -- Edges (call graph)
     EXECUTE format($sql$
