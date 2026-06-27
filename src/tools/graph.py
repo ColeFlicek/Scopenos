@@ -209,7 +209,8 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
 
     @mcp.tool()
     async def get_impact_radius(
-        function_name: str, depth: int = 2, project_id: str = ""
+        function_name: str, depth: int = 2, project_id: str = "",
+        compact: bool = False,
     ) -> str:
         """
         [EXECUTION TOOL — accepts a symbol name]
@@ -219,6 +220,12 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         function_name.
 
         project_id: limit results to a specific project. If omitted, searches all projects.
+
+        compact: when True, returns slim nodes {name, module, impact_depth, id} plus
+        a summary {total, by_module, by_depth} instead of full node objects. Use this
+        when the blast radius is large (>20 nodes) and you need scope/shape rather than
+        full signatures and source locations. Pass compact=False (default) to get all
+        fields for targeted pre-edit review.
         """
         import asyncio as _asyncio
         svcs = await _tools_shared.get_services()
@@ -234,7 +241,29 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
 
         hints = await _co_change_hints(function_name, results, pdb, pemb, pid)
 
-        out: dict = {"impact_radius": results}
+        if compact and results:
+            by_module: dict[str, int] = {}
+            by_depth: dict[int, int] = {}
+            slim = []
+            for node in results:
+                mod = node.get("module", "")
+                d = node.get("impact_depth", 0)
+                by_module[mod] = by_module.get(mod, 0) + 1
+                by_depth[str(d)] = by_depth.get(str(d), 0) + 1
+                slim.append({"name": node["name"], "module": mod,
+                              "impact_depth": d, "id": node["id"]})
+            out: dict = {
+                "impact_radius": slim,
+                "impact_summary": {
+                    "total": len(results),
+                    "by_module": by_module,
+                    "by_depth": by_depth,
+                    "note": "compact=True — call with compact=False for full node objects (signatures, docstrings, source locations)",
+                },
+            }
+        else:
+            out = {"impact_radius": results}
+
         if hints:
             out["co_change_hints"] = hints
         if _contracts:
