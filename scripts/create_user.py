@@ -51,7 +51,7 @@ async def main(
         print(f"Created user: {user['email']} (id: {user['id']}, plan: {user['plan']})")
     except Exception:
         async with db._db.execute(
-            "SELECT id, email, plan FROM users WHERE email = $1", (email,)
+            "SELECT id, email, plan FROM users WHERE email = ?", (email,)
         ) as cur:
             row = await cur.fetchone()
         if row is None:
@@ -62,9 +62,10 @@ async def main(
 
     if org_id:
         # Verify the org exists before associating the key
-        org_row = await db._db.execute(
-            "SELECT id FROM organizations WHERE slug = $1", (org_id,)
-        )
+        async with db._db.execute(
+            "SELECT id FROM organizations WHERE slug = ?", (org_id,)
+        ) as cur:
+            org_row = await cur.fetchone()
         if org_row is None:
             print(
                 f"Error: org '{org_id}' not found in control DB. "
@@ -74,11 +75,11 @@ async def main(
             await db.close()
             sys.exit(1)
         # Set org_id on the user row
-        await db._db.execute(
-            "UPDATE users SET org_id = $1 WHERE id = $2",
+        async with db._db.execute(
+            "UPDATE users SET org_id = ? WHERE id = ?",
             (org_id, user["id"]),
-        )
-        await db._db.commit()
+        ):
+            pass
         print(f"Associated user with org '{org_id}'")
 
     if project_id:

@@ -131,6 +131,9 @@ jobs:
       #   CONTROL_DB_URL      - (optional) explicit control plane DB. Set this when
       #                         the control plane is a separate database from org data.
       #                         When unset, OrgRouter falls back to DATABASE_URL.
+      #   PROVISIONER_DSN     - (optional) DSN for a role with CREATEDB privilege.
+      #                         Required for /api/signup to provision org databases.
+      #                         When unset, signup operates in single-tenant mode.
       #   OPENAI_API_KEY      - for embeddings
       #   ANTHROPIC_API_KEY   - for LLM enrichment
       #   RESEND_API_KEY      - for email (optional)
@@ -140,6 +143,7 @@ jobs:
           kubectl create secret generic scopenos-secrets \
             --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             --from-literal=CONTROL_DB_URL="${{ secrets.CONTROL_DB_URL }}" \
+            --from-literal=PROVISIONER_DSN="${{ secrets.PROVISIONER_DSN }}" \
             --from-literal=REDIS_URL="redis://redis-svc.scopenos.svc.cluster.local:6379" \
             --from-literal=OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
             --from-literal=ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}" \
