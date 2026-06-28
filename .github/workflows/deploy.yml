@@ -52,7 +52,7 @@ jobs:
       - name: Validate required secrets
         run: |
           missing=""
-          [ -z "$DATABASE_URL" ]        && missing="$missing DATABASE_URL"
+          [ -z "$CONTROL_DB_URL" ]      && missing="$missing CONTROL_DB_URL"
           [ -z "$OPENAI_API_KEY" ]      && missing="$missing OPENAI_API_KEY"
           [ -z "$ANTHROPIC_API_KEY" ]   && missing="$missing ANTHROPIC_API_KEY"
           [ -z "$TS_OAUTH_CLIENT_ID" ]  && missing="$missing TS_OAUTH_CLIENT_ID"
@@ -64,7 +64,7 @@ jobs:
           fi
           echo "All required secrets present."
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CONTROL_DB_URL: ${{ secrets.CONTROL_DB_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
@@ -123,17 +123,13 @@ jobs:
 
       # ── Secrets ───────────────────────────────────────────────────────────
       # Required secrets (set in repo Settings → Secrets → Actions):
-      #   DATABASE_URL        - single-tenant DSN OR fallback for OrgRouter when
-      #                         CONTROL_DB_URL is not set. In multi-org mode this
-      #                         is effectively the control plane DB.
+      #   CONTROL_DB_URL      - control plane DB (users, api_keys, organizations).
       #                         TheHive: postgresql://scopenos:<pw>@<docker-bridge-gw>/scopenos
       #                         % in passwords must be encoded as %25 in the URL
-      #   CONTROL_DB_URL      - (optional) explicit control plane DB. Set this when
-      #                         the control plane is a separate database from org data.
-      #                         When unset, OrgRouter falls back to DATABASE_URL.
-      #   PROVISIONER_DSN     - (optional) DSN for a role with CREATEDB privilege.
+      #                         Server will not start without this.
+      #   PROVISIONER_DSN     - DSN for a role with CREATEDB privilege (scopenos_provisioner).
       #                         Required for /api/signup to provision org databases.
-      #                         When unset, signup operates in single-tenant mode.
+      #                         Points at the postgres maintenance DB, not scopenos.
       #   OPENAI_API_KEY      - for embeddings
       #   ANTHROPIC_API_KEY   - for LLM enrichment
       #   RESEND_API_KEY      - for email (optional)
@@ -141,7 +137,6 @@ jobs:
       - name: Apply secrets
         run: |
           kubectl create secret generic scopenos-secrets \
-            --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             --from-literal=CONTROL_DB_URL="${{ secrets.CONTROL_DB_URL }}" \
             --from-literal=PROVISIONER_DSN="${{ secrets.PROVISIONER_DSN }}" \
             --from-literal=REDIS_URL="redis://redis-svc.scopenos.svc.cluster.local:6379" \
