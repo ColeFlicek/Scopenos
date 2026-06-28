@@ -58,10 +58,15 @@ async def _clean_db(pool) -> None:
         for row in rows:
             await conn.execute(f'DROP SCHEMA IF EXISTS "{row["schema_name"]}" CASCADE')
 
-        for table in _TRUNCATE_TABLES:
-            await conn.execute(
-                f"TRUNCATE TABLE IF EXISTS {table} RESTART IDENTITY CASCADE"
-            )
+        # Only truncate tables that actually exist (schema may differ across versions)
+        existing = await conn.fetch(
+            "SELECT tablename FROM pg_tables "
+            "WHERE schemaname = 'public' AND tablename = ANY($1)",
+            _TRUNCATE_TABLES,
+        )
+        if existing:
+            tables = ", ".join(row["tablename"] for row in existing)
+            await conn.execute(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
 
 
 @pytest_asyncio.fixture
