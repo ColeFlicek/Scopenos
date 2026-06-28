@@ -10,7 +10,7 @@ spec:
   sessionAffinity: ClientIP
   sessionAffinityConfig:
     clientIP:
-      timeoutSeconds: 3600
+      timeoutSeconds: 60
   # Preserve real client IP so sessionAffinity: ClientIP actually works.
   # Without this, NodePort SNAT's all traffic to the node IP, making all
   # clients look identical and defeating session pinning.
@@ -36,6 +36,7 @@ spec:
       labels:
         app: scopenos-api
     spec:
+      terminationGracePeriodSeconds: 15
       containers:
         - name: scopenos-api
           image: ghcr.io/coleflicek/scopenos:latest  # updated by CI
