@@ -18,9 +18,9 @@ from datetime import datetime, timezone
 async def main(leaked_key: str) -> None:
     import asyncpg
 
-    dsn = os.environ.get("DATABASE_URL")
+    dsn = os.environ.get("CONTROL_DB_URL") or os.environ.get("DATABASE_URL")
     if not dsn:
-        print("ERROR: DATABASE_URL not set", file=sys.stderr)
+        print("ERROR: CONTROL_DB_URL or DATABASE_URL must be set", file=sys.stderr)
         sys.exit(1)
 
     conn = await asyncpg.connect(dsn)

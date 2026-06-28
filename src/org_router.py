@@ -3,15 +3,11 @@
 OrgRouter holds the control-plane DB for key lookup and lazily creates
 per-org connection pools from the db_url stored in the organizations table.
 
-In single-tenant mode (no CONTROL_DB_URL, no org_id on API keys):
-  - Control DB == DATABASE_URL
-  - All requests resolve to org_id=None and route to the same pool
-  - No per-org pool is ever created
+Every API key must have an org_id. Keys without an org_id are rejected with
+403. There is no single-tenant fallback — every deployment uses the same
+structure: CONTROL_DB_URL (control plane) + per-org databases.
 
-In multi-tenant mode (separate org databases):
-  - CONTROL_DB_URL points to the scopenos_control database
-  - api_keys.org_id maps keys to orgs
-  - Each org gets a dedicated pool from organizations.db_url
+CONTROL_DB_URL is required at startup. The server will not start without it.
 """
 from __future__ import annotations
 
@@ -39,13 +35,15 @@ class OrgRouter:
     async def create(cls) -> "OrgRouter":
         """Async factory — connects to the control plane DB.
 
-        Uses CONTROL_DB_URL if set; falls back to DATABASE_URL for
-        single-tenant deployments where control and org data share one DB.
+        CONTROL_DB_URL is required. Raises RuntimeError at startup if unset.
         """
         from .call_graph.storage import CallGraphDB
-        dsn = os.getenv("CONTROL_DB_URL") or os.getenv(
-            "DATABASE_URL", "postgresql://scopenos:scopenos@localhost/scopenos"
-        )
+        dsn = os.getenv("CONTROL_DB_URL")
+        if not dsn:
+            raise RuntimeError(
+                "CONTROL_DB_URL is required but not set. "
+                "Point it at the Scopenos control plane database."
+            )
         control_db = await CallGraphDB.create(dsn)
         return cls(control_db)
 
@@ -63,8 +61,14 @@ class OrgRouter:
         return user, org_db
 
     async def _get_org_db(self, org_id: str | None) -> "CallGraphDB":
+        from starlette.exceptions import HTTPException
+
         if org_id is None:
-            return self._control_db
+            raise HTTPException(
+                403,
+                "API key is not scoped to an org. "
+                "Re-issue the key via /api/signup or create_user.py --org-id <slug>.",
+            )
 
         if org_id in self._pools:
             return self._pools[org_id]
@@ -75,9 +79,11 @@ class OrgRouter:
 
             db_url = await self._control_db.get_org_db_url(org_id)
             if not db_url:
-                # No dedicated DB registered — share the control pool.
-                self._pools[org_id] = self._control_db
-                return self._control_db
+                raise HTTPException(
+                    503,
+                    f"No database registered for org '{org_id}'. "
+                    "Run provision_org.py to set up the org database.",
+                )
 
             from .call_graph.storage import CallGraphDB
             org_db = await CallGraphDB.create(db_url)

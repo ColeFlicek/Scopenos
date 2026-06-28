@@ -5,9 +5,9 @@ Each function is a synchronous wrapper around async indexing code.
 Workers run these in a separate process with their own DB pool.
 All functions must be importable at module level (RQ serialises them by name).
 
-In multi-org mode the caller must pass db_url explicitly (resolved from the
-org's database URL via OrgRouter). Falling back to CONTROL_DB_URL / DATABASE_URL
-is only for single-tenant deployments where all data lives in one database.
+The caller must pass db_url explicitly — resolved from the org's database URL
+via OrgRouter before the job is enqueued. CONTROL_DB_URL is the fallback only
+for admin/CLI-triggered jobs that run outside the HTTP request context.
 """
 from __future__ import annotations
 
@@ -18,10 +18,13 @@ import os
 def _resolve_dsn(db_url: str | None) -> str:
     if db_url:
         return db_url
-    return (
-        os.getenv("CONTROL_DB_URL")
-        or os.getenv("DATABASE_URL", "postgresql://scopenos:scopenos@localhost/scopenos")
-    )
+    dsn = os.getenv("CONTROL_DB_URL")
+    if not dsn:
+        raise RuntimeError(
+            "db_url must be passed explicitly or CONTROL_DB_URL must be set. "
+            "DATABASE_URL is no longer supported."
+        )
+    return dsn
 
 
 async def _make_indexer(db_url: str | None = None):

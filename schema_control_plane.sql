@@ -60,3 +60,26 @@ CREATE TABLE IF NOT EXISTS org_members (
 
 CREATE INDEX IF NOT EXISTS idx_org_members_org  ON org_members(org_id);
 CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id);
+
+-- ── App role (scopenos_control_rw) ─────────────────────────────────────────
+-- Restricted role used by the server via CONTROL_DB_URL.
+-- Has read/write on control plane tables only — no superuser, no CREATEDB,
+-- no access to org databases. Created by provision_control_db.py, not here,
+-- because the password is generated at provisioning time.
+--
+-- After running provision_control_db.py, grant access to any new tables with:
+--   GRANT SELECT, INSERT, UPDATE, DELETE ON <table> TO scopenos_control_rw;
+
+-- Revoke default public schema create privilege (defence in depth).
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
+-- Grant table-level access to the app role (idempotent once role exists).
+DO $$
+BEGIN
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'scopenos_control_rw') THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE
+            ON organizations, users, api_keys, org_members
+            TO scopenos_control_rw;
+        GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO scopenos_control_rw;
+    END IF;
+END $$;

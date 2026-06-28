@@ -2102,6 +2102,14 @@ class CallGraphDB:
         await self._db.commit()
         return {"id": user_id, "email": email, "plan": plan, "created_at": now}
 
+    async def get_user_by_email(self, email: str) -> dict | None:
+        """Look up a user by email address. Returns user dict or None."""
+        async with self._db.execute(
+            "SELECT id, email, plan, created_at FROM users WHERE email = ?", (email,)
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
     async def create_api_key(self, user_id: str, name: str = "") -> str:
         """Create an API key for a user. Returns the raw key once — never stored."""
         import hashlib

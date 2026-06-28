@@ -52,7 +52,7 @@ jobs:
       - name: Validate required secrets
         run: |
           missing=""
-          [ -z "$DATABASE_URL" ]        && missing="$missing DATABASE_URL"
+          [ -z "$CONTROL_DB_URL" ]      && missing="$missing CONTROL_DB_URL"
           [ -z "$OPENAI_API_KEY" ]      && missing="$missing OPENAI_API_KEY"
           [ -z "$ANTHROPIC_API_KEY" ]   && missing="$missing ANTHROPIC_API_KEY"
           [ -z "$TS_OAUTH_CLIENT_ID" ]  && missing="$missing TS_OAUTH_CLIENT_ID"
@@ -64,7 +64,7 @@ jobs:
           fi
           echo "All required secrets present."
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CONTROL_DB_URL: ${{ secrets.CONTROL_DB_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
@@ -123,9 +123,13 @@ jobs:
 
       # ── Secrets ───────────────────────────────────────────────────────────
       # Required secrets (set in repo Settings → Secrets → Actions):
-      #   DATABASE_URL        - full postgres DSN (external DB, not in-cluster)
+      #   CONTROL_DB_URL      - control plane DB (users, api_keys, organizations).
       #                         TheHive: postgresql://scopenos:<pw>@<docker-bridge-gw>/scopenos
       #                         % in passwords must be encoded as %25 in the URL
+      #                         Server will not start without this.
+      #   PROVISIONER_DSN     - DSN for a role with CREATEDB privilege (scopenos_provisioner).
+      #                         Required for /api/signup to provision org databases.
+      #                         Points at the postgres maintenance DB, not scopenos.
       #   OPENAI_API_KEY      - for embeddings
       #   ANTHROPIC_API_KEY   - for LLM enrichment
       #   RESEND_API_KEY      - for email (optional)
@@ -133,7 +137,8 @@ jobs:
       - name: Apply secrets
         run: |
           kubectl create secret generic scopenos-secrets \
-            --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            --from-literal=CONTROL_DB_URL="${{ secrets.CONTROL_DB_URL }}" \
+            --from-literal=PROVISIONER_DSN="${{ secrets.PROVISIONER_DSN }}" \
             --from-literal=REDIS_URL="redis://redis-svc.scopenos.svc.cluster.local:6379" \
             --from-literal=OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
             --from-literal=ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}" \

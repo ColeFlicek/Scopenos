@@ -182,9 +182,9 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = _parse_args()
-    db_url = args.db_url or os.getenv(
+    db_url = args.db_url or os.getenv("CONTROL_DB_URL") or os.getenv(
         "DATABASE_URL",
-        "postgresql://phronosis:phronosis@localhost/phronosis",
+        "postgresql://scopenos:scopenos@localhost/scopenos",
     )
     dry_run = not args.execute
     asyncio.run(migrate(db_url, dry_run=dry_run))

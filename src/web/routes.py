@@ -21,7 +21,20 @@ def register_routes(
 
     @mcp.custom_route("/api/signup", methods=["POST"])
     async def api_signup(request: Request) -> JSONResponse:
-        """Create a user and email their API key. Body: {email: str}."""
+        """Create a user, provision an org database, and email their API key.
+
+        Body: {email: str, org_slug: str (optional)}
+
+        Multi-org mode (PROVISIONER_DSN is set):
+          - org_slug is required; must be unique, e.g. "acme" → org_acme DB.
+          - A dedicated Postgres database is provisioned for the org.
+          - The API key is scoped to that org; all indexed data goes there.
+
+        Single-tenant mode (PROVISIONER_DSN not set):
+          - org_slug is ignored.
+          - User and key are created in the control / single DB.
+          - Backward-compatible with the existing deployment.
+        """
         try:
             data = await request.json()
         except Exception:
@@ -31,24 +44,97 @@ def register_routes(
         if not email:
             return JSONResponse({"status": "error", "detail": "email is required"}, status_code=400)
 
-        svcs = await get_services()
-        db = svcs.db
+        provisioner_dsn = os.getenv("PROVISIONER_DSN", "")
+        org_slug = (data.get("org_slug") or "").strip()
 
-        try:
-            user = await db.create_user(email)
-        except Exception:
-            async with db._db.execute(
-                "SELECT id, email, plan FROM users WHERE email = ?", (email,)
-            ) as cur:
-                row = await cur.fetchone()
-            user = dict(row)
+        if provisioner_dsn:
+            # ── Multi-org mode ────────────────────────────────────────────────
+            if not org_slug:
+                return JSONResponse(
+                    {"status": "error", "detail": "org_slug is required in multi-org mode"},
+                    status_code=400,
+                )
 
-        raw_key = await db.create_api_key(user["id"], name="signup")
+            from ..provisioning import provision_org
+            from ..call_graph.storage import CallGraphDB
 
-        if email_sender is not None:
-            await email_sender(email, raw_key)
+            control_dsn = (
+                os.getenv("CONTROL_DB_URL")
+                or os.getenv("DATABASE_URL", "")
+            )
 
-        return JSONResponse({"status": "ok", "message": "Check your email for your API key"})
+            try:
+                prov_result = await provision_org(
+                    slug=org_slug,
+                    provisioner_dsn=provisioner_dsn,
+                    control_dsn=control_dsn,
+                )
+            except Exception as exc:
+                msg = str(exc)
+                if "already exists" in msg.lower():
+                    return JSONResponse(
+                        {"status": "error", "detail": f"org '{org_slug}' already exists"},
+                        status_code=409,
+                    )
+                return JSONResponse({"status": "error", "detail": msg}, status_code=500)
+
+            # Create user + key in the control DB, scoped to the new org
+            control_db = await CallGraphDB.create(control_dsn)
+            try:
+                try:
+                    user = await control_db.create_user(email)
+                except Exception:
+                    existing = await control_db.get_user_by_email(email)
+                    if existing is None:
+                        return JSONResponse(
+                            {"status": "error", "detail": "could not create or find user"},
+                            status_code=500,
+                        )
+                    user = existing
+
+                # Associate user with this org
+                async with control_db._db.execute(
+                    "UPDATE users SET org_id = ? WHERE id = ?",
+                    (org_slug, user["id"]),
+                ):
+                    pass
+
+                raw_key = await control_db.create_api_key(user["id"], name="signup")
+            finally:
+                await control_db.close()
+
+            if email_sender is not None:
+                await email_sender(email, raw_key)
+
+            return JSONResponse({
+                "status": "ok",
+                "message": "Check your email for your API key",
+                "org": org_slug,
+                "db": prov_result["db_name"],
+            })
+
+        else:
+            # ── Single-tenant mode ────────────────────────────────────────────
+            svcs = await get_services()
+            db = svcs.db
+
+            try:
+                user = await db.create_user(email)
+            except Exception:
+                existing = await db.get_user_by_email(email)
+                if existing is None:
+                    return JSONResponse(
+                        {"status": "error", "detail": "could not create or find user"},
+                        status_code=500,
+                    )
+                user = existing
+
+            raw_key = await db.create_api_key(user["id"], name="signup")
+
+            if email_sender is not None:
+                await email_sender(email, raw_key)
+
+            return JSONResponse({"status": "ok", "message": "Check your email for your API key"})
 
     @mcp.custom_route("/ui", methods=["GET"])
     async def dashboard(request: Request) -> HTMLResponse:
