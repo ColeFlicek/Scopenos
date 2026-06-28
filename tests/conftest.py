@@ -6,12 +6,14 @@ don't repeat boilerplate. Tests that need a GraphData call _graph();
 tests that need a node dict call _node().
 
 The `db` fixture provides a real CallGraphDB connected to the test database.
-Each test gets a clean slate: all project schemas are dropped and control-plane
-tables are truncated before the fixture yields.
+The `project_id` fixture gives each test a stable, unique project namespace
+so tests never interfere with one another — even when the database is shared
+and persistent across runs.
 """
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 import pytest_asyncio
@@ -23,41 +25,42 @@ from src.call_graph.storage import CallGraphDB
 
 _TEST_DSN = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL", "")
 
-async def _clean_db(pool) -> None:
-    """Drop all non-system schemas and truncate all public tables."""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT schema_name FROM information_schema.schemata "
-            "WHERE schema_name NOT IN ('public','pg_catalog','information_schema','pg_toast') "
-            "AND schema_name NOT LIKE 'pg_%'"
-        )
-        for row in rows:
-            await conn.execute(f'DROP SCHEMA IF EXISTS "{row["schema_name"]}" CASCADE')
-
-        # Truncate every table in public — avoids maintaining a brittle list
-        tables = await conn.fetch(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
-        )
-        if tables:
-            names = ", ".join(row["tablename"] for row in tables)
-            await conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-
 
 @pytest_asyncio.fixture
 async def db():
-    """Real CallGraphDB against the test database, reset before each test.
+    """Real CallGraphDB against the test database.
 
+    No cleanup — data persists across runs. Tests must use the project_id
+    fixture to get their own namespace so they don't see each other's data.
     Skips automatically if no database URL is configured.
-    Set TEST_DATABASE_URL (preferred) or DATABASE_URL to enable.
     """
     if not _TEST_DSN:
         pytest.skip("No database URL configured — set TEST_DATABASE_URL or DATABASE_URL")
 
     instance = await CallGraphDB.create(_TEST_DSN)
-    await _clean_db(instance._pool)
     yield instance
     await instance.close()
 
+
+@pytest.fixture
+def project_id(request) -> str:
+    """Stable, unique project ID for the current test. Same value on every run.
+
+    Each test gets its own namespace in the shared persistent test database.
+    Running the same test twice upserts identical data (no-op) — no re-indexing
+    is needed for expensive commits already stored from a previous run.
+
+    Derived from test class + method name so the ID is human-readable and
+    stable across sessions.
+    """
+    cls = request.node.cls.__name__ if request.node.cls else ""
+    name = request.node.name
+    raw = f"{cls}_{name}" if cls else name
+    slug = re.sub(r"[^a-z0-9]+", "_", raw.lower()).strip("_")
+    return f"t_{slug}"[:60]
+
+
+# ── In-memory helpers ─────────────────────────────────────────────────────────
 
 def _node(
     node_id: str,

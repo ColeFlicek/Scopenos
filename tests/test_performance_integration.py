@@ -179,7 +179,7 @@ class TestSqlCrossjoinDetectorIntegration:
 
     @pytest.mark.asyncio
     async def test_crossjoin_function_produces_finding(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         _write(tmp_path, FIXTURE_SQL_CROSSJOIN)
         await indexer.index_project(str(tmp_path), project_id="perf_test")
@@ -194,7 +194,7 @@ class TestSqlCrossjoinDetectorIntegration:
 
     @pytest.mark.asyncio
     async def test_crossjoin_finding_identifies_correct_function(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         _write(tmp_path, FIXTURE_SQL_CROSSJOIN)
         await indexer.index_project(str(tmp_path), project_id="perf_test")
@@ -206,7 +206,7 @@ class TestSqlCrossjoinDetectorIntegration:
 
     @pytest.mark.asyncio
     async def test_clean_sql_function_produces_no_finding(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         """get_stats_ok uses correlated subqueries — must not be flagged."""
         _write(tmp_path, FIXTURE_SQL_CROSSJOIN)
@@ -219,7 +219,7 @@ class TestSqlCrossjoinDetectorIntegration:
 
     @pytest.mark.asyncio
     async def test_crossjoin_finding_is_new_by_default(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         _write(tmp_path, FIXTURE_SQL_CROSSJOIN)
         await indexer.index_project(str(tmp_path), project_id="perf_test")
@@ -245,7 +245,7 @@ class TestNPlusOneDetectorIntegration:
 
     @pytest.mark.asyncio
     async def test_n_plus_one_function_produces_finding(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         _write(tmp_path, FIXTURE_N_PLUS_ONE)
         await indexer.index_project(str(tmp_path), project_id="perf_test")
@@ -260,7 +260,7 @@ class TestNPlusOneDetectorIntegration:
 
     @pytest.mark.asyncio
     async def test_n_plus_one_finding_identifies_loop_function(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         """The flagged function must be the one with the loop, not the DB sink."""
         _write(tmp_path, FIXTURE_N_PLUS_ONE)
@@ -274,7 +274,7 @@ class TestNPlusOneDetectorIntegration:
 
     @pytest.mark.asyncio
     async def test_db_sink_without_loop_not_flagged(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         """fetch_node has no loop — must not be flagged as N+1."""
         _write(tmp_path, FIXTURE_N_PLUS_ONE)
@@ -296,7 +296,7 @@ class TestFindingSuppression:
 
     @pytest.mark.asyncio
     async def test_acknowledged_finding_is_suppressed(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         _write(tmp_path, FIXTURE_SQL_CROSSJOIN)
         await indexer.index_project(str(tmp_path), project_id="perf_test")
@@ -339,7 +339,7 @@ class TestFindingSuppression:
 
     @pytest.mark.asyncio
     async def test_unacknowledged_finding_remains_new(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         """Acknowledging one function must not suppress findings for other functions."""
         _write(tmp_path, FIXTURE_SQL_CROSSJOIN)
@@ -364,7 +364,7 @@ class TestAutoSuppression:
 
     @pytest.mark.asyncio
     async def test_executemany_loop_is_auto_suppressed(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         """
         Batch writes via executemany should be auto-suppressed even without
@@ -400,7 +400,7 @@ class TestObjectEmbeddingScoring:
 
     @pytest.mark.asyncio
     async def test_high_cardinality_object_raises_severity_to_high(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         """
         analyze_all_nodes loops and calls fetch_edges_for_node which touches
@@ -408,15 +408,15 @@ class TestObjectEmbeddingScoring:
         finding severity must be 'high'.
         """
         _write(tmp_path, FIXTURE_HIGH_CARDINALITY)
-        await indexer.index_project(str(tmp_path), project_id="perf_test")
+        await indexer.index_project(str(tmp_path), project_id=project_id)
 
         # Insert 'edges' as a HIGH-cardinality schema object
-        await _insert_schema_objects(db, "perf_test", [
+        await _insert_schema_objects(db, project_id, [
             {"name": "edges", "source": "db_table", "cardinality": "HIGH",
              "description": "Database table: edges\nCardinality: HIGH"},
         ])
 
-        findings = await check_performance(db, "perf_test")
+        findings = await check_performance(db, project_id)
         n1 = [f for f in findings if f.pattern == "n_plus_one"
               and f.function_name == "analyze_all_nodes"]
 
@@ -429,19 +429,19 @@ class TestObjectEmbeddingScoring:
 
     @pytest.mark.asyncio
     async def test_low_cardinality_object_keeps_severity_low(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         """Loop accessing a LOW-cardinality table should be severity 'low'."""
         _write(tmp_path, FIXTURE_HIGH_CARDINALITY)
-        await indexer.index_project(str(tmp_path), project_id="perf_test")
+        await indexer.index_project(str(tmp_path), project_id=project_id)
 
         # Same function but 'edges' is LOW cardinality (small dataset)
-        await _insert_schema_objects(db, "perf_test", [
+        await _insert_schema_objects(db, project_id, [
             {"name": "edges", "source": "db_table", "cardinality": "LOW",
              "description": "Database table: edges\nCardinality: LOW"},
         ])
 
-        findings = await check_performance(db, "perf_test")
+        findings = await check_performance(db, project_id)
         n1 = [f for f in findings if f.pattern == "n_plus_one"
               and f.function_name == "analyze_all_nodes"]
 
@@ -450,14 +450,14 @@ class TestObjectEmbeddingScoring:
 
     @pytest.mark.asyncio
     async def test_no_schema_objects_defaults_to_medium(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         """Without schema objects, N+1 severity defaults to 'medium'."""
         _write(tmp_path, FIXTURE_N_PLUS_ONE)
-        await indexer.index_project(str(tmp_path), project_id="perf_test")
+        await indexer.index_project(str(tmp_path), project_id=project_id)
         # Do NOT insert any schema objects
 
-        findings = await check_performance(db, "perf_test")
+        findings = await check_performance(db, project_id)
         n1 = [f for f in findings if f.pattern == "n_plus_one"
               and f.function_name == "process_all_nodes"]
 
@@ -466,22 +466,22 @@ class TestObjectEmbeddingScoring:
 
     @pytest.mark.asyncio
     async def test_schema_objects_from_wrong_project_not_used(
-        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path
+        self, indexer: Indexer, db: CallGraphDB, tmp_path: Path, project_id: str
     ):
         """
         Schema objects are project-scoped. Objects from a different project
         must not affect findings — prevents cross-project cardinality bleed.
         """
         _write(tmp_path, FIXTURE_HIGH_CARDINALITY)
-        await indexer.index_project(str(tmp_path), project_id="perf_test")
+        await indexer.index_project(str(tmp_path), project_id=project_id)
 
         # Insert HIGH-cardinality 'edges' but for a DIFFERENT project
-        await _insert_schema_objects(db, "other_project", [
+        await _insert_schema_objects(db, f"{project_id}_other", [
             {"name": "edges", "source": "db_table", "cardinality": "HIGH",
              "description": "edges table"},
         ])
 
-        findings = await check_performance(db, "perf_test")
+        findings = await check_performance(db, project_id)
         n1 = [f for f in findings if f.pattern == "n_plus_one"
               and f.function_name == "analyze_all_nodes"]
 

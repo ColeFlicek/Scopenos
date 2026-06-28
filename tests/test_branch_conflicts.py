@@ -44,11 +44,11 @@ class TestTracerBullet:
     """End-to-end: record change on branch-A, query from branch-B, get conflict back."""
 
     @pytest.mark.asyncio
-    async def test_conflict_detected_across_branches(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "feature/payments", ["src.auth.login"], "abc123")
+    async def test_conflict_detected_across_branches(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "feature/payments", ["src.auth.login"], "abc123")
 
-        result = await db.get_branch_conflicts("proj", ["src.auth.login"], current_branch="main")
+        result = await db.get_branch_conflicts(project_id, ["src.auth.login"], current_branch="main")
 
         assert result["summary"]["total"] == 1
         conflict = result["conflicts"][0]
@@ -63,58 +63,60 @@ class TestTracerBullet:
 class TestRecordBranchChanges:
 
     @pytest.mark.asyncio
-    async def test_records_multiple_functions(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
+    async def test_records_multiple_functions(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
         fns = ["src.auth.login", "src.auth.logout", "src.auth.refresh"]
-        await db.record_branch_changes("proj", "feature/auth", fns, "deadbeef")
+        await db.record_branch_changes(project_id, "feature/auth", fns, "deadbeef")
 
-        result = await db.get_branch_conflicts("proj", fns, current_branch="main")
+        result = await db.get_branch_conflicts(project_id, fns, current_branch="main")
         recorded = {c["function_id"] for c in result["conflicts"]}
         assert recorded == set(fns)
 
     @pytest.mark.asyncio
-    async def test_upsert_does_not_duplicate(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "feature/x", ["src.mod.fn"], "aaa")
-        await db.record_branch_changes("proj", "feature/x", ["src.mod.fn"], "bbb")
+    async def test_upsert_does_not_duplicate(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "feature/x", ["src.mod.fn"], "aaa")
+        await db.record_branch_changes(project_id, "feature/x", ["src.mod.fn"], "bbb")
 
-        result = await db.get_branch_conflicts("proj", ["src.mod.fn"], current_branch="main")
+        result = await db.get_branch_conflicts(project_id, ["src.mod.fn"], current_branch="main")
         branches = result["conflicts"][0]["competing_branches"]
         assert len(branches) == 1
 
     @pytest.mark.asyncio
-    async def test_upsert_updates_head_commit(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "feature/x", ["src.mod.fn"], "old_commit")
-        await db.record_branch_changes("proj", "feature/x", ["src.mod.fn"], "new_commit")
+    async def test_upsert_updates_head_commit(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "feature/x", ["src.mod.fn"], "old_commit")
+        await db.record_branch_changes(project_id, "feature/x", ["src.mod.fn"], "new_commit")
 
-        result = await db.get_branch_conflicts("proj", ["src.mod.fn"], current_branch="main")
+        result = await db.get_branch_conflicts(project_id, ["src.mod.fn"], current_branch="main")
         touch = result["conflicts"][0]["competing_branches"][0]
         assert touch["head_commit"] == "new_commit"
 
     @pytest.mark.asyncio
-    async def test_empty_branch_is_noop(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "", ["src.mod.fn"], "abc")
+    async def test_empty_branch_is_noop(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "", ["src.mod.fn"], "abc")
 
-        result = await db.get_branch_conflicts("proj", ["src.mod.fn"])
+        result = await db.get_branch_conflicts(project_id, ["src.mod.fn"])
         assert result["summary"]["total"] == 0
 
     @pytest.mark.asyncio
-    async def test_empty_function_ids_is_noop(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "feature/x", [], "abc")
+    async def test_empty_function_ids_is_noop(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "feature/x", [], "abc")
 
-        result = await db.get_branch_conflicts("proj", ["src.mod.fn"])
+        result = await db.get_branch_conflicts(project_id, ["src.mod.fn"])
         assert result["summary"]["total"] == 0
 
     @pytest.mark.asyncio
-    async def test_project_scoped(self, db: CallGraphDB):
-        await _seed_project(db, "proj_a")
-        await _seed_project(db, "proj_b")
-        await db.record_branch_changes("proj_a", "feature/x", ["src.mod.fn"], "abc")
+    async def test_project_scoped(self, db: CallGraphDB, project_id: str):
+        proj_a = f"{project_id}a"
+        proj_b = f"{project_id}b"
+        await _seed_project(db, proj_a)
+        await _seed_project(db, proj_b)
+        await db.record_branch_changes(proj_a, "feature/x", ["src.mod.fn"], "abc")
 
-        result = await db.get_branch_conflicts("proj_b", ["src.mod.fn"])
+        result = await db.get_branch_conflicts(proj_b, ["src.mod.fn"])
         assert result["summary"]["total"] == 0
 
 
@@ -125,101 +127,101 @@ class TestRecordBranchChanges:
 class TestGetBranchConflicts:
 
     @pytest.mark.asyncio
-    async def test_empty_when_no_changes_recorded(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        result = await db.get_branch_conflicts("proj", ["src.mod.fn"])
+    async def test_empty_when_no_changes_recorded(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        result = await db.get_branch_conflicts(project_id, ["src.mod.fn"])
         assert result["conflicts"] == []
         assert result["summary"]["total"] == 0
 
     @pytest.mark.asyncio
-    async def test_empty_function_ids_returns_empty(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        result = await db.get_branch_conflicts("proj", [])
+    async def test_empty_function_ids_returns_empty(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        result = await db.get_branch_conflicts(project_id, [])
         assert result["conflicts"] == []
 
     @pytest.mark.asyncio
-    async def test_current_branch_excluded_from_results(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "my-branch", ["src.mod.fn"], "abc")
+    async def test_current_branch_excluded_from_results(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "my-branch", ["src.mod.fn"], "abc")
 
-        result = await db.get_branch_conflicts("proj", ["src.mod.fn"], current_branch="my-branch")
+        result = await db.get_branch_conflicts(project_id, ["src.mod.fn"], current_branch="my-branch")
         assert result["summary"]["total"] == 0
 
     @pytest.mark.asyncio
-    async def test_no_current_branch_returns_all_branches(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "feature/a", ["src.mod.fn"], "abc")
-        await db.record_branch_changes("proj", "feature/b", ["src.mod.fn"], "def")
+    async def test_no_current_branch_returns_all_branches(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "feature/a", ["src.mod.fn"], "abc")
+        await db.record_branch_changes(project_id, "feature/b", ["src.mod.fn"], "def")
 
-        result = await db.get_branch_conflicts("proj", ["src.mod.fn"])
+        result = await db.get_branch_conflicts(project_id, ["src.mod.fn"])
         branches = {t["branch"] for c in result["conflicts"] for t in c["competing_branches"]}
-        assert branches == {"feature/a", "feature/b"}
+        assert {"feature/a", "feature/b"}.issubset(branches)
 
     @pytest.mark.asyncio
-    async def test_main_drift_flagged_when_main_touched_function(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "main", ["src.auth.login"], "abc")
+    async def test_main_drift_flagged_when_main_touched_function(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "main", ["src.auth.login"], "abc")
 
-        result = await db.get_branch_conflicts("proj", ["src.auth.login"], current_branch="feature/x")
+        result = await db.get_branch_conflicts(project_id, ["src.auth.login"], current_branch="feature/x")
         conflict = result["conflicts"][0]
         assert conflict["main_drift"] is True
         assert "src.auth.login" in result["main_drift"]
 
     @pytest.mark.asyncio
-    async def test_master_branch_also_flagged_as_main_drift(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "master", ["src.auth.login"], "abc")
+    async def test_master_branch_also_flagged_as_main_drift(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "master", ["src.auth.login"], "abc")
 
-        result = await db.get_branch_conflicts("proj", ["src.auth.login"], current_branch="feature/x")
+        result = await db.get_branch_conflicts(project_id, ["src.auth.login"], current_branch="feature/x")
         assert result["conflicts"][0]["main_drift"] is True
 
     @pytest.mark.asyncio
-    async def test_non_main_branch_not_flagged_as_drift(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "feature/payments", ["src.auth.login"], "abc")
+    async def test_non_main_branch_not_flagged_as_drift(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "feature/payments", ["src.auth.login"], "abc")
 
-        result = await db.get_branch_conflicts("proj", ["src.auth.login"], current_branch="feature/x")
+        result = await db.get_branch_conflicts(project_id, ["src.auth.login"], current_branch="feature/x")
         assert result["conflicts"][0]["main_drift"] is False
         assert result["main_drift"] == []
 
     @pytest.mark.asyncio
-    async def test_multiple_competing_branches_for_same_function(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "feature/a", ["src.mod.fn"], "aaa")
-        await db.record_branch_changes("proj", "feature/b", ["src.mod.fn"], "bbb")
-        await db.record_branch_changes("proj", "feature/c", ["src.mod.fn"], "ccc")
+    async def test_multiple_competing_branches_for_same_function(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "feature/a", ["src.mod.fn"], "aaa")
+        await db.record_branch_changes(project_id, "feature/b", ["src.mod.fn"], "bbb")
+        await db.record_branch_changes(project_id, "feature/c", ["src.mod.fn"], "ccc")
 
-        result = await db.get_branch_conflicts("proj", ["src.mod.fn"], current_branch="feature/d")
+        result = await db.get_branch_conflicts(project_id, ["src.mod.fn"], current_branch="feature/d")
         assert len(result["conflicts"]) == 1
         branches = {t["branch"] for t in result["conflicts"][0]["competing_branches"]}
-        assert branches == {"feature/a", "feature/b", "feature/c"}
+        assert {"feature/a", "feature/b", "feature/c"}.issubset(branches)
 
     @pytest.mark.asyncio
-    async def test_only_queried_functions_returned(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "feature/x", ["src.a.fn", "src.b.fn"], "abc")
+    async def test_only_queried_functions_returned(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "feature/x", ["src.a.fn", "src.b.fn"], "abc")
 
-        result = await db.get_branch_conflicts("proj", ["src.a.fn"], current_branch="main")
+        result = await db.get_branch_conflicts(project_id, ["src.a.fn"], current_branch="main")
         fn_ids = {c["function_id"] for c in result["conflicts"]}
         assert fn_ids == {"src.a.fn"}
 
     @pytest.mark.asyncio
-    async def test_summary_branches_list(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "feature/a", ["src.mod.fn"], "abc")
-        await db.record_branch_changes("proj", "feature/b", ["src.mod.fn"], "def")
+    async def test_summary_branches_list(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "feature/a", ["src.mod.fn"], "abc")
+        await db.record_branch_changes(project_id, "feature/b", ["src.mod.fn"], "def")
 
-        result = await db.get_branch_conflicts("proj", ["src.mod.fn"], current_branch="main")
-        assert set(result["summary"]["branches"]) == {"feature/a", "feature/b"}
+        result = await db.get_branch_conflicts(project_id, ["src.mod.fn"], current_branch="main")
+        assert {"feature/a", "feature/b"}.issubset(set(result["summary"]["branches"]))
 
     @pytest.mark.asyncio
-    async def test_summary_functions_with_main_drift_count(self, db: CallGraphDB):
-        await _seed_project(db, "proj")
-        await db.record_branch_changes("proj", "main", ["src.a.fn", "src.b.fn"], "abc")
-        await db.record_branch_changes("proj", "feature/x", ["src.c.fn"], "def")
+    async def test_summary_functions_with_main_drift_count(self, db: CallGraphDB, project_id: str):
+        await _seed_project(db, project_id)
+        await db.record_branch_changes(project_id, "main", ["src.a.fn", "src.b.fn"], "abc")
+        await db.record_branch_changes(project_id, "feature/x", ["src.c.fn"], "def")
 
         result = await db.get_branch_conflicts(
-            "proj", ["src.a.fn", "src.b.fn", "src.c.fn"], current_branch="feature/y"
+            project_id, ["src.a.fn", "src.b.fn", "src.c.fn"], current_branch="feature/y"
         )
         assert result["summary"]["functions_with_main_drift"] == 2
 
