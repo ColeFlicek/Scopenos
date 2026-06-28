@@ -167,14 +167,16 @@ class CallGraphDB:
         self._project_dbs: dict[str, "CallGraphDB"] = {}
 
     @classmethod
-    async def create(cls, dsn: str = "", schema: str = "") -> "CallGraphDB":
+    async def create(
+        cls, dsn: str = "", schema: str = "", skip_schema_init: bool = False
+    ) -> "CallGraphDB":
         """Async factory — create and fully initialize a CallGraphDB instance."""
         resolved = dsn or os.getenv("DATABASE_URL", _DEFAULT_DSN)
         obj = cls(resolved, schema=schema)
-        await obj.init()
+        await obj.init(skip_schema_init=skip_schema_init)
         return obj
 
-    async def init(self) -> None:
+    async def init(self, skip_schema_init: bool = False) -> None:
         """Open the asyncpg connection pool and apply schema."""
         from pgvector.asyncpg import register_vector
 
@@ -216,9 +218,10 @@ class CallGraphDB:
             command_timeout=30.0,
         )
         self._db = _DB(self._pool)
-        schema_sql = _SCHEMA_SQL.read_text()
-        async with self._pool.acquire() as conn:
-            await conn.execute(schema_sql)
+        if not skip_schema_init:
+            schema_sql = _SCHEMA_SQL.read_text()
+            async with self._pool.acquire() as conn:
+                await conn.execute(schema_sql)
 
     async def close(self) -> None:
         """Close the connection pool and all cached project-scoped pools."""
