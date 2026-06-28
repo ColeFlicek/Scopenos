@@ -11,7 +11,10 @@ from datetime import datetime, timezone
 async def main() -> None:
     import asyncpg
 
-    dsn = os.environ.get("DATABASE_URL", "postgresql://scopenos:scopenos@172.21.0.1/scopenos")
+    dsn = (
+        os.environ.get("CONTROL_DB_URL")
+        or os.environ.get("DATABASE_URL", "postgresql://scopenos:scopenos@172.21.0.1/scopenos")
+    )
     conn = await asyncpg.connect(dsn)
 
     now = datetime.now(timezone.utc).isoformat()
