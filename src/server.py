@@ -85,7 +85,7 @@ async def _get_services() -> Services:
 
         org_db = get_current_org_db()
         if org_db is None:
-            org_db = await CallGraphDB.create()
+            raise HTTPException(503, "No org database available for this request.")
 
         svcs = await _make_services(org_db)
         _services_cache[org_id] = svcs
@@ -95,24 +95,15 @@ async def _get_services() -> Services:
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     """FastMCP lifespan — initialize routing + services on startup, close on shutdown."""
-    from .file_watcher import start_file_watcher
     from .org_router import OrgRouter
 
     router = await OrgRouter.create()
     set_org_router(router)
 
-    # Pre-warm default (org_id=None) services using the control DB so the
-    # first request doesn't pay the initialization cost.
-    default_svcs = await _make_services(router.control_db)
-    _services_cache[None] = default_svcs
-
-    watcher_task = await start_file_watcher(default_svcs.db, default_svcs.indexer)
+    # Multi-tenant mode: control DB is auth-only (organizations, users, api_keys).
+    # Org-specific services (embeddings, indexer, decisions) are created lazily
+    # per org on first request. File watcher is a no-op in K8s (no local files).
     yield
-    watcher_task.cancel()
-    try:
-        await watcher_task
-    except asyncio.CancelledError:
-        pass
 
     # Close all per-org DB pools (control_db is closed by router.close()).
     for org_id, svcs in list(_services_cache.items()):
