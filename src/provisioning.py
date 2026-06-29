@@ -149,10 +149,12 @@ async def _record_org(control_dsn: str, slug: str, db_name: str, role_name: str,
         # Control DB may not be configured in all environments — skip silently
         return
     try:
+        # Set search_path to scopenos schema where control plane tables live
+        await conn.execute("SET search_path TO scopenos, public")
         # Check that the organizations table exists before inserting
         exists = await conn.fetchval(
             "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema='public' AND table_name='organizations'"
+            "WHERE table_name='organizations' AND table_schema IN ('scopenos','public')"
         )
         if not exists:
             return
@@ -184,9 +186,10 @@ async def _remove_org_record(control_dsn: str, slug: str) -> None:
     except Exception:
         return
     try:
+        await conn.execute("SET search_path TO scopenos, public")
         exists = await conn.fetchval(
             "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema='public' AND table_name='organizations'"
+            "WHERE table_name='organizations' AND table_schema IN ('scopenos','public')"
         )
         if not exists:
             return

@@ -44,7 +44,7 @@ class OrgRouter:
                 "CONTROL_DB_URL is required but not set. "
                 "Point it at the Scopenos control plane database."
             )
-        control_db = await CallGraphDB.create(dsn, skip_schema_init=True)
+        control_db = await CallGraphDB.create(dsn, schema="scopenos", skip_schema_init=True)
         return cls(control_db)
 
     async def resolve_request(self, raw_key: str) -> tuple[dict | None, "CallGraphDB"]:
