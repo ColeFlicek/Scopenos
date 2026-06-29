@@ -86,7 +86,7 @@ class OrgRouter:
                 )
 
             from .call_graph.storage import CallGraphDB
-            org_db = await CallGraphDB.create(db_url)
+            org_db = await CallGraphDB.create(db_url, skip_schema_init=True)
             self._pools[org_id] = org_db
             return org_db
 
