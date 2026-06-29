@@ -260,9 +260,11 @@ async def provision_org(
             f"CREATE ROLE \"{role_name}\" LOGIN PASSWORD '{password}'"
         )
 
-        # Grant connect on the new DB
+        # Grant connect + create on the new DB.
+        # CREATE is needed so org_scopenos_rw can call create_project_schema(),
+        # which runs CREATE SCHEMA IF NOT EXISTS for each indexed project.
         await org_conn.execute(
-            f'GRANT CONNECT ON DATABASE "{db_name}" TO "{role_name}"'
+            f'GRANT CONNECT, CREATE ON DATABASE "{db_name}" TO "{role_name}"'
         )
 
         # Grant usage on schema
