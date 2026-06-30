@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -46,22 +45,7 @@ class OrgRouter:
                 "Point it at the Scopenos control plane database."
             )
         control_db = await CallGraphDB.create(dsn, schema="scopenos", skip_schema_init=True)
-        router = cls(control_db)
-        await router._apply_control_schema(dsn)
-        return router
-
-    async def _apply_control_schema(self, dsn: str) -> None:
-        """Apply schema_control_plane.sql at startup (idempotent — all IF NOT EXISTS)."""
-        import asyncpg
-        schema_path = Path(__file__).parent.parent / "schema_control_plane.sql"
-        if not schema_path.exists():
-            return
-        sql = schema_path.read_text()
-        raw = await asyncpg.connect(dsn)
-        try:
-            await raw.execute(sql)
-        finally:
-            await raw.close()
+        return cls(control_db)
 
     async def resolve_request(
         self, raw_key: str, endpoint: str = ""

@@ -23,7 +23,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 COPY schema_org.sql .
-COPY schema_control_plane.sql .
 COPY scripts/bootstrap_api_key.py ./scripts/bootstrap_api_key.py
 
 EXPOSE 3004

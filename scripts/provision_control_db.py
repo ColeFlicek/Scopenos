@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 ROLE = "scopenos_control_rw"
-CONTROL_TABLES = ["organizations", "users", "api_keys", "org_members"]
+CONTROL_TABLES = ["organizations", "users", "api_keys", "org_members", "auth_events"]
 
 
 async def main() -> None:
