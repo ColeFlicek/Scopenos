@@ -75,6 +75,9 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS edge_count    INTEGER NOT NULL DEF
 -- NULL = single-tenant default (routes to this org's DB, no control-plane lookup).
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id TEXT;
 
+-- ── Migrations: admin key flag ───────────────────────────────────────────────
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+
 CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id) WHERE org_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_projects_schema ON projects(schema_name);

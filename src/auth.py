@@ -25,9 +25,12 @@ class _SimpleRouter:
     def __init__(self, db: CallGraphDB) -> None:
         self._db = db
 
-    async def resolve_request(self, raw_key: str) -> tuple[dict | None, CallGraphDB]:
+    async def resolve_request(self, raw_key: str, endpoint: str = "") -> tuple[dict | None, CallGraphDB]:
         user = await self._db.get_user_by_key(raw_key)
         return user, self._db
+
+    async def log_no_key_event(self, endpoint: str = "") -> None:
+        pass
 
 
 def set_auth_db(db: CallGraphDB) -> None:
