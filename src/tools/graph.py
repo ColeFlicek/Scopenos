@@ -333,5 +333,5 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         return json.dumps(result)
 
     for _fn in [get_callers, get_callees, get_impact_radius,
-                query_similar_functions, get_function_context, find_dependents]:
+                query_similar_functions, find_dependents]:
         setattr(_mod, _fn.__name__, _fn)

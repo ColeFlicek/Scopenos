@@ -558,12 +558,11 @@ class TestLogDecision:
         nodes = [_node("src.mod.my_func")]
         await _insert(svc.db, "proj", nodes)
 
-        svc.decisions = MagicMock()
-        svc.decisions.log_decision = AsyncMock(return_value={"id": "dec-001"})
+        mock_dm = MagicMock()
+        mock_dm.log_decision = AsyncMock(return_value={"id": "dec-001"})
 
-        with patch("src.server._get_services", AsyncMock(return_value=svc)), \
-             patch("src.server.get_current_user", return_value={"id": "test-user"}), \
-             patch("src.server.check_permission", AsyncMock(return_value=None)):
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)), \
+             patch("src.decision_memory.memory.DecisionMemory", return_value=mock_dm):
             from src.tools.memory import log_decision
             result = json.loads(await log_decision(
                 type="Implementation",
@@ -573,7 +572,6 @@ class TestLogDecision:
                 trigger="performance_test",
                 linked_function_ids=["src.mod.my_func"],
             ))
-        # Result is whatever decisions.log_decision returned, JSON-encoded
         assert result is not None
 
     @pytest.mark.asyncio
@@ -581,13 +579,14 @@ class TestLogDecision:
         nodes = [_node("src.mod.my_func")]
         await _insert(svc.db, "proj", nodes)
 
-        svc.decisions = MagicMock()
-        svc.decisions.get_decision_history = AsyncMock(return_value=[
+        mock_dm = MagicMock()
+        mock_dm.get_decision_history = AsyncMock(return_value=[
             {"id": "dec-001", "description": "Chose asyncpg", "type": "Implementation",
              "created_at": "2026-01-01", "functions": ["src.mod.my_func"]}
         ])
 
-        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)), \
+             patch("src.decision_memory.memory.DecisionMemory", return_value=mock_dm):
             from src.tools.memory import get_decision_history
             result = json.loads(await get_decision_history(
                 function_name="my_func", project_id="proj"

@@ -224,6 +224,6 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         return json.dumps(result)
 
     for _fn in [list_projects, compare_branches, get_branch_conflicts,
-                get_function_at_commit, setup_scopenos_client,
+                setup_scopenos_client,
                 get_project_home, get_subsystem_detail]:
         setattr(_mod, _fn.__name__, _fn)
