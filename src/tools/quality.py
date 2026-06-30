@@ -8,6 +8,7 @@ from fastmcp import FastMCP
 
 from ..auth import get_current_user, check_permission
 from ._shared import check_read_access
+from . import _shared as _tools_shared
 
 
 def register(mcp: FastMCP, get_services: Callable) -> None:
@@ -39,7 +40,9 @@ def register(mcp: FastMCP, get_services: Callable) -> None:
         from ..guidance import compute_performance_guidance
         svcs = await get_services()
         await check_read_access(project_id, svcs.db)
-        findings = await _check(svcs.db, project_id, embeddings=svcs.embeddings,
+        pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
+        pemb = svcs.embeddings.with_db(pdb)
+        findings = await _check(pdb, project_id, embeddings=pemb,
                                 exclude_test_files=exclude_test_files)
         return json.dumps({
             "project_id": project_id,
@@ -73,7 +76,8 @@ def register(mcp: FastMCP, get_services: Callable) -> None:
         from ..validate import validate_proposed_code as _validate
         svcs = await get_services()
         await check_read_access(project_id, svcs.db)
-        result = await _validate(code, target_file, project_id, svcs.db)
+        pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
+        result = await _validate(code, target_file, project_id, pdb)
         return json.dumps(result.to_dict(), indent=2)
 
     @mcp.tool()
@@ -106,12 +110,14 @@ def register(mcp: FastMCP, get_services: Callable) -> None:
 
         svcs = await get_services()
         await check_read_access(project_id, svcs.db)
-        findings = await _check_perf(svcs.db, project_id, embeddings=svcs.embeddings)
+        pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
+        pemb = svcs.embeddings.with_db(pdb)
+        findings = await _check_perf(pdb, project_id, embeddings=pemb)
         preflight = await run_preflight(
-            svcs.db,
+            pdb,
             project_id,
             performance_findings=findings,
-            embeddings=svcs.embeddings,
+            embeddings=pemb,
         )
         return preflight.to_brief()
 
@@ -135,9 +141,12 @@ def register(mcp: FastMCP, get_services: Callable) -> None:
         function_id: the id field from the check_performance finding
         reason: why this pattern is intentional or acceptable
         """
+        from ..decision_memory.memory import DecisionMemory as _DM
         svcs = await get_services()
         await check_permission(get_current_user(), project_id, "write", svcs.db)
-        result = await svcs.decisions.log_decision(
+        pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
+        dm = _DM(pdb, svcs.embeddings.with_db(pdb))
+        result = await dm.log_decision(
             type="Performance",
             description=reason,
             rejected_alternatives="",
@@ -210,9 +219,12 @@ def register(mcp: FastMCP, get_services: Callable) -> None:
         function_id: the id field from the check_solid_principles finding
         reason: why this pattern is intentional or acceptable
         """
+        from ..decision_memory.memory import DecisionMemory as _DM
         svcs = await get_services()
         await check_permission(get_current_user(), project_id, "write", svcs.db)
-        result = await svcs.decisions.log_decision(
+        pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
+        dm = _DM(pdb, svcs.embeddings.with_db(pdb))
+        result = await dm.log_decision(
             type="SOLID",
             description=reason,
             rejected_alternatives="",

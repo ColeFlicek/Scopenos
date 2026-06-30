@@ -49,14 +49,14 @@ spec:
                 name: scopenos-config
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: /api/health   # process check only — never causes restart for DB issues
               port: 3004
             initialDelaySeconds: 15
             periodSeconds: 30
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/ready    # DB ping — drops pod from rotation if grants are broken
               port: 3004
             initialDelaySeconds: 10
             periodSeconds: 10

@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scopenos-smoke-check
+  namespace: scopenos
+  annotations:
+    # Run after every deployment to verify infrastructure invariants.
+    #
+    # Checks:
+    #   1. scopenos_control_rw has SELECT/INSERT/UPDATE/DELETE on all control-plane tables
+    #   2. SCOPENOS_API_KEY (if set) resolves to a live row in api_keys
+    #   3. node_count in projects matches actual function count (requires ORG_DB_URL in secret)
+    #
+    # Usage (manual post-deploy):
+    #   kubectl delete job scopenos-smoke-check -n scopenos --ignore-not-found
+    #   kubectl apply -f k8s/smoke-job.yaml
+    #   kubectl wait --for=condition=complete job/scopenos-smoke-check -n scopenos --timeout=60s
+    #   kubectl logs -n scopenos job/scopenos-smoke-check
+    #
+    # A non-zero exit from the pod means at least one check failed.
+    # The pod is kept after failure (backoffLimit: 0, restartPolicy: Never)
+    # so logs are available for inspection.
+    #
+    # To run the metadata accuracy check (check #3), add ORG_DB_URL to scopenos-secrets.
+spec:
+  ttlSecondsAfterFinished: 3600   # auto-delete 1h after completion
+  backoffLimit: 0                  # never retry — keep failed pod for log inspection
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: smoke
+          image: ghcr.io/coleflicek/scopenos:latest
+          command: ["python", "-m", "src.infra_smoke"]
+          env:
+            - name: SMOKE_ROLE
+              value: "scopenos_control_rw"
+          envFrom:
+            - secretRef:
+                name: scopenos-secrets
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"

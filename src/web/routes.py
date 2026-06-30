@@ -278,5 +278,35 @@ def register_routes(
 
     @mcp.custom_route("/api/health", methods=["GET"])
     async def api_health(request: Request) -> JSONResponse:
-        """Liveness/readiness probe — returns 200 if the HTTP server is up."""
+        """Liveness probe — returns 200 if the HTTP server process is up.
+
+        Intentionally does not check the database. Use /api/ready for that.
+        K8s liveness: a DB failure should remove the pod from rotation (readiness),
+        not restart it (liveness). Restarting can't fix a missing DB grant.
+        """
         return JSONResponse({"status": "ok"})
+
+    @mcp.custom_route("/api/ready", methods=["GET"])
+    async def api_ready(request: Request) -> JSONResponse:
+        """Readiness probe — returns 200 only if the DB auth path is working.
+
+        Runs SELECT 1 FROM users via the control DB connection (the same role
+        the server uses for every auth check). A failure means the pod should
+        stop receiving traffic: either the DB is unreachable or the role lacks
+        the grants it needs to resolve API keys.
+        """
+        from ..auth import get_control_db
+        db = get_control_db()
+        if db is None:
+            return JSONResponse(
+                {"status": "not_ready", "detail": "control DB not initialized"},
+                status_code=503,
+            )
+        try:
+            await db.ping()
+            return JSONResponse({"status": "ok"})
+        except Exception as exc:
+            return JSONResponse(
+                {"status": "not_ready", "detail": str(exc)},
+                status_code=503,
+            )

@@ -146,6 +146,7 @@
   <button            data-tab="orgs"     onclick="showTab('orgs')">Orgs</button>
   <button            data-tab="projects" onclick="showTab('projects')">Projects</button>
   <button            data-tab="auth-log" onclick="showTab('auth-log')">Auth Log</button>
+  <button            data-tab="health"   onclick="showTab('health')">Health</button>
 </nav>
 
 <main>
@@ -268,6 +269,30 @@
   </div>
 </div>
 
+<!-- Health -->
+<div id="tab-health" class="tab">
+  <div class="cards">
+    <div class="card" id="h-card-passing"><div class="label">Checks Passing</div><div class="value" id="h-passed">—</div></div>
+    <div class="card" id="h-card-failing"><div class="label">Checks Failing</div><div class="value" id="h-failed">—</div></div>
+    <div class="card accent-muted"><div class="label">Last Run</div><div class="value" style="font-size:16px;font-weight:500" id="h-ran-at">—</div></div>
+  </div>
+  <div class="table-wrap">
+    <div class="table-toolbar">
+      <h2>Infrastructure Checks</h2>
+      <div class="toolbar-spacer"></div>
+      <span class="table-meta" id="health-meta"></span>
+    </div>
+    <table id="health-table">
+      <thead><tr>
+        <th style="width:80px">Status</th>
+        <th>Check</th>
+        <th>Detail</th>
+      </tr></thead>
+      <tbody id="health-body"><tr><td colspan="3" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 </main>
 
 <script>
@@ -361,6 +386,7 @@ function refreshTab(name) {
   else if (name === 'orgs')     loadOrgs();
   else if (name === 'projects') loadProjects();
   else if (name === 'auth-log') loadAuthLog();
+  else if (name === 'health')   loadSmoke();
 }
 
 // ── Refresh UI state ──────────────────────────────────────────────────────────
@@ -623,6 +649,45 @@ function sortTable(tableId, colIdx) {
     const arrow = th.querySelector('.sort-arrow');
     if (arrow) arrow.textContent = i === colIdx ? (asc ? '↑' : '↓') : '↕';
   });
+}
+
+// ── Health ────────────────────────────────────────────────────────────────────
+async function loadSmoke() {
+  const tbody = document.getElementById('health-body');
+  setLoading(true);
+  try {
+    const r = await apiFetch('/admin/api/smoke');
+    if (!r.ok) { tbody.innerHTML = `<tr><td colspan="3" class="empty">Error ${r.status}</td></tr>`; return; }
+    const d = await r.json();
+    const checks = d.checks || [];
+    const failed = d.total - d.passed;
+
+    const passed = document.getElementById('h-passed');
+    passed.textContent = d.passed;
+    passed.className = 'value' + (d.any_fail ? ' warn' : ' ok');
+    document.getElementById('h-card-passing').className = 'card ' + (d.any_fail ? 'accent-muted' : 'accent-green');
+
+    const failEl = document.getElementById('h-failed');
+    failEl.textContent = failed;
+    failEl.className = 'value' + (failed > 0 ? ' danger' : '');
+    document.getElementById('h-card-failing').className = 'card ' + (failed > 0 ? 'accent-red' : 'accent-muted');
+
+    document.getElementById('h-ran-at').textContent = d.ran_at ? fmtTime(d.ran_at) : '—';
+
+    if (!checks.length) { tbody.innerHTML = '<tr><td colspan="3" class="empty">No checks ran</td></tr>'; return; }
+    tbody.innerHTML = checks.map(c => {
+      const badge = c.status === 'PASS' ? 'badge-ok' : c.status === 'FAIL' ? 'badge-danger' : 'badge-warn';
+      return `<tr>
+        <td><span class="badge ${badge}">${esc(c.status)}</span></td>
+        <td class="mono" style="white-space:nowrap">${esc(c.name)}</td>
+        <td style="color:#a0aec0">${esc(c.detail)}</td>
+      </tr>`;
+    }).join('');
+    stampRefresh();
+    document.getElementById('health-meta').textContent = `updated ${fmtTime(new Date().toISOString())}`;
+  } catch(e) {
+    if (!e.message.startsWith('HTTP')) tbody.innerHTML = `<tr><td colspan="3" class="empty">Failed: ${esc(e.message)}</td></tr>`;
+  } finally { setLoading(false); }
 }
 
 // ── Auto-refresh (30s) ────────────────────────────────────────────────────────

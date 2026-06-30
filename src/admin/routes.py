@@ -6,6 +6,8 @@ No org data is ever returned — only control-plane metadata.
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from starlette.exceptions import HTTPException
@@ -13,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
 from ..auth import require_admin, get_control_db
+from ..infra_smoke import run_checks, check_metadata_accuracy, CheckResult
 
 _DASHBOARD_HTML = Path(__file__).parent / "dashboard.html"
 
@@ -68,6 +71,43 @@ def register(mcp) -> None:
             limit = 200
         events = await db.admin_get_auth_log(limit)
         return JSONResponse({"events": events})
+
+    @mcp.custom_route("/admin/api/smoke", methods=["GET"])
+    async def admin_smoke(request: Request) -> JSONResponse:
+        """Run infrastructure smoke checks and return pass/fail results."""
+        require_admin()
+        db = _control_db()
+        env_key = os.environ.get("SCOPENOS_API_KEY") or None
+
+        results: list[CheckResult] = []
+        try:
+            async with db.acquire() as conn:
+                results = await run_checks(conn, env_key=env_key)
+        except Exception as exc:
+            results = [CheckResult("connection", "ERROR", str(exc))]
+
+        from ..auth import _org_router
+        if _org_router:
+            for org_id, org_db in getattr(_org_router, "_pools", {}).items():
+                try:
+                    async with org_db.acquire() as org_conn:
+                        r = await check_metadata_accuracy(org_conn)
+                        results.append(CheckResult(
+                            f"metadata_accuracy[{org_id}]", r.status, r.detail
+                        ))
+                except Exception as exc:
+                    results.append(CheckResult(
+                        f"metadata_accuracy[{org_id}]", "ERROR", str(exc)
+                    ))
+
+        passed = sum(1 for r in results if r.status == "PASS")
+        return JSONResponse({
+            "checks": [{"name": r.name, "status": r.status, "detail": r.detail} for r in results],
+            "passed": passed,
+            "total": len(results),
+            "any_fail": passed < len(results),
+            "ran_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     @mcp.custom_route("/admin/api/projects", methods=["GET"])
     async def admin_projects(request: Request) -> JSONResponse:

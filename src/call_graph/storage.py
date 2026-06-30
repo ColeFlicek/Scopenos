@@ -223,6 +223,29 @@ class CallGraphDB:
             async with self._pool.acquire() as conn:
                 await conn.execute(schema_sql)
 
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def acquire(self):
+        """Raw asyncpg connection for diagnostic use (smoke checks, health probes).
+
+        Prefer named CallGraphDB methods for all application queries.
+        This context manager exists so diagnostic code doesn't need to reach
+        through _pool directly, keeping raw pool access inside storage.py.
+        """
+        async with self._pool.acquire() as conn:
+            yield conn
+
+    async def ping(self) -> None:
+        """Verify the current role can SELECT from the users table.
+
+        Raises an exception if the connection fails or the role lacks SELECT.
+        Used by the readiness probe — a failure means the pod should stop
+        receiving traffic until the underlying grant/connectivity issue is fixed.
+        """
+        async with self._pool.acquire() as conn:
+            await conn.fetchval("SELECT 1 FROM users LIMIT 1")
+
     async def close(self) -> None:
         """Close the connection pool and all cached project-scoped pools."""
         for pdb in list(self._project_dbs.values()):

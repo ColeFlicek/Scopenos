@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scopenos-smoke-drift
+  namespace: scopenos
+  annotations:
+    # Runs every 30 minutes to detect infrastructure drift between deployments.
+    # Same checks as smoke-job.yaml but scheduled, not deploy-triggered.
+    #
+    # Checks:
+    #   1. scopenos_control_rw has DML on all control-plane tables
+    #   2. SCOPENOS_API_KEY (if set in secret) resolves to a live api_keys row
+    #   3. node_count in projects matches actual function count (requires ORG_DB_URL)
+    #
+    # Monitor results:
+    #   kubectl get jobs -n scopenos -l app=scopenos-smoke-drift
+    #   kubectl logs -n scopenos -l app=scopenos-smoke-drift --tail=50
+    #
+    # A failed job means at least one check returned FAIL or ERROR.
+    # Failed pods are kept (backoffLimit: 0) for log inspection.
+    # Only the 3 most recent failures and 1 success are retained.
+spec:
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid         # skip if previous run is still going
+  successfulJobsHistoryLimit: 1     # keep only the last success
+  failedJobsHistoryLimit: 3         # keep 3 failures for diagnosis
+  jobTemplate:
+    spec:
+      backoffLimit: 0               # no retries — keep failed pod for log retrieval
+      template:
+        metadata:
+          labels:
+            app: scopenos-smoke-drift
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: smoke
+              image: ghcr.io/coleflicek/scopenos:latest
+              command: ["python", "-m", "src.infra_smoke"]
+              env:
+                - name: SMOKE_ROLE
+                  value: "scopenos_control_rw"
+              envFrom:
+                - secretRef:
+                    name: scopenos-secrets
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "200m"

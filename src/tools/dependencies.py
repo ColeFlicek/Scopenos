@@ -103,10 +103,11 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         identify which symbols were removed or changed between two index runs.
         """
         svcs = await _tools_shared.get_services()
-        await check_read_access("", svcs.db)
+        await check_read_access("", svcs.db)  # require authentication
         row = await svcs.db.get_dependency_fingerprint_by_id(fingerprint_id)
         if not row:
             return json.dumps({"status": "not found", "fingerprint_id": fingerprint_id})
+        await check_read_access(row["project_id"], svcs.db)  # require project read access
         return json.dumps(fingerprint_payload(row))
 
     @mcp.tool()
@@ -159,13 +160,16 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         a that aren't in b are "removed".
         """
         svcs = await _tools_shared.get_services()
-        await check_read_access("", svcs.db)
+        await check_read_access("", svcs.db)  # require authentication
         row_a = await svcs.db.get_dependency_fingerprint_by_id(fingerprint_id_a)
-        row_b = await svcs.db.get_dependency_fingerprint_by_id(fingerprint_id_b)
         if not row_a:
             return json.dumps({"status": "not found", "fingerprint_id": fingerprint_id_a})
+        row_b = await svcs.db.get_dependency_fingerprint_by_id(fingerprint_id_b)
         if not row_b:
             return json.dumps({"status": "not found", "fingerprint_id": fingerprint_id_b})
+        await check_read_access(row_a["project_id"], svcs.db)
+        if row_b["project_id"] != row_a["project_id"]:
+            await check_read_access(row_b["project_id"], svcs.db)
         fp_a = fingerprint_from_row(row_a)
         fp_b = fingerprint_from_row(row_b)
         diff = DependencyFingerprinter().diff(fp_a, fp_b)
