@@ -6,8 +6,9 @@ Usage:
 
 Flags:
     --admin   Create an admin key (is_admin=TRUE). Admin keys can access /admin/*
-              but cannot use MCP project tools. Use for the dashboard and git hook.
-              Without --admin, creates a normal org-scoped key (requires --org-id).
+              but cannot use MCP project tools. Use for the dashboard only.
+              Without --admin, creates a key with org_id=NULL — use psql to set
+              org_id after creation if an org-scoped key is needed.
 
 Options (env vars):
     CONTROL_DB_URL or DATABASE_URL  — connection string (required)
