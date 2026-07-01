@@ -25,8 +25,9 @@ python -m benchmark.run weekly-tasks --n 5
 If `check-mcp` fails, Path B is degraded to grep. Fix auth before proceeding:
 ```bash
 # On TheHive — generate a fresh API key
-docker exec -it acip-postgres psql -U scopenos scopenos
-# Keys are hashed — if lost, re-issue using the two-step process in the Access Topography Notion doc.
+docker exec -it acip-postgres psql -U scopenos scopenos_control
+# Then: SELECT raw_key FROM api_keys WHERE user_id = (SELECT id FROM users WHERE email = 'cole.flicek@gmail.com') LIMIT 1;
+# (Keys are hashed — if lost, re-run bootstrap_api_key.py and update .mcp.json)
 ```
 
 ---
