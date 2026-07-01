@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.migrate_to_schemas import migrate, PER_PROJECT_TABLES
+from scripts.migrate_to_schemas import migrate, PER_PROJECT_TABLES, JOIN_VIA_DECISIONS
 from src.call_graph.storage import derive_schema_name
 
 # DSN used by all tests in this module.  Falls back to the default test DSN.
@@ -249,3 +249,102 @@ class TestMigrateToSchemas:
                 assert row is not None, (
                     f"Node for project {pid} should be in {schema}.nodes"
                 )
+
+    @pytest.mark.asyncio
+    async def test_join_via_decisions_constant_matches_schema(self, db, project_id: str):
+        """Every table in JOIN_VIA_DECISIONS should exist in the public schema."""
+        async with db._pool.acquire() as conn:
+            existing = {
+                r["table_name"]
+                for r in await conn.fetch(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public'"
+                )
+            }
+        missing = [t for t in JOIN_VIA_DECISIONS if t not in existing]
+        assert not missing, (
+            f"Tables in JOIN_VIA_DECISIONS not found in public schema: {missing}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_migrate_decision_embeddings_and_functions(self, db, project_id: str):
+        """decision_embeddings and decision_functions are migrated via JOIN through decisions."""
+        import uuid
+        pid = "mig_decisions_test"
+        schema = derive_schema_name(pid)
+        decision_id = str(uuid.uuid4())
+        fn_id = f"{pid}.some_fn"
+        fake_embedding = [0.0] * 1536
+
+        async with db._pool.acquire() as conn:
+            await conn.execute(_INSERT_PROJECT, *_project_row(pid, ""))
+            # Write decision to public.decisions
+            await conn.execute(
+                "INSERT INTO decisions(id, project_id, type, description, created_at) "
+                "VALUES($1, $2, 'Design', 'test decision', $3) ON CONFLICT DO NOTHING",
+                decision_id, pid, "2026-01-01T00:00:00+00:00",
+            )
+            # Write embedding to public.decision_embeddings (no project_id column)
+            await conn.execute(
+                "INSERT INTO decision_embeddings(id, embedding) VALUES($1, $2) "
+                "ON CONFLICT DO NOTHING",
+                decision_id, fake_embedding,
+            )
+            # Write join row to public.decision_functions (no project_id column)
+            await conn.execute(
+                "INSERT INTO decision_functions(decision_id, function_id) VALUES($1, $2) "
+                "ON CONFLICT DO NOTHING",
+                decision_id, fn_id,
+            )
+
+        await migrate(_TEST_DB_URL, dry_run=False)
+
+        async with db._pool.acquire() as conn:
+            dec_row = await conn.fetchrow(
+                f'SELECT id FROM "{schema}".decisions WHERE id = $1', decision_id
+            )
+            emb_row = await conn.fetchrow(
+                f'SELECT id FROM "{schema}".decision_embeddings WHERE id = $1', decision_id
+            )
+            fn_row = await conn.fetchrow(
+                f'SELECT decision_id FROM "{schema}".decision_functions WHERE decision_id = $1',
+                decision_id,
+            )
+
+        assert dec_row is not None, "decision should be in project schema"
+        assert emb_row is not None, "decision_embedding should be in project schema (via JOIN)"
+        assert fn_row is not None, "decision_function should be in project schema (via JOIN)"
+
+    @pytest.mark.asyncio
+    async def test_decisions_only_flag(self, db, project_id: str):
+        """--decisions-only migrates only the three decision tables."""
+        import uuid
+        pid = "mig_deconly_test"
+        schema = derive_schema_name(pid)
+        decision_id = str(uuid.uuid4())
+
+        async with db._pool.acquire() as conn:
+            await conn.execute(_INSERT_PROJECT, *_project_row(pid, ""))
+            # Write a node to public (should NOT be migrated in decisions-only mode)
+            await conn.execute(_INSERT_NODE, *_node_values(pid, f"{pid}.fn"))
+            # Write a decision to public
+            await conn.execute(
+                "INSERT INTO decisions(id, project_id, type, description, created_at) "
+                "VALUES($1, $2, 'Design', 'test', $3) ON CONFLICT DO NOTHING",
+                decision_id, pid, "2026-01-01T00:00:00+00:00",
+            )
+
+        await migrate(_TEST_DB_URL, dry_run=False, decisions_only=True)
+
+        async with db._pool.acquire() as conn:
+            # Decision should be migrated
+            dec_row = await conn.fetchrow(
+                f'SELECT id FROM "{schema}".decisions WHERE id = $1', decision_id
+            )
+            # Node should NOT be migrated (decisions-only skips nodes)
+            node_count = await conn.fetchval(
+                f'SELECT COUNT(*) FROM "{schema}".nodes WHERE project_id = $1', pid
+            )
+
+        assert dec_row is not None, "decision should be migrated in decisions-only mode"
+        assert node_count == 0, "nodes should not be migrated in decisions-only mode"
