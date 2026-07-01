@@ -412,6 +412,63 @@ def cmd_check_mcp(args) -> None:
         sys.exit(0)
 
 
+def cmd_weekly_tasks(args) -> None:
+    """Pick a balanced set of tasks for a weekly autonomous benchmark session."""
+    from benchmark.loader import _PATH_A_HARD_TASKS
+    import random
+
+    categories = args.categories or list(_PATH_A_HARD_TASKS.keys())
+
+    # Try to load full task metadata from SWE-bench (needs `datasets` installed).
+    # Falls back to listing task IDs only if the library isn't available.
+    try:
+        from benchmark.loader import load_path_a_hard_tasks
+        tasks = load_path_a_hard_tasks(categories=categories)
+        if args.repos:
+            tasks = [t for t in tasks if t.repo in set(args.repos)]
+
+        random.seed(args.seed)
+        if len(tasks) <= args.n:
+            selected = tasks
+        else:
+            per_cat = max(1, args.n // len(categories))
+            selected = []
+            for cat in categories:
+                cat_tasks = load_path_a_hard_tasks(categories=[cat])
+                if args.repos:
+                    cat_tasks = [t for t in cat_tasks if t.repo in set(args.repos)]
+                selected.extend(random.sample(cat_tasks, min(per_cat, len(cat_tasks))))
+            selected = selected[:args.n]
+
+        print(f"# Weekly benchmark — {len(selected)} tasks ({', '.join(categories)})")
+        print(f"# Seed: {args.seed}  Repos: {list({t.repo for t in selected})}")
+        print()
+        for t in selected:
+            print(json.dumps({
+                "instance_id": t.instance_id,
+                "repo": t.repo,
+                "base_commit": t.base_commit[:8],
+                "fail_to_pass_count": len(t.fail_to_pass),
+            }))
+
+    except ImportError:
+        # No `datasets` — just list available task IDs from the hardcoded manifest
+        all_ids: list[str] = []
+        for cat in categories:
+            all_ids.extend(_PATH_A_HARD_TASKS.get(cat, []))
+        if args.repos:
+            # Can't filter by repo without metadata — show all and let user pick
+            print("# WARNING: install `datasets` to filter by repo. Showing all IDs.")
+        random.seed(args.seed)
+        random.shuffle(all_ids)
+        selected_ids = all_ids[:args.n]
+        print(f"# Weekly benchmark — {len(selected_ids)} tasks ({', '.join(categories)})")
+        print(f"# Seed: {args.seed}  (install `datasets` for full metadata)")
+        print()
+        for iid in selected_ids:
+            print(json.dumps({"instance_id": iid}))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Scopenos SWE-bench benchmark CLI")
     parser.add_argument("--repo", default="pytest-dev/pytest")
@@ -433,6 +490,14 @@ def main() -> None:
     p_eval.add_argument("--path", choices=["a", "b"], required=True)
 
     sub.add_parser("summary", help="Print aggregate results")
+
+    p_weekly = sub.add_parser("weekly-tasks", help="Pick a balanced set of tasks for a weekly session")
+    p_weekly.add_argument("--n", type=int, default=5, help="Number of tasks to pick (default: 5)")
+    p_weekly.add_argument("--categories", nargs="+", choices=["protocol_pair", "visitor_pattern", "sibling_class"],
+                          help="Limit to these categories (default: all)")
+    p_weekly.add_argument("--repos", nargs="+", metavar="REPO",
+                          help="Limit to these repos (e.g. django/django pytest-dev/pytest)")
+    p_weekly.add_argument("--seed", type=int, default=42, help="Random seed for reproducible picks")
 
     p_check = sub.add_parser(
         "check-mcp",
@@ -478,6 +543,8 @@ def main() -> None:
         cmd_check_mcp(args)
     elif args.command == "summary":
         cmd_summary(args)
+    elif args.command == "weekly-tasks":
+        cmd_weekly_tasks(args)
 
 
 if __name__ == "__main__":
