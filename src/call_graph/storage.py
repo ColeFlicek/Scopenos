@@ -660,7 +660,10 @@ class CallGraphDB:
         ]
 
         async with self._pool.acquire() as conn:
-            # Create the fork schema with all empty tables
+            # Drop any orphan schema left by a previous failed fork attempt, then create fresh.
+            # Safe because create_fork_from_files only calls here after confirming no project
+            # row exists — so any existing schema is guaranteed to be an orphan.
+            await conn.execute("SELECT drop_project_schema($1)", fork_schema_name)
             await conn.execute("SELECT create_project_schema($1)", fork_schema_name)
 
             # Copy structural tables from parent, skipping generated columns
