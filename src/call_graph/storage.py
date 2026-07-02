@@ -860,7 +860,8 @@ class CallGraphDB:
         async with self._db.execute(
             f"SELECT id, name, signature, docstring, file, summary FROM nodes "
             f"WHERE project_id = ? AND is_external = 0"
-            f" AND embedding_model = 'text-embedding-3-large'{summary_clause} LIMIT ?",
+            f" AND (embedding_model = 'text-embedding-3-large' OR embedding_model IS NULL)"
+            f"{summary_clause} LIMIT ?",
             (project_id, limit),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
