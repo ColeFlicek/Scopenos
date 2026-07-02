@@ -354,7 +354,10 @@ async def http_fork_from_files(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
-        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+        import traceback
+        detail = str(exc) or f"{type(exc).__name__}: (no message)"
+        print(f"[fork-from-files 500] {type(exc).__name__}: {exc!r}\n{traceback.format_exc()}", flush=True)
+        return JSONResponse({"status": "error", "detail": detail}, status_code=500)
 
 
 # ── Git hook HTTP endpoint ─────────────────────────────────────────────────────
