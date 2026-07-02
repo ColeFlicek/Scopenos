@@ -319,15 +319,21 @@ class CallGraphDB:
         """Create the project schema if it doesn't already exist (idempotent)."""
         await self._db.execute("SELECT create_project_schema(?)", (schema_name,))
 
-    async def get_schema_name_for_project(self, project_id: str) -> str:
-        """Look up the stored schema_name for a project, falling back to derive_schema_name."""
+    async def get_schema_name_for_project(self, project_id: str, *, fallback: bool = True) -> str | None:
+        """Look up the stored schema_name for a project.
+
+        If fallback=True (default), returns derive_schema_name(project_id) when no
+        row exists — used by read paths that need a schema regardless.
+        If fallback=False, returns None when no row exists — used by existence checks
+        (e.g. fork creation) to distinguish "already indexed" from "never seen".
+        """
         async with self._db.execute(
             "SELECT schema_name FROM projects WHERE id = ?", (project_id,)
         ) as cur:
             row = await cur.fetchone()
         if row and row["schema_name"]:
             return str(row["schema_name"])
-        return derive_schema_name(project_id)
+        return derive_schema_name(project_id) if fallback else None
 
     async def _project_scoped(self, project_id: str) -> "CallGraphDB":
         """Return a project-scoped CallGraphDB for the given project_id.

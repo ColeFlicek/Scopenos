@@ -241,7 +241,7 @@ async def create_fork_from_files(
     """
     from datetime import datetime, timezone
 
-    existing_schema = await org_db.get_schema_name_for_project(fork_project_id)
+    existing_schema = await org_db.get_schema_name_for_project(fork_project_id, fallback=False)
     if existing_schema:
         return {
             "fork_project_id": fork_project_id,
@@ -249,7 +249,7 @@ async def create_fork_from_files(
             "delta": {"already_exists": True},
         }
 
-    parent_schema = await org_db.get_schema_name_for_project(parent_project_id)
+    parent_schema = await org_db.get_schema_name_for_project(parent_project_id, fallback=False)
     if not parent_schema:
         raise ValueError(f"Parent project {parent_project_id!r} not found or not indexed")
 
