@@ -39,6 +39,28 @@ BENCH_API_KEY = os.getenv("BENCH_API_KEY", "") or SCOPENOS_API_KEY
 # Persistent base-clone location (survives across Python sessions via disk)
 _BASE_CLONE_ROOT = Path(os.getenv("BENCH_CLONE_ROOT", "/tmp/scopenos-bench-base"))
 
+# Disk cache: set of base project IDs already confirmed in org_benchmark.
+# Persists across sessions so the full base-clone index only runs once per repo.
+_INDEXED_CACHE_FILE = _BASE_CLONE_ROOT / "bench-indexed.json"
+
+
+def _load_indexed_cache() -> set[str]:
+    try:
+        return set(json.loads(_INDEXED_CACHE_FILE.read_text()))
+    except Exception:
+        return set()
+
+
+def _save_indexed_cache(cache: set[str]) -> None:
+    try:
+        _BASE_CLONE_ROOT.mkdir(parents=True, exist_ok=True)
+        _INDEXED_CACHE_FILE.write_text(json.dumps(sorted(cache)))
+    except Exception:
+        pass
+
+
+_disk_indexed: set[str] = _load_indexed_cache()
+
 
 @dataclass
 class RepoContext:
@@ -245,9 +267,13 @@ def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn
     fork_project_id = f"bench-{slug}-{commit[:8]}"
 
     # ── Step 1: ensure base project exists in org_benchmark ───────────────────
-    if slug not in _base_indexed:
+    if slug not in _base_indexed and base_project_id not in _disk_indexed:
         _ensure_base_project(base_project_id, base_clone)
         _base_indexed.add(slug)
+        _disk_indexed.add(base_project_id)
+        _save_indexed_cache(_disk_indexed)
+    else:
+        _base_indexed.add(slug)  # warm the in-session cache from disk
 
     # ── Step 2: create fork at base_commit via /api/fork-from-files ───────────
     print(f"[setup] forking {base_project_id} → {fork_project_id} at {commit[:8]}")
