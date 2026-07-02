@@ -28,6 +28,9 @@ _indexed_commits: dict[str, str] = {}
 
 SCOPENOS_URL = os.getenv("SCOPENOS_URL", "http://100.71.88.106:3004")
 SCOPENOS_API_KEY = os.getenv("SCOPENOS_API_KEY", "")
+# Separate key for benchmark indexing → routes to org_benchmark, not production.
+# Falls back to SCOPENOS_API_KEY so local dev works without a second key.
+BENCH_API_KEY = os.getenv("BENCH_API_KEY", "") or SCOPENOS_API_KEY
 
 # Persistent base-clone location (survives across Python sessions via disk)
 _BASE_CLONE_ROOT = Path(os.getenv("BENCH_CLONE_ROOT", "/tmp/scopenos-bench-base"))
@@ -261,7 +264,7 @@ def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn
             data=payload,
             headers={
                 "Content-Type": "application/json",
-                "X-API-Key": SCOPENOS_API_KEY,
+                "X-API-Key": BENCH_API_KEY,
             },
             method="POST",
         )

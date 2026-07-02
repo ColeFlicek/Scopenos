@@ -1,0 +1,79 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scopenos-benchmark-prep
+  namespace: scopenos
+  annotations:
+    # Runs every Sunday at 02:00 UTC. Verifies MCP connectivity and writes
+    # this week's task list so the next manual agent session can just pick
+    # it up without spending time on setup.
+    #
+    # What this does:
+    #   1. Verifies the MCP server responds and Scopenos tools are visible
+    #   2. Picks N curated SWE-bench tasks (seed = year+week for weekly rotation)
+    #   3. Writes the task list to /tmp/bench-tasks.json (available in logs)
+    #
+    # What this does NOT do:
+    #   Spawn agent subagents — that still requires a manual session with tokens.
+    #   Start a session with: WEEKLY_SESSION.md pasted into Claude Code.
+    #
+    # Monitor:
+    #   kubectl get jobs -n scopenos -l app=scopenos-benchmark-prep
+    #   kubectl logs -n scopenos -l app=scopenos-benchmark-prep --tail=100
+spec:
+  schedule: "0 2 * * 0"            # Sundays 02:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: scopenos-benchmark-prep
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: benchmark-prep
+              image: ghcr.io/coleflicek/scopenos:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  echo "=== Scopenos Benchmark Prep ==="
+                  echo "Week: $(date +%Y-W%U)"
+                  echo ""
+
+                  # Step 1: MCP connectivity check
+                  echo "--- MCP check ---"
+                  python -m benchmark.run check-mcp --no-color \
+                    --mcp-url "${SCOPENOS_URL}/mcp" \
+                    --api-key "${SCOPENOS_API_KEY}" || {
+                    echo "MCP check FAILED — Path B would be degraded. Fix before running agents."
+                    exit 1
+                  }
+
+                  # Step 2: Pick this week's tasks (seed rotates weekly)
+                  SEED=$(date +%Y%U)
+                  echo ""
+                  echo "--- Weekly tasks (seed=$SEED) ---"
+                  python -m benchmark.run weekly-tasks --n 5 --seed "$SEED" | tee /tmp/bench-tasks.json
+
+                  echo ""
+                  echo "Done. Paste benchmark/WEEKLY_SESSION.md into a Claude Code session"
+                  echo "and use the task IDs above when you have free tokens."
+              env:
+                - name: SCOPENOS_URL
+                  value: "http://scopenos-api-svc:3004"
+              envFrom:
+                - secretRef:
+                    name: scopenos-secrets
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
