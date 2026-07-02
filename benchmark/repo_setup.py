@@ -30,6 +30,10 @@ _indexed_commits: dict[str, str] = {}
 # In-session cache: repo slug → True when base project is confirmed to exist in org_benchmark
 _base_indexed: set[str] = set()
 
+# Projects pre-seeded into org_benchmark by copying from org_demos.
+# These already exist — _ensure_base_project must not overwrite them.
+_PRESEEDED = {"pytest", "django", "flask", "requests"}
+
 SCOPENOS_URL = os.getenv("SCOPENOS_URL", "http://100.71.88.106:3004")
 SCOPENOS_API_KEY = os.getenv("SCOPENOS_API_KEY", "")
 # Separate key for benchmark indexing → routes to org_benchmark, not production.
@@ -263,17 +267,16 @@ def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn
 
     org, name = task.repo.split("/")
     slug = f"{org}__{name}"
-    base_project_id = f"bench-{slug}"
-    fork_project_id = f"bench-{slug}-{commit[:8]}"
+    # Base project ID matches the project name in org_benchmark (copied from org_demos).
+    base_project_id = name
+    fork_project_id = f"{name}-fork-{commit[:8]}"
 
     # ── Step 1: ensure base project exists in org_benchmark ───────────────────
-    if slug not in _base_indexed and base_project_id not in _disk_indexed:
+    if slug not in _base_indexed and base_project_id not in _disk_indexed and base_project_id not in _PRESEEDED:
         _ensure_base_project(base_project_id, base_clone)
-        _base_indexed.add(slug)
         _disk_indexed.add(base_project_id)
         _save_indexed_cache(_disk_indexed)
-    else:
-        _base_indexed.add(slug)  # warm the in-session cache from disk
+    _base_indexed.add(slug)
 
     # ── Step 2: create fork at base_commit via /api/fork-from-files ───────────
     print(f"[setup] forking {base_project_id} → {fork_project_id} at {commit[:8]}")
