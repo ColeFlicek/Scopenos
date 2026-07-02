@@ -274,8 +274,10 @@ async def http_index_bulk(request: Request) -> JSONResponse:
         data = await request.json()
         project_root: str = data.get("project_root", "")
         project_id: str = data.get("project_id", "") or _derive_project_id(project_root)
-        # Auto-grant owner if this project has no owner yet (first index = you own it)
-        if not await svcs.db.has_any_owner(project_id):
+        # Auto-grant owner for private projects on first index.
+        # Skip for demo projects — they bypass access control via demo_projects table
+        # and project_access.user_id has a FK to the org DB's users table (not control DB).
+        if not await svcs.db.is_demo_project(project_id) and not await svcs.db.has_any_owner(project_id):
             await svcs.db.grant_project_access(_user["id"], project_id, "owner")
         await check_permission(_user, project_id, "write", svcs.db)
         files: dict[str, str] = data.get("files", {})
