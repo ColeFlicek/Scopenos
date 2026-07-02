@@ -135,9 +135,9 @@ def _index_files(files: list[Path], clone_path: Path, project_id: str) -> int:
 
 def _enrich(project_id: str, limit: int = 2000) -> None:
     """Trigger LLM summary enrichment via /api/enrich (best-effort)."""
-    payload = json.dumps({"project_id": project_id, "limit": limit}).encode()
+    payload = json.dumps({"limit": limit}).encode()
     req = urllib.request.Request(
-        f"{SCOPENOS_URL}/api/enrich",
+        f"{SCOPENOS_URL}/api/enrich-summaries/{project_id}",
         data=payload,
         headers={
             "Content-Type": "application/json",
@@ -148,8 +148,7 @@ def _enrich(project_id: str, limit: int = 2000) -> None:
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
             result = json.loads(resp.read())
-            enriched = result.get("enriched", "?")
-            print(f"[enrich] enriched {enriched} function summaries")
+            print(f"[enrich] queued job {result.get('job_id', '?')} (status: {result.get('status', '?')})")
     except Exception as exc:
         print(f"[enrich] skipped (non-fatal): {exc}")
 
