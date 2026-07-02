@@ -299,6 +299,64 @@ async def http_index_bulk(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
+# ── Fork-from-files HTTP endpoint (used by benchmark runner) ──────────────────
+
+@mcp.custom_route("/api/fork-from-files", methods=["POST"])
+async def http_fork_from_files(request: Request) -> JSONResponse:
+    """
+    POST /api/fork-from-files
+    Body: {
+      "parent_project_id": "bench-pytest__pytest",
+      "fork_project_id": "bench-pytest__pytest-abc1234",   // optional
+      "files": {"abs/path/file.py": "<content at target_commit>"},
+      "project_root": "/abs/path/to/repo",
+      "target_commit": "abc1234def5678..."                  // stored as metadata
+    }
+
+    Creates a fork of parent_project_id using client-supplied file contents.
+    The client runs ``git diff --name-only`` + ``git show`` on its local clone
+    and sends the results here — no server-side git access required.
+
+    Returns {"fork_project_id": str, "schema_name": str, "delta": {...}}
+    or {"delta": {"already_exists": true}} if the fork was already created.
+    """
+    try:
+        svcs = await _get_services()
+        _user = require_user()
+        data = await request.json()
+
+        parent_project_id: str = data.get("parent_project_id", "")
+        if not parent_project_id:
+            return JSONResponse({"status": "error", "detail": "parent_project_id is required"}, status_code=400)
+
+        files: dict[str, str] = data.get("files", {})
+        project_root: str = data.get("project_root", "")
+        target_commit: str = data.get("target_commit", "")
+        short = (target_commit or "client")[:7]
+        fork_project_id: str = data.get("fork_project_id", "") or f"{parent_project_id}_fork_{short}"
+
+        await check_permission(_user, parent_project_id, "write", svcs.db)
+
+        from .fork import create_fork_from_files
+        from .tools._shared import resolve_project_db
+
+        pdb = await resolve_project_db(parent_project_id, svcs.db)
+        result = await create_fork_from_files(
+            parent_project_id=parent_project_id,
+            fork_project_id=fork_project_id,
+            files=files,
+            project_root=project_root,
+            org_db=pdb,
+            user_id=_user["id"],
+            target_commit=target_commit,
+        )
+        return JSONResponse(result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
 # ── Git hook HTTP endpoint ─────────────────────────────────────────────────────
 
 @mcp.custom_route("/index", methods=["POST"])

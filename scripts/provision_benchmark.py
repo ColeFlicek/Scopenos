@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """One-shot: provision org_benchmark + create a benchmark API key.
 
-Run once from TheHive (needs CREATEDB privilege via PROVISIONER_DSN):
+Run from the Claude Code container (which has Python and reaches Postgres
+at 172.21.0.1 via Docker bridge). Do NOT run from TheHive — it has no Python.
 
-    PROVISIONER_DSN="postgresql://scopenos_provisioner:<pw>@localhost/postgres" \
-    CONTROL_DSN="postgresql://scopenos_control_rw:<pw>@localhost/scopenos" \
-    python3 scripts/provision_benchmark.py
+    PROVISIONER_DSN="postgresql://scopenos_provisioner:<pw>@172.21.0.1/postgres" \
+    CONTROL_DSN="postgresql://scopenos_control_rw:<pw>@172.21.0.1/scopenos" \
+    uv run python scripts/provision_benchmark.py
 
-The script prints the generated API key to stdout. Add it to your K8s
-secret as BENCH_API_KEY so the benchmark CronJob can index into org_benchmark.
+The script prints the generated API key to stdout. Add it to the K8s secret
+as BENCH_API_KEY so the benchmark indexer can write into org_benchmark.
 
 Safe to re-run: provision_org is idempotent (CREATE IF NOT EXISTS), and
 the API key creation is gated on whether a benchmark-indexer key already exists.

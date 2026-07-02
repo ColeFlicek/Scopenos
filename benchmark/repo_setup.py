@@ -23,8 +23,12 @@ from .loader import BenchmarkTask
 # base_clone_dir: shared full clone, keyed by repo slug
 _base_clones: dict[str, str] = {}
 
-# indexed commits: base_commit → project_id (skip re-index if same commit appears twice)
+# In-session cache: base_commit → fork_project_id
+# Avoids duplicate HTTP calls within a single run.
 _indexed_commits: dict[str, str] = {}
+
+# In-session cache: repo slug → True when base project is confirmed to exist in org_benchmark
+_base_indexed: set[str] = set()
 
 SCOPENOS_URL = os.getenv("SCOPENOS_URL", "http://100.71.88.106:3004")
 SCOPENOS_API_KEY = os.getenv("SCOPENOS_API_KEY", "")
@@ -217,28 +221,98 @@ def _create_venv(repo_path: str) -> str:
 
 def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn: str = "") -> str:
     """
-    Index the repo with Scopenos via /api/index-bulk.
-    Only sends src/**/*.py files — test files are not needed for call graph nav.
-    Reuses the index if this commit was already indexed this session.
-    If dsn is provided, seeds co_change history from the canonical source project.
+    Ensure a Scopenos fork project exists for this task's base_commit.
+
+    Strategy:
+      1. One base project per repo slug (bench-{slug}), indexed once from the
+         base clone at HEAD and written to org_benchmark via BENCH_API_KEY.
+      2. One fork per unique base_commit (bench-{slug}-{sha8}), created via
+         POST /api/fork-from-files. The benchmark runner (this process) computes
+         the git diff + file contents and sends them over HTTP to the MCP server
+         at SCOPENOS_URL — no server-side git access required.
+
+    Both the base project and each fork persist in org_benchmark across sessions.
+    In-session caches (_base_indexed, _indexed_commits) avoid redundant HTTP calls.
     """
     commit = task.base_commit
     if commit in _indexed_commits:
-        print(f"[setup] reusing Scopenos index for {commit[:8]}")
+        print(f"[setup] reusing fork for {commit[:8]}")
         return _indexed_commits[commit]
 
-    project_id = f"bench-{task.instance_id}"
-    print(f"[setup] indexing → project '{project_id}'")
+    org, name = task.repo.split("/")
+    slug = f"{org}__{name}"
+    base_project_id = f"bench-{slug}"
+    fork_project_id = f"bench-{slug}-{commit[:8]}"
 
-    # Prefer src/ layout (pytest, django, etc.) — avoids sending test files
-    src_files = glob.glob(f"{repo_path}/src/**/*.py", recursive=True)
+    # ── Step 1: ensure base project exists in org_benchmark ───────────────────
+    if slug not in _base_indexed:
+        _ensure_base_project(base_project_id, base_clone)
+        _base_indexed.add(slug)
+
+    # ── Step 2: create fork at base_commit via /api/fork-from-files ───────────
+    print(f"[setup] forking {base_project_id} → {fork_project_id} at {commit[:8]}")
+
+    changed_rel = _git_changed_files(base_clone, commit)
+    if changed_rel:
+        files = _git_show_files(base_clone, commit, changed_rel)
+    else:
+        files = {}
+
+    payload = json.dumps({
+        "parent_project_id": base_project_id,
+        "fork_project_id": fork_project_id,
+        "files": files,
+        "project_root": base_clone,
+        "target_commit": commit,
+    }).encode()
+
+    req = urllib.request.Request(
+        f"{SCOPENOS_URL}/api/fork-from-files",
+        data=payload,
+        headers={"Content-Type": "application/json", "X-API-Key": BENCH_API_KEY},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read())
+            delta = result.get("delta", {})
+            if delta.get("already_exists"):
+                print(f"[setup] fork {fork_project_id} already exists — reusing")
+            else:
+                print(f"[setup] fork created: {delta}")
+    except Exception as exc:
+        print(f"[setup] fork-from-files failed: {exc}")
+
+    _indexed_commits[commit] = fork_project_id
+
+    if dsn:
+        source_project_id = task.repo.split("/")[-1]
+        _seed_cochange(
+            dsn=dsn,
+            bench_project_id=fork_project_id,
+            source_project_id=source_project_id,
+            base_commit=commit,
+            base_clone_path=base_clone,
+            worktree_path=repo_path,
+        )
+
+    return fork_project_id
+
+
+def _ensure_base_project(base_project_id: str, base_clone: str) -> None:
+    """Index the base clone (at HEAD) into org_benchmark as the base project.
+
+    Idempotent: if the project already exists, index_changes upserts with no
+    net effect. Only runs once per repo slug per session (_base_indexed guard).
+    """
+    src_files = glob.glob(f"{base_clone}/src/**/*.py", recursive=True)
     if not src_files:
         src_files = [
-            f for f in glob.glob(f"{repo_path}/**/*.py", recursive=True)
-            if "/.bench-venv/" not in f and "/test" not in f.split(repo_path)[-1][:20]
+            f for f in glob.glob(f"{base_clone}/**/*.py", recursive=True)
+            if "/.bench-venv/" not in f and "/test" not in f.split(base_clone)[-1][:20]
         ]
 
-    print(f"[setup] sending {len(src_files)} source files to Scopenos…")
+    print(f"[setup] indexing base project '{base_project_id}' ({len(src_files)} files)…")
 
     batch_size = 50
     total_fns = 0
@@ -254,18 +328,15 @@ def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn
             continue
 
         payload = json.dumps({
-            "project_root": repo_path,
-            "project_id": project_id,
+            "project_root": base_clone,
+            "project_id": base_project_id,
             "files": files,
         }).encode()
 
         req = urllib.request.Request(
             f"{SCOPENOS_URL}/api/index-bulk",
             data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "X-API-Key": BENCH_API_KEY,
-            },
+            headers={"Content-Type": "application/json", "X-API-Key": BENCH_API_KEY},
             method="POST",
         )
         try:
@@ -273,24 +344,46 @@ def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn
                 result = json.loads(resp.read())
                 total_fns += result.get("functions_updated", 0)
         except Exception as exc:
-            print(f"[setup] batch {i // batch_size + 1} failed: {exc}")
+            print(f"[setup] base index batch {i // batch_size + 1} failed: {exc}")
 
-    print(f"[setup] indexed {total_fns} functions")
-    _indexed_commits[commit] = project_id
+    print(f"[setup] base project ready: {total_fns} functions")
 
-    if dsn:
-        # Source project: derive from repo name (e.g. "django/django" → "django")
-        source_project_id = task.repo.split("/")[-1]
-        _seed_cochange(
-            dsn=dsn,
-            bench_project_id=project_id,
-            source_project_id=source_project_id,
-            base_commit=commit,
-            base_clone_path=base_clone,
-            worktree_path=repo_path,
+
+def _git_changed_files(repo_path: str, target_commit: str) -> list[str]:
+    """Return .py/.ts/.js paths that differ between target_commit and HEAD."""
+    _SUPPORTED = {".py", ".ts", ".tsx", ".js", ".jsx"}
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", repo_path, "diff", "--name-only", target_commit, "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
         )
+        return [
+            line.strip() for line in out.splitlines()
+            if line.strip() and Path(line.strip()).suffix.lower() in _SUPPORTED
+        ]
+    except subprocess.CalledProcessError:
+        return []
 
-    return project_id
+
+def _git_show_files(repo_path: str, commit: str, rel_paths: list[str]) -> dict[str, str]:
+    """Return {abs_file_path: content_at_commit} for each rel_path.
+
+    Uses the same absolute path format as the base project index so the server
+    can match nodes by file path when applying the fork delta.
+    """
+    result: dict[str, str] = {}
+    for rel in rel_paths:
+        try:
+            content = subprocess.check_output(
+                ["git", "-C", repo_path, "show", f"{commit}:{rel}"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            result[str(Path(repo_path) / rel)] = content
+        except subprocess.CalledProcessError:
+            pass  # file didn't exist at this commit — skip
+    return result
 
 
 # ── Co-change seeding ─────────────────────────────────────────────────────────

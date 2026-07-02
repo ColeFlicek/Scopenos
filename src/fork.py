@@ -159,6 +159,130 @@ async def apply_fork_delta(
     return {"updated": updated, "deleted": deleted, "unchanged": unchanged}
 
 
+async def apply_fork_delta_from_files(
+    fork_schema_name: str,
+    parent_project_id: str,
+    files: dict[str, str],
+    project_root: str,
+    org_db: CallGraphDB,
+) -> dict:
+    """Apply delta from client-provided file contents — no server-side git required.
+
+    ``files`` is {abs_file_path: content_at_target_commit}. The client computes
+    this with ``git diff --name-only`` + ``git show`` on its local clone before
+    making the HTTP call.
+    """
+    import json as _json
+
+    if not files:
+        return {"updated": 0, "deleted": 0, "unchanged": 0}
+
+    file_paths = list(files.keys())
+    stored_hashes = await get_function_content_hashes(fork_schema_name, file_paths, org_db)
+
+    all_nodes: list = []
+    for file_path, content in files.items():
+        nodes, _edges = _parser.parse_file(file_path, content, project_root=project_root)
+        all_nodes.extend(nodes)
+
+    parsed_by_id = {n.id: n for n in all_nodes}
+
+    nodes_to_upsert = []
+    updated = 0
+    unchanged = 0
+    for node in all_nodes:
+        if node.body_hash != stored_hashes.get(node.id, ""):
+            nodes_to_upsert.append(node)
+            updated += 1
+        else:
+            unchanged += 1
+
+    if nodes_to_upsert:
+        rows = [
+            (
+                parent_project_id,
+                n.id, n.file, n.module, n.type, n.name,
+                n.signature, n.docstring, n.body, n.body_hash,
+                _json.dumps(n.decorators),
+                1 if n.is_external else 0,
+                n.start_line, n.end_line,
+                n.return_type,
+                1 if n.is_async else 0,
+                _json.dumps(n.parameter_names),
+                n.enclosing_class,
+                n.structural_layer,
+            )
+            for n in nodes_to_upsert
+        ]
+        await org_db.upsert_nodes_into_schema(fork_schema_name, rows, parent_project_id)
+
+    deleted_ids = [nid for nid in stored_hashes if nid not in parsed_by_id]
+    deleted = len(deleted_ids)
+    if deleted_ids:
+        await org_db.delete_nodes_from_schema_by_ids(fork_schema_name, deleted_ids)
+
+    return {"updated": updated, "deleted": deleted, "unchanged": unchanged}
+
+
+async def create_fork_from_files(
+    parent_project_id: str,
+    fork_project_id: str,
+    files: dict[str, str],
+    project_root: str,
+    org_db: CallGraphDB,
+    user_id: str = "",
+    target_commit: str = "",
+) -> dict:
+    """Create a fork using client-provided file contents instead of server-side git.
+
+    The server copies the parent schema and applies the delta from ``files``.
+    The client is responsible for computing which files changed and their
+    contents at ``target_commit`` before making this call.
+    """
+    from datetime import datetime, timezone
+
+    existing_schema = await org_db.get_schema_name_for_project(fork_project_id)
+    if existing_schema:
+        return {
+            "fork_project_id": fork_project_id,
+            "schema_name": existing_schema,
+            "delta": {"already_exists": True},
+        }
+
+    parent_schema = await org_db.get_schema_name_for_project(parent_project_id)
+    if not parent_schema:
+        raise ValueError(f"Parent project {parent_project_id!r} not found or not indexed")
+
+    short = (target_commit or "client")[:7]
+    fork_schema_name = f"{parent_schema}_fork_{short}"
+
+    await org_db.fork_schema(parent_schema, fork_schema_name)
+
+    delta = await apply_fork_delta_from_files(
+        fork_schema_name, parent_project_id, files, project_root, org_db
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await org_db.insert_fork_project(
+        fork_project_id,
+        f"{parent_project_id}@{short}",
+        project_root,
+        target_commit,
+        fork_schema_name,
+        parent_schema,
+        now,
+    )
+
+    if user_id:
+        await org_db.grant_project_access(user_id, fork_project_id, "owner")
+
+    return {
+        "fork_project_id": fork_project_id,
+        "schema_name": fork_schema_name,
+        "delta": delta,
+    }
+
+
 async def create_fork(
     parent_project_id: str,
     target_commit: str,
