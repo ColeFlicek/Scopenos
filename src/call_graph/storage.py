@@ -2335,6 +2335,13 @@ class CallGraphDB:
         )
         await self._db.commit()
 
+    async def project_exists(self, project_id: str) -> bool:
+        """Return True if this org DB has indexed data for project_id."""
+        async with self._db.execute(
+            "SELECT 1 FROM projects WHERE id = ?", (project_id,)
+        ) as cur:
+            return await cur.fetchone() is not None
+
     async def is_demo_project(self, project_id: str) -> bool:
         """Return True if project_id is registered as a public demo project."""
         async with self._db.execute(

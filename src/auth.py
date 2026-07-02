@@ -83,6 +83,21 @@ def get_control_db() -> "CallGraphDB | None":
     return getattr(_org_router, "control_db", None)
 
 
+async def get_public_org_db() -> "CallGraphDB | None":
+    """Return the public demos org DB (org_demos), or None if not provisioned.
+
+    The demos org is registered in the control DB's organizations table with
+    slug='demos'. Any org with that slug acts as the public read layer —
+    projects indexed there are readable by any authenticated user.
+    """
+    if _org_router is None:
+        return None
+    try:
+        return await _org_router._get_org_db("demos")
+    except Exception:
+        return None
+
+
 class AuthMiddleware:
     """ASGI middleware — resolves X-API-Key to a user + org DB for every HTTP request.
 

@@ -43,9 +43,24 @@ async def resolve_project_db(project_id: str, org_db):
 
     Falls back to org_db when project_id is empty — covers cross-project searches
     and org-level queries that don't target a specific schema.
+
+    If the project doesn't exist in the user's org DB, falls back to the public
+    demos org (org_demos registered in the control DB). This allows any authenticated
+    user to query demo projects without data replication — the control DB is the
+    authority on which org is public, not each individual org DB.
     """
     if not project_id:
         return org_db
+    if await org_db.project_exists(project_id):
+        schema_name = await org_db.get_schema_name_for_project(project_id)
+        return await org_db.project_db(schema_name)
+    # Not in user's org — check the public demos org
+    from ..auth import get_public_org_db
+    demos_db = await get_public_org_db()
+    if demos_db is not None and await demos_db.project_exists(project_id):
+        schema_name = await demos_db.get_schema_name_for_project(project_id)
+        return await demos_db.project_db(schema_name)
+    # Fall back so callers get an empty result rather than a crash
     schema_name = await org_db.get_schema_name_for_project(project_id)
     return await org_db.project_db(schema_name)
 
@@ -54,8 +69,20 @@ async def check_read_access(project_id: str, db) -> None:
     user = get_current_user()
     if user is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    if project_id:
+    if not project_id:
+        return
+    try:
         await check_permission(user, project_id, "read", db)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        # Project not in user's org — check if it's accessible via the demos org.
+        # The demos org is the authority on public projects; its demo_projects table
+        # is seeded at provisioning time by the admin, not per-org.
+        from ..auth import get_public_org_db
+        demos_db = await get_public_org_db()
+        if demos_db is None or not await demos_db.is_demo_project(project_id):
+            raise
 
 
 def fmt_contracts(contracts: list[dict]) -> list[dict]:
