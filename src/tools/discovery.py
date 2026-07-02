@@ -195,8 +195,12 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         await check_read_access(project_id, svcs.db)
         pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
         from ..architecture_service import ArchitectureService as _AS
-        arch = _AS(pdb)
-        result = await arch.get_project_home(project_id, max_age_seconds=300)
+        # Reuse the ArchitectureService pinned to the cached pdb so its
+        # TTL cache survives across requests (creating a new instance each
+        # call would always miss — the cache is instance-level).
+        if not hasattr(pdb, "_arch_service"):
+            pdb._arch_service = _AS(pdb)
+        result = await pdb._arch_service.get_project_home(project_id, max_age_seconds=300)
         return json.dumps(result)
 
     @mcp.tool()
@@ -218,8 +222,11 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         svcs = await _tools_shared.get_services()
         await check_read_access(project_id, svcs.db)
         pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
-        data = await pdb.fetch_graph_data(project_id)
+        from ..architecture_service import ArchitectureService as _AS
         from ..analysis import ArchitectureAnalyzer
+        if not hasattr(pdb, "_arch_service"):
+            pdb._arch_service = _AS(pdb)
+        data = await pdb._arch_service.get_graph_data(project_id, max_age_seconds=300)
         result = ArchitectureAnalyzer().subsystem_detail(data, subsystem_name)
         return json.dumps(result)
 

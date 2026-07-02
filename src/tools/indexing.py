@@ -109,12 +109,15 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> tuple:
             branch=branch, head_commit=head_commit,
         )
         written_ids = result.pop("function_ids", [])
+        pdb = await _tools_shared.resolve_project_db(pid, svcs.db)
         if written_ids:
-            pdb = await _tools_shared.resolve_project_db(pid, svcs.db)
             violations = await svcs.contracts.check_functions(pid, written_ids, pdb=pdb)
             result["contract_violations"] = violations
         else:
             result["contract_violations"] = []
+        # Invalidate arch cache so next get_project_home sees fresh data.
+        if hasattr(pdb, "_arch_service"):
+            pdb._arch_service.invalidate(pid)
         return json.dumps(result)
 
     @mcp.tool()
