@@ -118,7 +118,12 @@ class AuthMiddleware:
             user = None
             org_db = None
             if raw_key and _org_router is not None:
-                user, org_db = await _org_router.resolve_request(raw_key, endpoint=endpoint)
+                try:
+                    user, org_db = await _org_router.resolve_request(raw_key, endpoint=endpoint)
+                except Exception as _exc:
+                    import traceback
+                    print(f"[AuthMiddleware] resolve_request failed: {type(_exc).__name__}: {_exc!r}\n{traceback.format_exc()}", flush=True)
+                    # Leave user=None, org_db=None — downstream will raise 401/503
             elif _org_router is not None and not raw_key:
                 import asyncio as _asyncio
                 _asyncio.create_task(
