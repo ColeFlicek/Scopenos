@@ -659,12 +659,14 @@ class CallGraphDB:
             "schema_object_embeddings", "agent_improvements",
         ]
 
+        # Large timeout — schema copy can be slow for big projects (nodes table with embeddings).
+        _FORK_TIMEOUT = 300.0
         async with self._pool.acquire() as conn:
             # Drop any orphan schema left by a previous failed fork attempt, then create fresh.
             # Safe because create_fork_from_files only calls here after confirming no project
             # row exists — so any existing schema is guaranteed to be an orphan.
-            await conn.execute("SELECT drop_project_schema($1)", fork_schema_name)
-            await conn.execute("SELECT create_project_schema($1)", fork_schema_name)
+            await conn.execute("SELECT drop_project_schema($1)", fork_schema_name, timeout=_FORK_TIMEOUT)
+            await conn.execute("SELECT create_project_schema($1)", fork_schema_name, timeout=_FORK_TIMEOUT)
 
             # Copy structural tables from parent, skipping generated columns
             # (e.g. tsv tsvector GENERATED ALWAYS AS ... STORED — Postgres rejects
@@ -679,17 +681,20 @@ class CallGraphDB:
                          AND is_generated = 'NEVER'
                        ORDER BY ordinal_position""",
                     parent_schema, table,
+                    timeout=_FORK_TIMEOUT,
                 )
                 if col_rows:
                     cols = ", ".join(f'"{r["column_name"]}"' for r in col_rows)
                     await conn.execute(
                         f'INSERT INTO "{fork_schema_name}".{table} ({cols}) '
-                        f'SELECT {cols} FROM "{parent_schema}".{table}'
+                        f'SELECT {cols} FROM "{parent_schema}".{table}',
+                        timeout=_FORK_TIMEOUT,
                     )
                 else:
                     await conn.execute(
                         f'INSERT INTO "{fork_schema_name}".{table} '
-                        f'SELECT * FROM "{parent_schema}".{table}'
+                        f'SELECT * FROM "{parent_schema}".{table}',
+                        timeout=_FORK_TIMEOUT,
                     )
         await self._db.commit()
 
