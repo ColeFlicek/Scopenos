@@ -347,16 +347,22 @@ class ArchitectureAnalyzer:
             if nid in prev_hashes and data.current_hashes[nid] != prev_hashes[nid]
         }
 
+        _CAP = 20
+        added = [
+            {"id": nid, "name": node_map[nid]["name"], "module": node_map[nid]["module"]}
+            for nid in sorted(new_ids) if nid in node_map
+        ]
+        modified = [
+            {"id": nid, "name": node_map[nid]["name"], "module": node_map[nid]["module"]}
+            for nid in sorted(modified_ids) if nid in node_map
+        ]
         return {
             "since": prev_time,
-            "functions_added": [
-                {"id": nid, "name": node_map[nid]["name"], "module": node_map[nid]["module"]}
-                for nid in sorted(new_ids) if nid in node_map
-            ],
-            "functions_modified": [
-                {"id": nid, "name": node_map[nid]["name"], "module": node_map[nid]["module"]}
-                for nid in sorted(modified_ids) if nid in node_map
-            ],
-            "functions_removed": sorted(removed_ids),
+            "functions_added_count": len(added),
+            "functions_added": added[:_CAP],
+            "functions_modified_count": len(modified),
+            "functions_modified": modified[:_CAP],
+            "functions_removed_count": len(removed_ids),
+            "functions_removed": sorted(removed_ids)[:_CAP],
             "decisions_since": data.decisions_since,
         }
