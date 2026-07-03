@@ -154,12 +154,13 @@ register_routes(mcp, _get_services, email_sender=get_email_sender())
 
 # ── Tool registrations ─────────────────────────────────────────────────────────
 
-from .tools import discovery, indexing, graph, memory, contracts, quality, dependencies
+from .tools import discovery, indexing, graph, memory, contracts, quality, dependencies, health
 from .admin import routes as admin_routes
 
 discovery.register(mcp, _get_services)
 index_project, index_changes, enrich_summaries = indexing.register(mcp, _get_services)
 graph.register(mcp, _get_services)
+health.register(mcp, _get_services)
 memory.register(mcp, _get_services)
 contracts.register(mcp, _get_services)
 quality.register(mcp, _get_services)
