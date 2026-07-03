@@ -156,6 +156,9 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
         (tool names start with `mcp__scopenos_bench__`). Do NOT use `mcp__scopenos__*`
         tools — they route to a different org and will return 403 or empty results.
 
+        BENCHMARK INTEGRITY: Do NOT read any files under `benchmark/` — previous
+        run patches and reference solutions live there and would contaminate results.
+
         The repository is checked out at: {ctx.repo_path}
         Scopenos project_id for this checkout: {ctx.project_id}
         Python venv for running tests: {ctx.venv_python}

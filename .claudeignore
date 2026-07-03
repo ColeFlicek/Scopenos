@@ -1,0 +1,6 @@
+# Exclude benchmark results from Claude's file context.
+# Agents must not read previous patches — it contaminates benchmark comparisons.
+benchmark/results/
+
+# Large generated files unlikely to be useful in context
+docs/ARCHITECTURE_MEGA.md
