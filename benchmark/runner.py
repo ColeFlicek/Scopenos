@@ -151,6 +151,11 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
         You are an expert software engineer fixing a real bug in {task.repo}.
         You have access to Scopenos code intelligence tools (MCP) — use them.
 
+        IMPORTANT: This task's codebase is indexed in the benchmark org. You have
+        two Scopenos MCP servers available — use ONLY the `scopenos_bench` server
+        (tool names start with `mcp__scopenos_bench__`). Do NOT use `mcp__scopenos__*`
+        tools — they route to a different org and will return 403 or empty results.
+
         The repository is checked out at: {ctx.repo_path}
         Scopenos project_id for this checkout: {ctx.project_id}
         Python venv for running tests: {ctx.venv_python}
@@ -170,7 +175,7 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
         (e.g. missing __hash__ when adding __eq__) only from test failures.
 
         ### Step 1 — Map the codebase
-        Call `get_project_home("{ctx.project_id}")`.
+        Call `mcp__scopenos_bench__get_project_home("{ctx.project_id}")`.
         Scan `top_functions` in each subsystem to locate the relevant code — no grep needed.
         Example output (truncated):
         {{
@@ -186,7 +191,7 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
         }}
 
         ### Step 2 — Locate the exact function
-        Call `query_similar_functions("<concept from bug description>", project_id="{ctx.project_id}")`.
+        Call `mcp__scopenos_bench__query_similar_functions("<concept from bug description>", project_id="{ctx.project_id}")`.
         Use the returned `id` values as inputs to steps 3 and 4.
         Example output (truncated):
         {{
@@ -202,7 +207,7 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
         }}
 
         ### Step 3 — Check impact and hidden co-changes
-        Call `get_impact_radius("<id from step 2>", project_id="{ctx.project_id}")`.
+        Call `mcp__scopenos_bench__get_impact_radius("<id from step 2>", project_id="{ctx.project_id}")`.
         Read `co_change_hints` carefully — it surfaces protocol gaps and semantic
         siblings NOT reachable via call edges.
         Example output (truncated):
@@ -225,17 +230,17 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
         }}
 
         If the call chain needs clarifying, use these tools before reading any file:
-        - `get_callers("<id>", project_id="{ctx.project_id}")` — every function that calls this one
+        - `mcp__scopenos_bench__get_callers("<id>", project_id="{ctx.project_id}")` — every function that calls this one
           Example: {{"callers": [{{"id": "django.test.TestCase.assertQuerysetEqual",
             "file": "django/test/testcases.py",
             "signature": "def assertQuerysetEqual(self, qs, values, ...)"}}], ...}}
-        - `get_callees("<id>", project_id="{ctx.project_id}")` — every function this one calls
+        - `mcp__scopenos_bench__get_callees("<id>", project_id="{ctx.project_id}")` — every function this one calls
           Example: {{"callees": [{{"id": "django.db.models.sql.compiler.SQLCompiler.execute_sql",
             "is_external": false}},
             {{"id": "external.builtins.hash", "is_external": true}}], ...}}
 
         ### Step 4 — Understand the test subsystem before reading test files
-        Call `get_subsystem_detail("{ctx.project_id}", "<test subsystem name from step 1>")`.
+        Call `mcp__scopenos_bench__get_subsystem_detail("{ctx.project_id}", "<test subsystem name from step 1>")`.
         This returns existing fixtures, helpers, and test patterns — avoids reading large test files blind.
         Example output (truncated):
         {{
@@ -260,9 +265,9 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
         Output a final JSON block with nothing after it:
         ```json
         {{"tool_log": [
-          {{"tool": "get_project_home", "reason": "map codebase, find django.db subsystem"}},
-          {{"tool": "query_similar_functions", "query": "Model __eq__ comparison", "reason": "locate exact function"}},
-          {{"tool": "get_impact_radius", "reason": "check co_change_hints for protocol gaps"}},
+          {{"tool": "mcp__scopenos_bench__get_project_home", "reason": "map codebase, find django.db subsystem"}},
+          {{"tool": "mcp__scopenos_bench__query_similar_functions", "query": "Model __eq__ comparison", "reason": "locate exact function"}},
+          {{"tool": "mcp__scopenos_bench__get_impact_radius", "reason": "check co_change_hints for protocol gaps"}},
           {{"tool": "Read", "file": "django/db/models/base.py", "reason": "view __eq__ before editing"}}
         ], "notes": "one sentence — what the bug was and how you fixed it"}}
         ```
