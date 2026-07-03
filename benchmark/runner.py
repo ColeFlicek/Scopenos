@@ -177,6 +177,12 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
         complete. Skipping these gates means discovering hidden requirements
         (e.g. missing __hash__ when adding __eq__) only from test failures.
 
+        BASH DISCIPLINE: Do NOT use Bash to explore or read source code at any
+        point — Scopenos tools and Read cover all investigation. Use Bash ONLY
+        for the single final verify command in Step 6. No intermediate test runs,
+        no grep, no cat. Every extra Bash call costs tokens and provides no
+        information Scopenos couldn't give faster.
+
         ### Step 1 — Map the codebase
         Call `mcp__scopenos_bench__get_project_home("{ctx.project_id}")`.
         Scan `top_functions` in each subsystem to locate the relevant code — no grep needed.
