@@ -165,6 +165,7 @@ async def apply_fork_delta_from_files(
     files: dict[str, str],
     project_root: str,
     org_db: CallGraphDB,
+    fork_project_id: str = "",
 ) -> dict:
     """Apply delta from client-provided file contents — no server-side git required.
 
@@ -198,9 +199,10 @@ async def apply_fork_delta_from_files(
             unchanged += 1
 
     if nodes_to_upsert:
+        effective_project_id = fork_project_id or parent_project_id
         rows = [
             (
-                parent_project_id,
+                effective_project_id,
                 n.id, n.file, n.module, n.type, n.name,
                 n.signature, n.docstring, n.body, n.body_hash,
                 _json.dumps(n.decorators),
@@ -214,7 +216,7 @@ async def apply_fork_delta_from_files(
             )
             for n in nodes_to_upsert
         ]
-        await org_db.upsert_nodes_into_schema(fork_schema_name, rows, parent_project_id)
+        await org_db.upsert_nodes_into_schema(fork_schema_name, rows, effective_project_id)
 
     deleted_ids = [nid for nid in stored_hashes if nid not in parsed_by_id]
     deleted = len(deleted_ids)
@@ -258,8 +260,17 @@ async def create_fork_from_files(
 
     await org_db.fork_schema(parent_schema, fork_schema_name)
 
+    # Rename project_id on all copied rows from parent's ID to fork's ID.
+    # fork_schema does a bulk INSERT ... SELECT which preserves the parent's
+    # project_id — without this UPDATE every MCP query (which filters by
+    # project_id) returns zero results for the fork.
+    await org_db.update_project_id_in_schema(
+        fork_schema_name, old_project_id=parent_project_id, new_project_id=fork_project_id
+    )
+
     delta = await apply_fork_delta_from_files(
-        fork_schema_name, parent_project_id, files, project_root, org_db
+        fork_schema_name, parent_project_id, files, project_root, org_db,
+        fork_project_id=fork_project_id,
     )
 
     now = datetime.now(timezone.utc).isoformat()

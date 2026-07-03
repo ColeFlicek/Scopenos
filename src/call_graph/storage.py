@@ -700,6 +700,44 @@ class CallGraphDB:
 
     # ── Fork schema helpers (pool access isolated here) ────────────────────
 
+    async def update_project_id_in_schema(
+        self,
+        schema_name: str,
+        old_project_id: str,
+        new_project_id: str,
+    ) -> None:
+        """Rewrite project_id on all rows copied from the parent into a fork schema.
+
+        fork_schema() does INSERT INTO fork SELECT * FROM parent, which preserves
+        the parent's project_id on every row. MCP tools filter by project_id, so
+        without this UPDATE they return zero results for the fork.
+
+        Only updates tables that have a project_id column; others are skipped.
+        """
+        _tables_with_project_id = [
+            "nodes", "edges", "function_embeddings",
+            "commit_function_changes", "branch_function_changes",
+            "dependency_fingerprints", "schema_object_embeddings",
+            "agent_improvements",
+        ]
+        _FORK_TIMEOUT = 300.0
+        async with self._pool.acquire() as conn:
+            for table in _tables_with_project_id:
+                has_col = await conn.fetchval(
+                    """SELECT 1 FROM information_schema.columns
+                       WHERE table_schema = $1 AND table_name = $2
+                         AND column_name = 'project_id'""",
+                    schema_name, table,
+                    timeout=_FORK_TIMEOUT,
+                )
+                if has_col:
+                    await conn.execute(
+                        f'UPDATE "{schema_name}".{table} '
+                        f'SET project_id = $1 WHERE project_id = $2',
+                        new_project_id, old_project_id,
+                        timeout=_FORK_TIMEOUT,
+                    )
+
     async def get_node_hashes_in_schema(
         self, schema_name: str, file_paths: list[str]
     ) -> dict[str, str]:
