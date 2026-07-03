@@ -116,7 +116,7 @@ Scopenos is a self-hosted code intelligence server. It indexes a codebase into f
 | `org_{slug}` | One per customer org | `org_{slug}_rw` (auto-created at provision) |
 | `scopenos_test` | Test suite only — never production data | `scopenos_test_runner` |
 | `template_vector` | Template DB with pgvector pre-installed — cloned when provisioning new org DBs | `scopenos` (superuser) |
-| `demos` | ~~Not yet created~~ (was planned, not provisioned as of 2026-07-02) | — |
+| `org_demos` | Demo repos — 12 SWE-bench repos pre-indexed (django 42K nodes, pytest 8K, etc.) | `scopenos_demos_reader` (RO), `scopenos_demos_writer` (RW) |
 
 ### Three levels of isolation
 
