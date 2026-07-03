@@ -61,7 +61,8 @@ def evaluate(
         eval_path = os.path.join(tmpdir, "repo")
         subprocess.run(["cp", "-r", repo_path, eval_path], check=True)
         subprocess.run(["git", "checkout", "--", "."], cwd=eval_path, check=True)
-        subprocess.run(["git", "clean", "-fd"], cwd=eval_path, check=True)
+        # Exclude .bench-venv — it's untracked but must survive for test runs.
+        subprocess.run(["git", "clean", "-fd", "--exclude=.bench-venv"], cwd=eval_path, check=True)
 
         # Write patch to a temp file and apply it
         patch_file = os.path.join(tmpdir, "agent.patch")

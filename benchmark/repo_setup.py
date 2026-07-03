@@ -238,14 +238,15 @@ def _create_venv(repo_path: str) -> str:
             raise subprocess.CalledProcessError(result.returncode, result.args)
 
     if is_django:
-        # Django: install the package itself + test deps
+        # Django: install the package itself + test deps.
+        # setuptools provides distutils (removed from stdlib in Python 3.12).
         subprocess.run(
             [python, "-m", "pip", "install", "--quiet", "-e", "."],
             cwd=repo_path, capture_output=True,
         )
         subprocess.run(
             [python, "-m", "pip", "install", "--quiet",
-             "pytest", "pytest-django", "asgiref", "sqlparse", "pytz"],
+             "pytest", "pytest-django", "asgiref", "sqlparse", "pytz", "setuptools"],
             cwd=repo_path, capture_output=True,
         )
     else:
