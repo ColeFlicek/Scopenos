@@ -81,7 +81,7 @@ def register(mcp: "FastMCP", _unused: Callable = None) -> None:
         pdb = await resolve_project_db(project_id, svcs.db)
         schema = pdb._schema
 
-        async with pdb._pool.acquire() as conn:
+        async with pdb.acquire() as conn:
             # ── 1. Function counts ─────────────────────────────────────────────
             func_row = await conn.fetchrow(
                 f"""SELECT

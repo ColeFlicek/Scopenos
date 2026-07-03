@@ -404,7 +404,7 @@ async def http_backfill_cochange(request: Request) -> JSONResponse:
 
         # Build file-path → [function_id] map from the node table.
         # Nodes store absolute paths; git gives relative paths — we match by suffix.
-        async with pdb._pool.acquire() as conn:
+        async with pdb.acquire() as conn:
             schema = pdb._schema
             rows = await conn.fetch(
                 f'SELECT id, file FROM "{schema}".nodes WHERE project_id = $1 AND is_external = 0',
