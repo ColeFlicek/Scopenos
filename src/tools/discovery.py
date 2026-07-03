@@ -184,12 +184,16 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         - recent_decisions: what changed in this codebase recently and why
 
         HOW TO USE:
-        1. Scan top_functions in each subsystem to identify which subsystem contains
-           the code you need — no grep required.
-        2. Call get_subsystem_detail(project_id, subsystem_name) to get ALL functions
-           and connections for that one subsystem.
-        3. Use query_similar_functions for semantic search across all subsystems.
-        4. Read() only for the exact implementation of the function you will edit.
+        1. Scan anchor_summary for each subsystem — these describe the subsystem's
+           architectural role in plain language. If anchor_summary is populated, you
+           understand the design without reading any files.
+        2. Scan top_functions to identify which subsystem contains the code you need.
+        3. Call get_subsystem_detail(project_id, subsystem_name) for the full function
+           list and the complete anchor_summary for that subsystem.
+        4. Call query_similar_functions to find a specific function by description.
+        5. Call get_callers / get_callees on that function BEFORE editing — they show
+           how your return value will be consumed and what contracts to preserve.
+        6. Read() only the exact lines you will change, after all of the above.
         """
         svcs = await _tools_shared.get_services()
         await check_read_access(project_id, svcs.db)
@@ -209,15 +213,37 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         [DRILL-DOWN TOOL — call after get_project_home to focus on one subsystem]
 
         Full detail for a single subsystem identified in get_project_home:
-        - anchor with full (uncapped) summary
-        - top 50 functions by caller count with summaries
-        - ALL connections to/from this subsystem (no cap)
+        - anchor: the most-called class in this subsystem, with its full summary
+          (the anchor_summary describes the architectural role of the subsystem —
+          read this first, it explains how the subsystem works before you read code)
+        - top 50 functions by caller count with summaries and signatures
+        - ALL cross-subsystem connections (from/to with edge counts)
 
-        Use this when get_project_home showed a subsystem you need to work in
-        and you want the complete wiring picture for that area only.
+        The anchor_summary is the key output — it describes the subsystem's
+        architecture in plain language so you understand the design before
+        touching any file. If anchor_summary is empty, run enrich_summaries first.
 
         project_id: same project_id used in get_project_home
         subsystem_name: exact name from the subsystems list (e.g. "django.db.models.sql")
+
+        Example response:
+        {
+          "subsystem": "django.db.models.sql",
+          "function_count": 312,
+          "anchor": "django.db.models.sql.query.Query",
+          "anchor_summary": "Query is the internal SQL query builder. It compiles Q objects
+            into a WhereNode tree via build_filter/_add_q. Exclusions (~Q) create a negated
+            WhereNode — the child clause returned by split_exclude is wrapped in NOT(...).
+            The compiler then renders WhereNode.as_sql() into the final SQL string.",
+          "top_functions": [
+            {"id": "django.db.models.sql.query.Query.build_filter", "caller_count": 12,
+             "summary": "Converts a single filter expression into a WhereNode child."},
+            ...
+          ],
+          "connections": [
+            {"from": "django.db.models.sql", "to": "django.db.models.sql.where", "edge_count": 84}
+          ]
+        }
         """
         svcs = await _tools_shared.get_services()
         await check_read_access(project_id, svcs.db)
