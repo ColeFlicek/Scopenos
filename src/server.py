@@ -360,6 +360,120 @@ async def http_fork_from_files(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": detail}, status_code=500)
 
 
+# ── Co-change backfill endpoint ───────────────────────────────────────────────
+
+@mcp.custom_route("/api/backfill-cochange", methods=["POST"])
+async def http_backfill_cochange(request: Request) -> JSONResponse:
+    """
+    POST /api/backfill-cochange
+    Body: {
+      "project_id": "django",
+      "project_root": "/abs/path/to/repo",   // used to resolve relative file paths
+      "commits": [
+        {"hash": "abc1234...", "files": ["django/db/models/sql/query.py", ...]},
+        ...
+      ]
+    }
+
+    Populates commit_function_changes so get_impact_radius can surface co_change_hints.
+    Client sends git log + git diff --name-only data; server resolves file paths to
+    function IDs using its node table and inserts (project_id, commit_hash, function_id).
+
+    Idempotent — ON CONFLICT DO NOTHING.
+    Returns {"inserted": N, "commits_processed": M, "commits_skipped": K}
+    """
+    try:
+        svcs = await _get_services()
+        _user = require_user()
+        data = await request.json()
+
+        project_id: str = data.get("project_id", "")
+        project_root: str = data.get("project_root", "").rstrip("/")
+        commits: list[dict] = data.get("commits", [])
+
+        if not project_id:
+            return JSONResponse({"status": "error", "detail": "project_id required"}, status_code=400)
+        if not commits:
+            return JSONResponse({"inserted": 0, "commits_processed": 0, "commits_skipped": 0})
+
+        await check_permission(_user, project_id, "write", svcs.db)
+
+        from .tools._shared import resolve_project_db
+        pdb = await resolve_project_db(project_id, svcs.db)
+
+        # Build file-path → [function_id] map from the node table.
+        # Nodes store absolute paths; git gives relative paths — we match by suffix.
+        async with pdb._pool.acquire() as conn:
+            schema = pdb._schema
+            rows = await conn.fetch(
+                f'SELECT id, file FROM "{schema}".nodes WHERE project_id = $1 AND is_external = 0',
+                project_id,
+            )
+
+        # suffix_map: last two path components → [function_ids]
+        # e.g. "sql/query.py" → ["django.db.models.sql.query.Query.split_exclude", ...]
+        from pathlib import Path
+        suffix_map: dict[str, list[str]] = {}
+        for row in rows:
+            fn_id, file_path = row["id"], row["file"]
+            if not file_path:
+                continue
+            p = Path(file_path)
+            # index by last 1, 2, and 3 components for flexible matching
+            for n in (1, 2, 3):
+                key = "/".join(p.parts[-n:])
+                suffix_map.setdefault(key, []).append(fn_id)
+
+        def resolve_file(rel_path: str) -> list[str]:
+            """Map a git-relative file path to function IDs via suffix matching."""
+            p = Path(rel_path)
+            for n in (3, 2, 1):
+                key = "/".join(p.parts[-n:])
+                if key in suffix_map:
+                    return suffix_map[key]
+            # Try absolute path match
+            abs_path = f"{project_root}/{rel_path}" if project_root else rel_path
+            return suffix_map.get(abs_path, [])
+
+        inserted = 0
+        processed = 0
+        skipped = 0
+
+        for commit in commits:
+            commit_hash: str = commit.get("hash", "")
+            files: list[str] = commit.get("files", [])
+            if not commit_hash or not files:
+                skipped += 1
+                continue
+
+            fn_ids: list[str] = []
+            for f in files:
+                fn_ids.extend(resolve_file(f))
+
+            fn_ids = list(set(fn_ids))  # deduplicate
+            if not fn_ids:
+                skipped += 1
+                continue
+
+            await pdb.record_commit_changes(project_id, commit_hash, fn_ids)
+            inserted += len(fn_ids)
+            processed += 1
+
+        return JSONResponse({
+            "inserted": inserted,
+            "commits_processed": processed,
+            "commits_skipped": skipped,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import traceback
+        detail = str(exc) or f"{type(exc).__name__}: (no message)"
+        print(f"[backfill-cochange 500] {type(exc).__name__}: {exc!r}\n{traceback.format_exc()}", flush=True)
+        return JSONResponse({"status": "error", "detail": detail}, status_code=500)
+
+
 # ── Git hook HTTP endpoint ─────────────────────────────────────────────────────
 
 @mcp.custom_route("/index", methods=["POST"])
