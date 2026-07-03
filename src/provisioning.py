@@ -280,7 +280,7 @@ async def provision_org(
             f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{role_name}"'
         )
 
-        # Future tables
+        # Future tables in public schema
         await org_conn.execute(
             f'ALTER DEFAULT PRIVILEGES IN SCHEMA public '
             f'GRANT ALL ON TABLES TO "{role_name}"'
@@ -288,6 +288,23 @@ async def provision_org(
         await org_conn.execute(
             f'ALTER DEFAULT PRIVILEGES IN SCHEMA public '
             f'GRANT ALL ON SEQUENCES TO "{role_name}"'
+        )
+
+        # Future project schemas created by the provisioner role should be
+        # automatically accessible to the org role. Without this, any schema
+        # pre-created by the provisioner (e.g. demo project seeding) is
+        # inaccessible to the org role ("permission denied for schema X").
+        await org_conn.execute(
+            f'ALTER DEFAULT PRIVILEGES FOR ROLE "scopenos_provisioner" '
+            f'GRANT ALL ON TABLES TO "{role_name}"'
+        )
+        await org_conn.execute(
+            f'ALTER DEFAULT PRIVILEGES FOR ROLE "scopenos_provisioner" '
+            f'GRANT ALL ON SEQUENCES TO "{role_name}"'
+        )
+        await org_conn.execute(
+            f'ALTER DEFAULT PRIVILEGES FOR ROLE "scopenos_provisioner" '
+            f'GRANT USAGE, CREATE ON SCHEMAS TO "{role_name}"'
         )
 
         # Deny PUBLIC connect

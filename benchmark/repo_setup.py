@@ -32,7 +32,9 @@ _base_indexed: set[str] = set()
 
 # Projects pre-seeded into org_benchmark by copying from org_demos.
 # These already exist — _ensure_base_project must not overwrite them.
-_PRESEEDED = {"pytest", "django", "flask", "requests"}
+# NOTE: set is empty — the copy-from-demos approach was never executed;
+# all org_benchmark base projects have node_count=0 and need real indexing.
+_PRESEEDED: set[str] = set()
 
 SCOPENOS_URL = os.getenv("SCOPENOS_URL", "http://100.71.88.106:3004")
 SCOPENOS_API_KEY = os.getenv("SCOPENOS_API_KEY", "")
@@ -267,7 +269,6 @@ def _ensure_indexed(task: BenchmarkTask, repo_path: str, base_clone: str, *, dsn
 
     org, name = task.repo.split("/")
     slug = f"{org}__{name}"
-    # Base project ID matches the project name in org_benchmark (copied from org_demos).
     base_project_id = name
     fork_project_id = f"{name}-fork-{commit[:8]}"
 
