@@ -754,11 +754,13 @@ async def http_reembed_project(request: Request) -> JSONResponse:
 async def http_enrich_summaries(request: Request) -> JSONResponse:
     """
     POST /api/enrich-summaries/{project_id}
-    Optional body: {"limit": 500, "force": false}
+    Optional body: {"limit": 500, "force": false, "sync": false}
 
-    Enqueues an LLM summary generation job for functions that used the large-model
-    fallback (no docstring/comment). Re-embeds them afterward for better search quality.
-    Returns immediately with a job_id; the worker processes it in the background.
+    Generates LLM summaries for functions with no docstring/comment, then re-embeds
+    them for better semantic search quality.
+
+    sync=true: run inline and return when done (no worker required).
+    sync=false (default): enqueue for background worker (requires RQ worker running).
     """
     try:
         project_id = request.path_params["project_id"]
@@ -769,9 +771,18 @@ async def http_enrich_summaries(request: Request) -> JSONResponse:
             pass
         limit: int = int(body.get("limit", 500))
         force: bool = bool(body.get("force", False))
+        sync: bool = bool(body.get("sync", False))
         svcs = await _get_services()
         user = require_user()
         await check_permission(user, project_id, "write", svcs.db)
+
+        if sync:
+            import asyncio as _asyncio
+            result = await _asyncio.get_event_loop().run_in_executor(
+                None, run_enrich_summaries, project_id, limit, force, svcs.db._dsn
+            )
+            return JSONResponse({"status": "done", "project_id": project_id, **(result or {})})
+
         user_id = user["id"]
         try:
             job = _check_and_enqueue(user_id, run_enrich_summaries, project_id, limit, force, job_timeout=7200, db_url=svcs.db._dsn)
@@ -781,6 +792,8 @@ async def http_enrich_summaries(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        import traceback
+        print(f"[enrich-summaries 500] {exc!r}\n{traceback.format_exc()}", flush=True)
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
