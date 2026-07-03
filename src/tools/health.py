@@ -165,7 +165,8 @@ def register(mcp: "FastMCP", _unused: Callable = None) -> None:
 
         is_fork = bool(meta_row["is_fork"]) if meta_row else False
         parent_schema = meta_row["parent_schema"] if meta_row else None
-        last_indexed = meta_row["last_indexed"].isoformat() if (meta_row and meta_row["last_indexed"]) else None
+        _li = meta_row["last_indexed"] if meta_row else None
+        last_indexed = _li.isoformat() if hasattr(_li, "isoformat") else (_li and str(_li))
 
         # ── 7. Anchor summary coverage (via architecture service) ──────────────
         if not hasattr(pdb, "_arch_service"):
