@@ -216,7 +216,14 @@ def _create_venv(repo_path: str) -> str:
     is_django = os.path.exists(os.path.join(repo_path, "tests", "runtests.py"))
 
     print(f"[setup] creating venv with {_BENCH_PYTHON}…")
-    subprocess.run([_BENCH_PYTHON, "-m", "venv", venv_dir], check=True)
+    result = subprocess.run([_BENCH_PYTHON, "-m", "venv", venv_dir], capture_output=True)
+    if result.returncode != 0:
+        import shutil
+        if shutil.which("uv"):
+            print(f"[setup] python3 -m venv failed, falling back to uv venv…")
+            subprocess.run(["uv", "venv", venv_dir, "--python", _BENCH_PYTHON], check=True)
+        else:
+            raise subprocess.CalledProcessError(result.returncode, result.args)
 
     if is_django:
         # Django: install the package itself + test deps

@@ -73,5 +73,27 @@ BEGIN
     prov_role, org_role
   );
 
-  RAISE NOTICE 'Done. Run Step 2 (pg_dump copy) from the shell, then Step 3 (count update).';
+  RAISE NOTICE 'Done with grants. Run Step 2 (pg_dump copy), Step 3 (ownership transfer), then Step 4 (count update).';
+END $$;
+
+-- After Step 2 (pg_dump copy), tables are owned by the superuser who ran pg_restore.
+-- org_benchmark_rw needs to OWN them to run ALTER TABLE (schema migration) and TRUNCATE.
+-- Run this as superuser after the pg_dump copy:
+\echo 'Step 3: Transferring table/sequence ownership to org_benchmark_rw...'
+
+DO $$
+DECLARE
+  preseeded text[] := ARRAY['django', 'pytest', 'flask', 'requests'];
+  org_role  text   := 'org_benchmark_rw';
+  s text; tbl text; seq text;
+BEGIN
+  FOREACH s IN ARRAY preseeded LOOP
+    FOR tbl IN SELECT tablename FROM pg_tables WHERE schemaname = s LOOP
+      EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', s, tbl, org_role);
+    END LOOP;
+    FOR seq IN SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = s LOOP
+      EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', s, seq, org_role);
+    END LOOP;
+    RAISE NOTICE 'Transferred ownership in schema % to %', s, org_role;
+  END LOOP;
 END $$;
