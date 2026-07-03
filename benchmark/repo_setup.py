@@ -177,21 +177,30 @@ def _ensure_base_clone(repo: str, slug: str) -> str:
 def _pick_bench_python() -> str:
     if p := os.getenv("BENCH_PYTHON"):
         return p
-    # Prefer Python 3.9 (SWE-bench Lite tasks target Python 3.8/3.9)
+    import shutil, subprocess
+    # SWE-bench tasks target Python 3.8–3.12. Django 2.x uses `import cgi`
+    # which was removed in Python 3.13 — must use ≤ 3.12.
+    # Try uv-managed 3.12 first (installed via `uv python install 3.12`).
     for candidate in [
+        "/root/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12",
         "/opt/miniforge/envs/py39/bin/python",
         "/opt/miniforge/envs/py311/bin/python",
-        "python3.9",
-        "python3.10",
+        "python3.12",
         "python3.11",
-        "python3",
+        "python3.10",
+        "python3.9",
     ]:
         if candidate.startswith("/") and os.path.exists(candidate):
             return candidate
-        elif not candidate.startswith("/"):
-            import shutil
-            if shutil.which(candidate):
-                return candidate
+        elif not candidate.startswith("/") and shutil.which(candidate):
+            return candidate
+    # Last resort: try uv to find a ≤3.12 managed Python
+    try:
+        out = subprocess.check_output(["uv", "python", "find", "3.12"], text=True).strip()
+        if out and os.path.exists(out):
+            return out
+    except Exception:
+        pass
     return "python3"
 
 
@@ -220,8 +229,11 @@ def _create_venv(repo_path: str) -> str:
     if result.returncode != 0:
         import shutil
         if shutil.which("uv"):
-            print(f"[setup] python3 -m venv failed, falling back to uv venv…")
-            subprocess.run(["uv", "venv", venv_dir, "--python", _BENCH_PYTHON], check=True)
+            print(f"[setup] python3 -m venv failed, falling back to uv venv --python {_BENCH_PYTHON}…")
+            subprocess.run(
+                ["uv", "venv", venv_dir, "--python", _BENCH_PYTHON],
+                check=True, capture_output=True,
+            )
         else:
             raise subprocess.CalledProcessError(result.returncode, result.args)
 
