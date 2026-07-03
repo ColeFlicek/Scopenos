@@ -171,10 +171,7 @@ def register(mcp: "FastMCP", _unused: Callable = None) -> None:
         # ── 7. Anchor summary coverage (via architecture service) ──────────────
         if not hasattr(pdb, "_arch_service"):
             pdb._arch_service = ArchitectureService(pdb)
-        arch_data = await pdb._arch_service.get_graph_data(project_id, max_age_seconds=300)
-
-        from ..analysis import ArchitectureAnalyzer
-        home = ArchitectureAnalyzer().project_home(arch_data, project_id)
+        home = await pdb._arch_service.get_project_home(project_id, max_age_seconds=300)
         subsystems = home.get("subsystems", [])
         anchor_have = sum(1 for s in subsystems if s.get("anchor_summary", "").strip())
         anchor_missing = sum(1 for s in subsystems if not s.get("anchor_summary", "").strip())
