@@ -49,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
     prov.add_argument(
         "--control-dsn",
         default=os.getenv("CONTROL_DSN", ""),
-        help="DSN for the scopenos_control DB (env: CONTROL_DSN).",
+        help="DSN for the scopenos control DB (env: CONTROL_DSN).",
     )
     prov.add_argument(
         "--schema",
@@ -68,7 +68,7 @@ def _build_parser() -> argparse.ArgumentParser:
     down.add_argument(
         "--control-dsn",
         default=os.getenv("CONTROL_DSN", ""),
-        help="DSN for the scopenos_control DB (env: CONTROL_DSN).",
+        help="DSN for the scopenos control DB (env: CONTROL_DSN).",
     )
 
     return parser

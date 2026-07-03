@@ -1,16 +1,16 @@
 -- Scopenos control plane schema
--- Database: scopenos_control
+-- Database: scopenos  (was: scopenos_control — renamed 2026-07-01)
 -- Applied once at cluster setup. Run as superuser or DB owner.
 -- Safe to re-run — all statements are idempotent.
 --
 -- Usage:
---   psql -d scopenos_control -f schema_control_plane.sql
+--   psql -d scopenos -f schema_control_plane.sql
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ── Organizations ──────────────────────────────────────────────────────────
 -- One row per customer org. Provisioned by scopenos_provisioner role at signup.
--- db_url stores the org's database connection string (encrypted at app layer).
+-- db_url stores the org's database connection string (currently plaintext — encryption not yet implemented).
 CREATE TABLE IF NOT EXISTS organizations (
     id         TEXT PRIMARY KEY,
     slug       TEXT NOT NULL UNIQUE,

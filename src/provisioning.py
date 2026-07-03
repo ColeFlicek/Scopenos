@@ -4,7 +4,7 @@ Each org gets:
   - A dedicated Postgres database: org_{slug}
   - A login role with a generated password: org_{slug}_rw
   - The schema_org.sql schema applied to the new database
-  - An entry in scopenos_control.organizations (if the control DB is reachable)
+  - An entry in scopenos.organizations (if the control DB is reachable)
 
 This module is called by the provisioning CLI (scripts/provision_org.py) and
 can also be invoked programmatically during the signup flow.
@@ -142,7 +142,7 @@ def _split_sql(sql: str) -> list[str]:
 # ── Control DB helpers ────────────────────────────────────────────────────────
 
 async def _record_org(control_dsn: str, slug: str, db_name: str, role_name: str, conn_str: str) -> None:
-    """Insert org record into scopenos_control.organizations if the table exists."""
+    """Insert org record into scopenos.organizations if the table exists."""
     try:
         conn = await asyncpg.connect(control_dsn)
     except Exception:
@@ -180,7 +180,7 @@ async def _record_org(control_dsn: str, slug: str, db_name: str, role_name: str,
 
 
 async def _remove_org_record(control_dsn: str, slug: str) -> None:
-    """Remove org record from scopenos_control.organizations if it exists."""
+    """Remove org record from scopenos.organizations if it exists."""
     try:
         conn = await asyncpg.connect(control_dsn)
     except Exception:
@@ -221,13 +221,13 @@ async def provision_org(
       8. GRANT CONNECT ON DATABASE org_{slug} TO org_{slug}_rw.
       9. GRANT ALL ON ALL TABLES / SEQUENCES IN SCHEMA public TO org_{slug}_rw.
      10. REVOKE CONNECT ON DATABASE org_{slug} FROM PUBLIC.
-     11. Record in scopenos_control.organizations (best-effort).
+     11. Record in scopenos.organizations (best-effort).
 
     Args:
         slug: Short org identifier, e.g. "acme".  Becomes part of DB/role names.
         provisioner_dsn: DSN for a role with CREATEDB privilege (e.g. scopenos_provisioner).
                          Must connect to the maintenance database (typically "postgres").
-        control_dsn: DSN for the scopenos_control database.  Used to register the org.
+        control_dsn: DSN for the scopenos control database.  Used to register the org.
         schema_sql_path: Path to schema_org.sql, relative to project root or absolute.
 
     Returns:
@@ -320,7 +320,7 @@ async def teardown_org(
     Steps:
       1. DROP DATABASE IF EXISTS org_{slug}.
       2. DROP ROLE IF EXISTS org_{slug}_rw.
-      3. Remove from scopenos_control.organizations (best-effort).
+      3. Remove from scopenos.organizations (best-effort).
 
     Args:
         slug: Org identifier.

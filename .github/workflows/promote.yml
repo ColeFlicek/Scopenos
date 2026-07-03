@@ -1,0 +1,130 @@
+name: Promote Beta to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_sha:
+        description: "SHA to promote (leave blank to use latest beta image)"
+        required: false
+        default: ""
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: coleflicek/scopenos
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate required secrets
+        run: |
+          missing=""
+          [ -z "$CONTROL_DB_URL" ]      && missing="$missing CONTROL_DB_URL"
+          [ -z "$TS_OAUTH_CLIENT_ID" ]  && missing="$missing TS_OAUTH_CLIENT_ID"
+          [ -z "$TS_OAUTH_SECRET" ]     && missing="$missing TS_OAUTH_SECRET"
+          [ -z "$KUBECONFIG" ]          && missing="$missing KUBECONFIG"
+          if [ -n "$missing" ]; then
+            echo "ERROR: Missing required secrets:$missing"
+            exit 1
+          fi
+        env:
+          CONTROL_DB_URL: ${{ secrets.CONTROL_DB_URL }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          KUBECONFIG: ${{ secrets.KUBECONFIG }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Retag beta image as latest — avoids a full rebuild.
+      # If beta_sha is set, promote that specific build; otherwise promote
+      # the current `beta` floating tag (whatever just passed smoke test).
+      - name: Retag beta as latest
+        run: |
+          if [ -n "${{ github.event.inputs.beta_sha }}" ]; then
+            SRC="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:beta-${{ github.event.inputs.beta_sha }}"
+          else
+            SRC="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:beta"
+          fi
+          echo "Promoting: $SRC → latest"
+          docker pull "$SRC"
+          docker tag "$SRC" "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          docker push "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          echo "PROMOTED_IMAGE=$SRC" >> $GITHUB_ENV
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      # Update the prod deployment to the newly tagged image.
+      # Using `set image` rather than `rollout restart` so the image
+      # digest is pinned in the rollout history.
+      - name: Roll out promoted image to production
+        run: |
+          kubectl set image deployment/scopenos-api \
+            scopenos-api="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" \
+            -n scopenos
+          kubectl set image deployment/scopenos-worker \
+            scopenos-worker="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" \
+            -n scopenos
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/scopenos-api -n scopenos --timeout=10m
+          kubectl rollout status deployment/scopenos-worker -n scopenos --timeout=10m
+
+      - name: Smoke test production
+        run: |
+          for i in $(seq 1 6); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+              http://100.71.88.106:3004/api/health || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Production smoke test passed."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Production smoke test failed — rolling back."
+          kubectl rollout undo deployment/scopenos-api -n scopenos
+          kubectl rollout status deployment/scopenos-api -n scopenos --timeout=3m
+          exit 1
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          kubectl get pods -n scopenos -o wide
+          kubectl logs -l app=scopenos-api -n scopenos --tail=100 --prefix || true
+          kubectl get events -n scopenos --sort-by='.lastTimestamp' | tail -20
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "## Promotion successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source image:** \`$PROMOTED_IMAGE\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target:** \`latest\` → production (port 3004)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Promoted by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

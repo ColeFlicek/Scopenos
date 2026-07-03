@@ -84,14 +84,28 @@ CREATE INDEX IF NOT EXISTS idx_projects_schema ON projects(schema_name);
 CREATE INDEX IF NOT EXISTS idx_projects_fork   ON projects(parent_schema) WHERE is_fork = TRUE;
 
 -- ── Project access ─────────────────────────────────────────────────────────
--- Which org members can access which projects. user_id references
--- scopenos_control.users — no FK across databases, stored as TEXT.
+-- Which org members can access which projects. user_id is a soft reference
+-- to control-DB users — no FK because users live in a different database.
 CREATE TABLE IF NOT EXISTS project_access (
-    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL,
     project_id TEXT NOT NULL,
     role       TEXT NOT NULL DEFAULT 'viewer',
     PRIMARY KEY (user_id, project_id)
 );
+
+-- Migration: drop the stale FK on existing org DBs.
+-- (Safe no-op if the constraint was never created.)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_type = 'FOREIGN KEY'
+          AND table_name = 'project_access'
+          AND constraint_name LIKE '%user_id%'
+    ) THEN
+        ALTER TABLE project_access DROP CONSTRAINT IF EXISTS project_access_user_id_fkey;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_paccess_project ON project_access(project_id);
 CREATE INDEX IF NOT EXISTS idx_paccess_user    ON project_access(user_id);

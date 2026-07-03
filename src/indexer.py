@@ -330,10 +330,14 @@ class Indexer:
         ctx = detect_branch(project_root)
         effective_branch = branch_override or ctx.branch
         head_commit = head_commit_override or ctx.head_commit
+        # Count from the project-scoped DB so we hit {schema}.nodes, not public.nodes
+        node_count = await pdb.count_nodes()
+        edge_count = await pdb.count_edges()
         # upsert_project goes to the org-level DB (public.projects registry)
         await self._db.upsert_project(
             project_id, project_id, project_root,
             branch=effective_branch, head_commit=head_commit,
+            node_count=node_count, edge_count=edge_count,
         )
         await pdb.record_branch_changes(
             project_id, effective_branch, changed_fn_ids, head_commit
