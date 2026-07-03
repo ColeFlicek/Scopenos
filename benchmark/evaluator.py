@@ -57,10 +57,11 @@ def evaluate(
     with tempfile.TemporaryDirectory(prefix="scopenos-eval-") as tmpdir:
         # Copy the checkout into a fresh directory for evaluation, then reset to
         # HEAD so the patch can be applied cleanly (the worktree may already
-        # contain the agent's uncommitted changes).
+        # contain the agent's uncommitted changes and untracked helper files).
         eval_path = os.path.join(tmpdir, "repo")
         subprocess.run(["cp", "-r", repo_path, eval_path], check=True)
         subprocess.run(["git", "checkout", "--", "."], cwd=eval_path, check=True)
+        subprocess.run(["git", "clean", "-fd"], cwd=eval_path, check=True)
 
         # Write patch to a temp file and apply it
         patch_file = os.path.join(tmpdir, "agent.patch")
@@ -139,12 +140,16 @@ def _run_django_tests(test_ids: list[str], repo_path: str, python: str) -> tuple
 
         dotted = _django_id_to_dotted(tid)
         if os.path.exists(runtests):
+            # PYTHONPATH ensures Django's source tree takes precedence over any
+            # installed Django in the venv — needed when venv Django != source Django.
+            env = {**os.environ, "PYTHONPATH": repo_path}
             result = subprocess.run(
                 [python, "runtests.py", "--verbosity=2", "--parallel=1", dotted],
                 cwd=tests_dir,
                 capture_output=True,
                 text=True,
                 timeout=120,
+                env=env,
             )
         else:
             pytest_id = _django_id_to_pytest(tid, repo_path)

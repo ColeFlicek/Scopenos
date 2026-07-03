@@ -1,0 +1,11 @@
+{
+  "instance_id": "django__django-11138",
+  "path": "b",
+  "repo_path": "/tmp/scopenos-bench-fwp3la2n/django__django-11138",
+  "venv_python": "/tmp/scopenos-bench-fwp3la2n/django__django-11138/.bench-venv/bin/python",
+  "project_id": "django-fork-c84b91b7",
+  "scopenos_indexed": true,
+  "fail_to_pass": [
+    "test_query_convert_timezones (timezones.tests.NewDatabaseTests)"
+  ]
+}

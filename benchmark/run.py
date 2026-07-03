@@ -129,8 +129,23 @@ def cmd_setup(args) -> None:
 
 
 def cmd_evaluate(args) -> None:
-    tasks = load_tasks_chronological(repo=args.repo)
-    task = next((t for t in tasks if t.instance_id == args.instance_id), None)
+    # Check saved task.json first — allows evaluating Full-dataset tasks without HF download.
+    task = None
+    saved = Path(args.results_dir) / args.instance_id / "task.json"
+    if saved.exists():
+        from benchmark.loader import BenchmarkTask
+        data = json.loads(saved.read_text())
+        task = BenchmarkTask(
+            instance_id=data["instance_id"],
+            repo=data["repo"],
+            base_commit=data["base_commit"],
+            problem_statement=data["problem_statement"],
+            fail_to_pass=data["fail_to_pass"],
+            pass_to_pass=data.get("pass_to_pass", []),
+        )
+    if task is None:
+        tasks = load_tasks_chronological(repo=args.repo)
+        task = next((t for t in tasks if t.instance_id == args.instance_id), None)
     if not task:
         print(f"ERROR: task {args.instance_id!r} not found", file=sys.stderr)
         sys.exit(1)
