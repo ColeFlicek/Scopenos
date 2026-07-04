@@ -123,12 +123,12 @@ def post_decision(payload: dict) -> dict:
 
 
 def check_server() -> bool:
-    """Verify the Scopenos server is reachable and has decision memory operational."""
+    """Verify the Scopenos server is reachable."""
     try:
         req = Request(f"{SCOPENOS_URL}/api/health", method="GET")
         with urlopen(req, timeout=5) as r:
             resp = json.loads(r.read())
-        return resp.get("decision_memory", {}).get("status") == "ok"
+        return resp.get("status") == "ok"
     except Exception as e:
         print(f"ERROR: cannot reach Scopenos at {SCOPENOS_URL}: {e}", file=sys.stderr)
         return False
@@ -147,10 +147,17 @@ def main() -> None:
         "--project", metavar="ID",
         help="Project ID to tag decisions with (default: derived from git remote or dirname)",
     )
+    parser.add_argument(
+        "--repo-dir", metavar="PATH",
+        help="Path to the git repository to backfill (default: current directory)",
+    )
     args = parser.parse_args()
 
     if args.scopenos_url != SCOPENOS_URL:
         globals()["SCOPENOS_URL"] = args.scopenos_url
+
+    if args.repo_dir:
+        os.chdir(args.repo_dir)
 
     project_id = args.project or os.environ.get("SCOPENOS_PROJECT") or derive_project_id()
     print(f"Project ID: {project_id}")
