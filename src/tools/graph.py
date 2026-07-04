@@ -169,12 +169,38 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
     @mcp.tool()
     async def get_callers(function_name: str, project_id: str = "") -> str:
         """
-        [EXECUTION TOOL — accepts a symbol name]
+        [PRE-EDIT GATE — call this before editing any function]
 
-        Return all functions that call the specified function. Accepts a bare name,
-        a qualified name (module.func), or a full id (module.Class.method).
+        Returns every function that calls the specified function, with file, signature,
+        and line range. Use this to understand how your return value or side effects will
+        be consumed BEFORE you write any code. The callers' signatures reveal whether
+        your output gets negated, wrapped, transformed, or used as-is — which determines
+        whether your implementation is correct.
 
+        Call get_callers before editing. Call get_callers on those callers if you still
+        cannot predict the downstream effect of your change.
+
+        Accepts a bare name, qualified name (module.func), or full id (module.Class.method).
         project_id: limit results to a specific project. If omitted, searches all projects.
+
+        Example response:
+        {
+          "callers": [
+            {
+              "id": "django.db.models.sql.query.Query.build_filter",
+              "name": "Query.build_filter",
+              "file": "django/db/models/sql/query.py",
+              "signature": "def build_filter(self, filter_expr, branch_negated=False, ...)",
+              "start_line": 1488,
+              "end_line": 1658
+            }
+          ],
+          "_guidance": {
+            "note": "1 caller(s) found for `split_exclude`",
+            "signals": ["1/1 callers in `django.db.models.sql.query` — concentrated usage"],
+            "suggested_follow_ups": []
+          }
+        }
         """
         from ..guidance import compute_callers_guidance
         svcs = await _tools_shared.get_services()
@@ -188,21 +214,63 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         return json.dumps(out)
 
     @mcp.tool()
-    async def get_callees(function_name: str, project_id: str = "") -> str:
+    async def get_callees(
+        function_name: str, project_id: str = "", include_external: bool = False
+    ) -> str:
         """
-        [EXECUTION TOOL — accepts a symbol name]
+        [PRE-EDIT GATE — call this before editing any function]
 
-        Return all functions called by the specified function.
+        Returns every function called by the specified function, with file, signature,
+        is_external flag, and line range. Use this to understand what contracts your
+        rewrite must preserve — the callees reveal the dependencies your implementation
+        relies on and must continue to satisfy.
+
+        External callees (stdlib / third-party) are omitted by default — they are fixed
+        contracts your rewrite must satisfy, not candidates for editing. Set
+        include_external=True to include them (useful when auditing third-party dependency
+        surface).
 
         project_id: limit results to a specific project. If omitted, searches all projects.
+
+        Example response:
+        {
+          "callees": [
+            {
+              "id": "django.db.models.sql.where.WhereNode.add",
+              "name": "WhereNode.add",
+              "file": "django/db/models/sql/where.py",
+              "signature": "def add(self, data, conn_type):",
+              "is_external": 0,
+              "start_line": 40,
+              "end_line": 55
+            }
+          ],
+          "_guidance": {
+            "note": "3 callee(s) — 1 external (hidden, pass include_external=True to see)",
+            "signals": ["1 external callee(s) — direct dependency on: builtins"],
+            "suggested_follow_ups": []
+          }
+        }
         """
         from ..guidance import compute_callees_guidance
         svcs = await _tools_shared.get_services()
         await check_read_access(project_id, svcs.db)
         pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
-        results = await pdb.get_callees(function_name, project_id or None)
+        all_results = await pdb.get_callees(function_name, project_id or None)
         _contracts = await contracts_for_name(pdb, function_name, project_id)
-        out: dict = {"callees": results, "_guidance": compute_callees_guidance(results, function_name)}
+        # Guidance runs on full results so external signal is preserved in the note.
+        guidance = compute_callees_guidance(all_results, function_name)
+        if not include_external:
+            external_count = sum(1 for r in all_results if r.get("is_external"))
+            results = [r for r in all_results if not r.get("is_external")]
+            if external_count:
+                guidance["note"] = (
+                    f"{len(results)} internal callee(s) from `{function_name}` "
+                    f"({external_count} external hidden — pass include_external=True to see)"
+                )
+        else:
+            results = all_results
+        out: dict = {"callees": results, "_guidance": guidance}
         if _contracts:
             out["applicable_contracts"] = fmt_contracts(_contracts)
         return json.dumps(out)
@@ -216,16 +284,41 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         [EXECUTION TOOL — accepts a symbol name]
 
         BFS traversal outward from function_name up to `depth` levels.
-        Returns the set of functions that would be impacted by a change to
-        function_name.
+        Returns every function that would be impacted by a change, plus
+        co_change_hints — empirical signals about what else typically changes
+        alongside this function in git history.
+
+        co_change_hints has two types:
+          - "co_change_history": functions that changed together with this one
+            N times in past commits — strong signal they need parallel updates
+          - "semantic_sibling": functions too similar to be coincidence but not
+            reachable via call edges — may need the same fix applied
+
+        READ co_change_hints carefully before editing. They surface hidden
+        dependencies that call graph traversal alone cannot find.
 
         project_id: limit results to a specific project. If omitted, searches all projects.
+        compact: True returns slim {name, module, impact_depth, id} nodes with a
+        summary. Use when blast radius >20 nodes and you need scope not detail.
 
-        compact: when True, returns slim nodes {name, module, impact_depth, id} plus
-        a summary {total, by_module, by_depth} instead of full node objects. Use this
-        when the blast radius is large (>20 nodes) and you need scope/shape rather than
-        full signatures and source locations. Pass compact=False (default) to get all
-        fields for targeted pre-edit review.
+        Example response:
+        {
+          "impact_radius": [
+            {"id": "django.db.models.sql.query.Query.split_exclude", "impact_depth": 0,
+             "file": "django/db/models/sql/query.py", "signature": "def split_exclude(...)"},
+            {"id": "django.db.models.sql.query.Query.build_filter", "impact_depth": 1, ...}
+          ],
+          "co_change_hints": [
+            {"type": "co_change_history",
+             "message": "`Lookup.__hash__` has changed together with `split_exclude` 5 times",
+             "id": "django.db.models.lookups.Lookup.__hash__",
+             "co_change_count": 5},
+            {"type": "semantic_sibling",
+             "message": "`WhereNode.split_having` is semantically similar but not reachable via call edges",
+             "id": "django.db.models.sql.where.WhereNode.split_having",
+             "similarity": 0.87}
+          ]
+        }
         """
         import asyncio as _asyncio
         svcs = await _tools_shared.get_services()
@@ -240,6 +333,25 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         )
 
         hints = await _co_change_hints(function_name, results, pdb, pemb, pid)
+
+        # Collect function IDs that hints explicitly reference — those depth-2+
+        # entries are load-bearing and must be kept in full. Unreferenced depth-2+
+        # entries are collapsed to a count: they add tokens but agents don't act on them.
+        hint_ids: set[str] = set()
+        for h in hints:
+            if "id" in h:
+                hint_ids.add(h["id"])
+            if "suggested_id" in h:
+                hint_ids.add(h["suggested_id"])
+
+        kept, collapsed_count = [], 0
+        for r in results:
+            if r.get("impact_depth", 0) >= 2 and r["id"] not in hint_ids:
+                collapsed_count += 1
+            else:
+                kept.append(r)
+        if collapsed_count:
+            results = kept
 
         if compact and results:
             by_module: dict[str, int] = {}
@@ -263,7 +375,12 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
             }
         else:
             out = {"impact_radius": results}
-            if len(results) > 20:
+            if collapsed_count:
+                out["depth_2_trimmed"] = (
+                    f"{collapsed_count} depth-2 node(s) omitted (not referenced by any "
+                    "co_change hint). Pass compact=True or depth=1 for the full list."
+                )
+            elif len(results) > 20:
                 out["_tip"] = (
                     f"{len(results)} nodes returned. Call with compact=True for "
                     "a module-level summary (total, by_module, by_depth) instead."
@@ -282,21 +399,53 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         """
         [DISCOVERY TOOL — accepts natural language or a code snippet]
 
-        Return the top-k functions semantically similar to the provided snippet.
-        Surfaces parallel implementations, related modules, and similar patterns
-        that would not appear in a grep or call trace.
+        Hybrid BM25 + semantic search across the indexed codebase. Returns the
+        top-k functions most relevant to your description, with file path, line
+        range, signature, and summary for each.
 
-        Use this when you do not yet know a function name — describe what you are
-        looking for in plain English and this tool finds it.  Once you have the
-        function name, switch to get_function_context for the full picture.
+        Use this to find a function when you don't know its name. Describe what
+        the function does in plain English — e.g. "split exclude subquery for
+        multi-valued relationships" or "NOT IN subquery generation".
 
-        project_id: required — scope results to this project. Pass "" to search across all projects.
+        The returned `id` field is the stable function identifier to pass to
+        get_callers, get_callees, get_impact_radius, and get_decision_history.
+
+        project_id: required — scope to this project.
+        top_k: number of results (default 10). Raise to 20 for broader sweep.
+
+        Example response:
+        {
+          "results": [
+            {
+              "id": "django.db.models.sql.query.Query.split_exclude",
+              "name": "Query.split_exclude",
+              "file": "django/db/models/sql/query.py",
+              "start_line": 1820,
+              "end_line": 1887,
+              "signature": "def split_exclude(self, filter_expr, can_reuse, names_with_path):",
+              "summary": "Builds a NOT IN subquery for multi-valued relationship exclusions."
+            },
+            ...
+          ],
+          "_guidance": {
+            "signals": ["Results concentrated in django.db.models.sql — check get_subsystem_detail"],
+            "suggested_follow_ups": [
+              {"tool": "get_callers", "args": {"function_name": "Query.split_exclude"},
+               "reason": "Understand how return value is consumed before editing"}
+            ]
+          }
+        }
         """
         svcs = await _tools_shared.get_services()
         await check_read_access(project_id, svcs.db)
         pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
         pemb = svcs.embeddings.with_db(pdb)
         results = await pemb.query_similar(snippet, top_k, project_id or None)
+        # Top 3 results get full detail; lower-ranked results drop signature and
+        # line ranges — agents rarely read past rank 3 for anything but the id/summary.
+        _SLIM_KEYS = {"id", "name", "file", "summary", "similarity", "project_id"}
+        for i in range(3, len(results)):
+            results[i] = {k: v for k, v in results[i].items() if k in _SLIM_KEYS}
         if project_id and results:
             from ..guidance import compute_guidance
             guidance = await compute_guidance(results, pdb, project_id)
