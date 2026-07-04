@@ -160,10 +160,10 @@ def register(mcp: "FastMCP", _unused: Callable = None) -> None:
             decision_row = await conn.fetchrow(
                 f"""SELECT
                       COUNT(DISTINCT d.id) AS total_decisions,
-                      COUNT(DISTINCT de.decision_id) AS with_embeddings,
+                      COUNT(DISTINCT de.id) AS with_embeddings,
                       COUNT(DISTINCT df.function_id) AS linked_functions
                     FROM "{schema}".decisions d
-                    LEFT JOIN "{schema}".decision_embeddings de ON de.decision_id = d.id
+                    LEFT JOIN "{schema}".decision_embeddings de ON de.id = d.id
                     LEFT JOIN "{schema}".decision_functions df ON df.decision_id = d.id
                     WHERE d.project_id = $1""",
                 project_id,
