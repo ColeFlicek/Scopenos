@@ -81,7 +81,10 @@ async def check_read_access(project_id: str, db) -> None:
         # is seeded at provisioning time by the admin, not per-org.
         from ..auth import get_public_org_db
         demos_db = await get_public_org_db()
-        if demos_db is None or not await demos_db.is_demo_project(project_id):
+        if demos_db is None:
+            raise
+        # Allow demo projects and forks of demo projects (both live in org_demos)
+        if not await demos_db.is_demo_project(project_id) and not await demos_db.project_exists(project_id):
             raise
 
 
