@@ -1,0 +1,147 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+index 13918467ee..92b7d4ee43 100644
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -1083,10 +1083,15 @@ class Subquery(Expression):
+     contains_aggregate = False
+ 
+     def __init__(self, queryset, output_field=None, **extra):
+-        self.query = queryset.query
++        # Allow passing a raw Query object in addition to a QuerySet.
++        if hasattr(queryset, '_chain'):
++            self.query = queryset.query
++            # Prevent the QuerySet from being evaluated.
++            self.queryset = queryset._chain(_result_cache=[], prefetch_done=True)
++        else:
++            self.query = queryset
++            self.queryset = None
+         self.extra = extra
+-        # Prevent the QuerySet from being evaluated.
+-        self.queryset = queryset._chain(_result_cache=[], prefetch_done=True)
+         super().__init__(output_field)
+ 
+     def __getstate__(self):
+diff --git a/django/db/models/lookups.py b/django/db/models/lookups.py
+index 576ff400c4..eff1f392b3 100644
+--- a/django/db/models/lookups.py
++++ b/django/db/models/lookups.py
+@@ -12,6 +12,7 @@ from django.db.models.query_utils import RegisterLookupMixin
+ from django.utils.datastructures import OrderedSet
+ from django.utils.deprecation import RemovedInDjango40Warning
+ from django.utils.functional import cached_property
++from django.utils.hashable import make_hashable
+ 
+ 
+ class Lookup:
+@@ -36,6 +37,14 @@ class Lookup:
+                 raise NotImplementedError("Bilateral transformations on nested querysets are not implemented.")
+         self.bilateral_transforms = bilateral_transforms
+ 
++    def __eq__(self, other):
++        if self.__class__ is not other.__class__:
++            return NotImplemented
++        return self.lhs == other.lhs and self.rhs == other.rhs
++
++    def __hash__(self):
++        return hash((self.__class__, self.lhs, make_hashable(self.rhs)))
++
+     def apply_bilateral_transforms(self, value):
+         for transform in self.bilateral_transforms:
+             value = transform(value)
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index ee98984826..6f72a337ba 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -270,6 +270,19 @@ class Query(BaseExpression):
+         memo[id(self)] = result
+         return result
+ 
++    def __eq__(self, other):
++        if not isinstance(other, Query):
++            return NotImplemented
++        return (
++            self.__class__ == other.__class__ and
++            self.model == other.model and
++            self.where == other.where and
++            self.alias_map == other.alias_map
++        )
++
++    def __hash__(self):
++        return hash((self.__class__, self.model))
++
+     def get_compiler(self, using=None, connection=None):
+         if using is None and connection is None:
+             raise ValueError("Need either using or connection")
+diff --git a/tests/lookup/test_lookups.py b/tests/lookup/test_lookups.py
+index c3aa48ddad..c8df0c7118 100644
+--- a/tests/lookup/test_lookups.py
++++ b/tests/lookup/test_lookups.py
+@@ -1,10 +1,28 @@
+ from datetime import datetime
+ 
+-from django.db.models import DateTimeField, Value
+-from django.db.models.lookups import YearLookup
++from django.db.models import DateTimeField, IntegerField, Value
++from django.db.models.lookups import Exact, GreaterThan, YearLookup
+ from django.test import SimpleTestCase
+ 
+ 
++class LookupTests(SimpleTestCase):
++    def test_equality(self):
++        lhs = Value(1, output_field=IntegerField())
++        rhs = 1
++        lookup1 = Exact(lhs, rhs)
++        lookup2 = Exact(lhs, rhs)
++        self.assertEqual(lookup1, lookup2)
++        self.assertNotEqual(lookup1, GreaterThan(lhs, rhs))
++
++    def test_hash(self):
++        lhs = Value(1, output_field=IntegerField())
++        rhs = 1
++        lookup1 = Exact(lhs, rhs)
++        lookup2 = Exact(lhs, rhs)
++        self.assertEqual(hash(lookup1), hash(lookup2))
++        self.assertIn(lookup1, {lookup2})
++
++
+ class YearLookupTests(SimpleTestCase):
+     def test_get_bound_params(self):
+         look_up = YearLookup(
+diff --git a/tests/queries/test_query.py b/tests/queries/test_query.py
+index 523fa607f0..def24a1cce 100644
+--- a/tests/queries/test_query.py
++++ b/tests/queries/test_query.py
+@@ -150,3 +150,11 @@ class TestQuery(SimpleTestCase):
+         msg = 'Cannot filter against a non-conditional expression.'
+         with self.assertRaisesMessage(TypeError, msg):
+             query.build_where(Func(output_field=CharField()))
++
++    def test_equality(self):
++        self.assertEqual(Query(Item), Query(Item))
++        self.assertNotEqual(Query(Item), Query(Author))
++
++    def test_hash(self):
++        self.assertEqual(hash(Query(Item)), hash(Query(Item)))
++        self.assertIn(Query(Item), {Query(Item)})
+diff --git a/tests/queries/tests.py b/tests/queries/tests.py
+index c98a6adeba..9b22ec6caa 100644
+--- a/tests/queries/tests.py
++++ b/tests/queries/tests.py
+@@ -2884,6 +2884,17 @@ class ExcludeTests(TestCase):
+             [number],
+         )
+ 
++    def test_exclude_multivalued_exists(self):
++        programmer = Job.objects.get(name='Programmer')
++        self.assertSequenceEqual(
++            Job.objects.exclude(responsibilities__description='Playing golf'),
++            [programmer],
++        )
++        self.assertSequenceEqual(
++            Responsibility.objects.exclude(jobs__name='Manager'),
++            [Responsibility.objects.get(description='Programming')],
++        )
++
+ 
+ class ExcludeTest17600(TestCase):
+     """

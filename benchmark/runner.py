@@ -173,7 +173,7 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
 
         DO NOT call Read, grep, or Bash on source files until steps 1–3 are
         complete. Skipping these gates means discovering hidden requirements
-        (e.g. missing __hash__ when adding __eq__) only from test failures.
+        only from test failures — Scopenos co_change_hints surfaces them first.
 
         BASH DISCIPLINE: Do NOT use Bash to explore or read source code at any
         point — Scopenos tools and Read cover all investigation. Use Bash ONLY
@@ -183,99 +183,98 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
 
         ### Step 1 — Map the codebase
         Call `mcp__scopenos__get_project_home("{ctx.project_id}")`.
-        Scan `top_functions` in each subsystem to locate the relevant code — no grep needed.
+        Scan subsystem names and `top_functions` to identify which subsystem contains the relevant code.
         Example output (truncated):
         {{
           "subsystems": [
-            {{"name": "django.db.models", "function_count": 412,
-              "anchor": "django.db.models.Model",
-              "anchor_summary": "Base class for all ORM model instances",
-              "top_functions": [{{"id": "django.db.models.Model.__eq__", "caller_count": 38}}, ...]}},
+            {{"name": "pkg.core", "function_count": 312,
+              "anchor": "pkg.core.Engine",
+              "anchor_summary": "Central dispatch class for request handling",
+              "top_functions": [{{"id": "pkg.core.Engine.dispatch", "caller_count": 54}}, ...]}},
+            {{"name": "pkg.io", "function_count": 88, ...}},
             ...
           ],
-          "connections": [{{"from": "django.db.models", "to": "django.db.models.sql", "edge_count": 84}}, ...],
-          "chokepoints": [{{"id": "django.db.models.Model.save", "caller_count": 201}}, ...]
+          "connections": [{{"from": "pkg.core", "to": "pkg.io", "edge_count": 41}}, ...],
+          "chokepoints": [{{"id": "pkg.core.Engine.dispatch", "caller_count": 54}}, ...]
         }}
 
         ### Step 2 — Locate the exact function
-        Call `mcp__scopenos__query_similar_functions("<concept from bug description>", project_id="{ctx.project_id}")`.
-        Use the returned `id` values as inputs to steps 3 and 4.
+        Call `mcp__scopenos__query_similar_functions("<key concept from bug description>", project_id="{ctx.project_id}")`.
+        Use the top result's `id` and `file` as inputs to steps 3 and 4.
         Example output (truncated):
         {{
           "results": [
-            {{"id": "django.db.models.Model.__eq__",
-              "summary": "Compare model instances by pk",
-              "file": "django/db/models/base.py",
-              "signature": "def __eq__(self, other)"}},
-            {{"id": "django.db.models.Model.__hash__",
-              "summary": "Hash model instance by pk", ...}},
+            {{"id": "pkg.core.Engine.process",
+              "summary": "Processes incoming request and dispatches to handler",
+              "file": "pkg/core/engine.py",
+              "signature": "def process(self, request, **kwargs)"}},
+            {{"id": "pkg.core.Engine.validate",
+              "summary": "Validates request payload before processing", ...}},
             ...
           ]
         }}
 
         ### Step 3 — Check impact and hidden co-changes
         Call `mcp__scopenos__get_impact_radius("<id from step 2>", project_id="{ctx.project_id}")`.
-        Read `co_change_hints` carefully — it surfaces protocol gaps and semantic
-        siblings NOT reachable via call edges.
+        Read `co_change_hints` carefully — surfaces protocol gaps and semantic siblings
+        that call-graph traversal alone won't find.
         Example output (truncated):
         {{
           "impact_radius": [
-            {{"id": "django.db.models.Model.__eq__", "impact_depth": 0, "file": "django/db/models/base.py"}},
-            {{"id": "django.db.models.Model.pk", "impact_depth": 1, ...}},
+            {{"id": "pkg.core.Engine.process", "impact_depth": 0, "file": "pkg/core/engine.py"}},
+            {{"id": "pkg.core.Router.route", "impact_depth": 1, ...}},
             ...
           ],
           "co_change_hints": [
             {{"type": "protocol_completeness",
-              "reason": "__eq__ defined but __hash__ is missing on django.db.models.Model",
-              "suggested_id": "django.db.models.Model.__hash__",
-              "action": "add or verify __hash__"}},
+              "reason": "process() overrides __call__ but Engine.__call__ is not updated",
+              "suggested_id": "pkg.core.Engine.__call__",
+              "action": "verify or update __call__"}},
             {{"type": "semantic_sibling",
-              "id": "django.contrib.auth.models.AbstractUser.__eq__",
-              "summary": "Similar equality logic — may need same fix",
-              "similarity": 0.91}}
+              "id": "pkg.middleware.Auth.process",
+              "summary": "Similar processing logic in middleware layer",
+              "similarity": 0.88}}
           ]
         }}
 
-        If the call chain needs clarifying, use these tools before reading any file:
-        - `mcp__scopenos__get_callers("<id>", project_id="{ctx.project_id}")` — every function that calls this one
-          Example: {{"callers": [{{"id": "django.test.TestCase.assertQuerysetEqual",
-            "file": "django/test/testcases.py",
-            "signature": "def assertQuerysetEqual(self, qs, values, ...)"}}], ...}}
-        - `mcp__scopenos__get_callees("<id>", project_id="{ctx.project_id}")` — every function this one calls
-          Example: {{"callees": [{{"id": "django.db.models.sql.compiler.SQLCompiler.execute_sql",
-            "is_external": false}},
-            {{"id": "external.builtins.hash", "is_external": true}}], ...}}
+        If the call chain needs clarifying, use before reading any file:
+        - `mcp__scopenos__get_callers("<id>", project_id="{ctx.project_id}")` — who calls this function
+          Example: {{"callers": [{{"id": "pkg.server.Server.handle", "file": "pkg/server.py",
+            "signature": "def handle(self, conn)"}}], ...}}
+        - `mcp__scopenos__get_callees("<id>", project_id="{ctx.project_id}")` — what this function calls
+          Example: {{"callees": [{{"id": "pkg.io.Reader.read", "is_external": false}},
+            {{"id": "external.socket.recv", "is_external": true}}], ...}}
 
         ### Step 4 — Understand the test subsystem before reading test files
         Call `mcp__scopenos__get_subsystem_detail("{ctx.project_id}", "<test subsystem name from step 1>")`.
-        This returns existing fixtures, helpers, and test patterns — avoids reading large test files blind.
+        Returns fixtures, helpers, and patterns — avoids reading large test files blind.
         Example output (truncated):
         {{
-          "subsystem": "tests.model_tests",
-          "anchor_summary": "Base model test fixtures and assertion helpers",
+          "subsystem": "tests.core",
+          "anchor_summary": "Integration tests for Engine dispatch and routing",
           "top_functions": [
-            {{"id": "tests.model_tests.ModelTests.test_eq",
-              "summary": "Tests Model.__eq__ with pk comparison"}},
+            {{"id": "tests.core.EngineTests.test_dispatch",
+              "summary": "Tests dispatch with valid and invalid payloads"}},
             ...
           ],
-          "connections": [{{"from": "tests.model_tests", "to": "django.db.models", "edge_count": 47}}]
+          "connections": [{{"from": "tests.core", "to": "pkg.core", "edge_count": 29}}]
         }}
 
         ### Step 5 — Apply a minimal fix
         Edit only what the bug requires. No unrelated changes.
 
         ### Step 6 — Verify
-        `{ctx.venv_python} -m pytest {' '.join(pytest_ids[:3])}`
+        `{ctx.venv_python} -m pytest {' '.join(pytest_ids)}`
         All failing tests must pass. When they do, stop.
 
         ### Step 7 — Output tool log
         Output a final JSON block with nothing after it:
         ```json
         {{"tool_log": [
-          {{"tool": "mcp__scopenos__get_project_home", "reason": "map codebase, find django.db subsystem"}},
-          {{"tool": "mcp__scopenos__query_similar_functions", "query": "Model __eq__ comparison", "reason": "locate exact function"}},
-          {{"tool": "mcp__scopenos__get_impact_radius", "reason": "check co_change_hints for protocol gaps"}},
-          {{"tool": "Read", "file": "django/db/models/base.py", "reason": "view __eq__ before editing"}}
+          {{"tool": "mcp__scopenos__get_project_home", "reason": "identify subsystem containing target code"}},
+          {{"tool": "mcp__scopenos__query_similar_functions", "query": "<your search>", "reason": "locate exact function by concept"}},
+          {{"tool": "mcp__scopenos__get_impact_radius", "reason": "check co_change_hints for hidden requirements"}},
+          {{"tool": "Read", "file": "<path>", "reason": "view implementation before editing"}}
         ], "notes": "one sentence — what the bug was and how you fixed it"}}
         ```
         Every tool call in order. `reason` is 5-10 words. For Scopenos tools include
