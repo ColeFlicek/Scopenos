@@ -205,6 +205,13 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         if not hasattr(pdb, "_arch_service"):
             pdb._arch_service = _AS(pdb)
         result = await pdb._arch_service.get_project_home(project_id, max_age_seconds=300)
+        # edge_count on connections is rarely acted on — agents care about which
+        # subsystems are wired, not exact call volumes between them.
+        if "connections" in result:
+            result["connections"] = [
+                {k: v for k, v in c.items() if k != "edge_count"}
+                for c in result["connections"]
+            ]
         return json.dumps(result)
 
     @mcp.tool()
