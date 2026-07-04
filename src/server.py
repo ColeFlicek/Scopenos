@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 from fastmcp import FastMCP
 from starlette.exceptions import HTTPException  # noqa: F401
@@ -199,6 +202,7 @@ async def http_get_functions_for_files(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -225,6 +229,7 @@ async def http_search(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -243,6 +248,7 @@ async def http_list_projects(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -297,6 +303,7 @@ async def http_index_bulk(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -355,9 +362,8 @@ async def http_fork_from_files(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
-        import traceback
+        logger.exception("[fork-from-files] unhandled error")
         detail = str(exc) or f"{type(exc).__name__}: (no message)"
-        print(f"[fork-from-files 500] {type(exc).__name__}: {exc!r}\n{traceback.format_exc()}", flush=True)
         return JSONResponse({"status": "error", "detail": detail}, status_code=500)
 
 
@@ -511,6 +517,7 @@ async def git_hook_index(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -549,6 +556,7 @@ async def http_log_decision(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -566,6 +574,7 @@ async def http_list_contracts(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -588,6 +597,7 @@ async def http_create_contract(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -611,6 +621,7 @@ async def http_update_contract(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -636,6 +647,7 @@ async def http_update_contract_structural(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -654,6 +666,7 @@ async def http_approve_contract(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -678,6 +691,7 @@ async def http_deactivate_contract(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -702,6 +716,7 @@ async def http_check_contracts(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -717,6 +732,7 @@ async def http_project_home(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -732,6 +748,7 @@ async def http_list_violations(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -748,6 +765,7 @@ async def http_reembed_project(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -793,8 +811,7 @@ async def http_enrich_summaries(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
-        import traceback
-        print(f"[enrich-summaries 500] {exc!r}\n{traceback.format_exc()}", flush=True)
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
@@ -822,6 +839,7 @@ async def http_setup(request: Request) -> JSONResponse:
         key = await svcs.db.create_api_key(user["id"], name)
         return JSONResponse({"key": key, "user_id": user["id"], "email": email})
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"detail": str(exc)}, status_code=500)
 
 
@@ -836,6 +854,7 @@ async def http_list_keys(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"detail": str(exc)}, status_code=500)
 
 
@@ -859,6 +878,7 @@ async def http_create_key(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"detail": str(exc)}, status_code=500)
 
 
@@ -876,6 +896,7 @@ async def http_revoke_key(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Unhandled error in route handler")
         return JSONResponse({"detail": str(exc)}, status_code=500)
 
 

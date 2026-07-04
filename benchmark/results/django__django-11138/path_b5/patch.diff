@@ -1,0 +1,54 @@
+diff --git a/django/db/models/functions/datetime.py b/django/db/models/functions/datetime.py
+index 7a582aa404..cb3c4a6477 100644
+--- a/django/db/models/functions/datetime.py
++++ b/django/db/models/functions/datetime.py
+@@ -278,7 +278,7 @@ class TruncDate(TruncBase):
+     def as_sql(self, compiler, connection):
+         # Cast to date rather than truncate to date.
+         lhs, lhs_params = compiler.compile(self.lhs)
+-        tzname = timezone.get_current_timezone_name() if settings.USE_TZ else None
++        tzname = self.get_tzname()
+         sql = connection.ops.datetime_cast_date_sql(lhs, tzname)
+         return sql, lhs_params
+ 
+@@ -291,7 +291,7 @@ class TruncTime(TruncBase):
+     def as_sql(self, compiler, connection):
+         # Cast to time rather than truncate to time.
+         lhs, lhs_params = compiler.compile(self.lhs)
+-        tzname = timezone.get_current_timezone_name() if settings.USE_TZ else None
++        tzname = self.get_tzname()
+         sql = connection.ops.datetime_cast_time_sql(lhs, tzname)
+         return sql, lhs_params
+ 
+diff --git a/tests/timezones/tests.py b/tests/timezones/tests.py
+index 7a63bac670..ea26109e1d 100644
+--- a/tests/timezones/tests.py
++++ b/tests/timezones/tests.py
+@@ -504,6 +504,27 @@ class NewDatabaseTests(TestCase):
+         dt = datetime.datetime(2011, 9, 1, 22, 30, 0, tzinfo=UTC)
+         self.assertFalse(AllDayEvent.objects.filter(day__gte=dt).exists())
+ 
++    @skipUnlessDBFeature('has_zoneinfo_database')
++    def test_query_convert_timezones(self):
++        # Verify that TruncDate and TruncTime respect the tzinfo argument
++        # rather than always using the current timezone.
++        # Regression test for the bug where TruncDate.as_sql and TruncTime.as_sql
++        # hardcoded timezone.get_current_timezone_name() instead of self.get_tzname().
++        from django.db.models.functions import TruncDate, TruncTime
++        # 2011-01-01 01:30:00 EAT = 2010-12-31 22:30:00 UTC
++        Event.objects.create(dt=datetime.datetime(2011, 1, 1, 1, 30, 0, tzinfo=EAT))
++        # When truncating with explicit UTC tzinfo, the date should be 2010-12-31
++        # (since stored as 2010-12-31 22:30:00 UTC) rather than 2011-01-01 in EAT.
++        result = Event.objects.annotate(
++            d=TruncDate('dt', tzinfo=UTC),
++        ).values('d').get()
++        self.assertEqual(result['d'], datetime.date(2010, 12, 31))
++        # When no tzinfo is given, uses the current timezone (EAT), so date is 2011-01-01.
++        result = Event.objects.annotate(
++            d=TruncDate('dt'),
++        ).values('d').get()
++        self.assertEqual(result['d'], datetime.date(2011, 1, 1))
++
+     def test_null_datetime(self):
+         # Regression test for #17294
+         e = MaybeEvent.objects.create()
