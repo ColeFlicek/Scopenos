@@ -143,7 +143,7 @@ class TestGetCallers:
 
         with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
             from src.tools.graph import get_callees
-            result = json.loads(await get_callees("handler", project_id="proj"))
+            result = json.loads(await get_callees("handler", project_id="proj", include_external=True))
         callees = result["callees"]
         assert len(callees) == 1
         assert "is_external" in callees[0]
