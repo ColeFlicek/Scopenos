@@ -134,7 +134,8 @@ jobs:
       - name: Apply HPAs
         run: |
           kubectl apply -f /tmp/k8s-beta/hpa-api.yaml
-          kubectl apply -f /tmp/k8s-beta/hpa-worker.yaml
+          # hpa-worker.yaml uses KEDA ScaledObject which is not installed in beta.
+          # Worker runs at fixed replicas (defined in worker-deployment.yaml).
 
       - name: Wait for rollout
         run: |
