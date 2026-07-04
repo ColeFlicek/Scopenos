@@ -1,0 +1,129 @@
+diff --git a/django/db/models/lookups.py b/django/db/models/lookups.py
+index 576ff400c4..988eac6de2 100644
+--- a/django/db/models/lookups.py
++++ b/django/db/models/lookups.py
+@@ -115,6 +115,14 @@ class Lookup:
+             cols.extend(self.rhs.get_group_by_cols())
+         return cols
+ 
++    def __eq__(self, other):
++        if self.__class__ is not other.__class__:
++            return NotImplemented
++        return self.lhs == other.lhs and self.rhs == other.rhs
++
++    def __hash__(self):
++        return hash((self.__class__, self.lhs, self.rhs))
++
+     def as_sql(self, compiler, connection):
+         raise NotImplementedError
+ 
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index ee98984826..e6e5403e6b 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -23,7 +23,7 @@ from django.core.exceptions import (
+ from django.db import DEFAULT_DB_ALIAS, NotSupportedError, connections
+ from django.db.models.aggregates import Count
+ from django.db.models.constants import LOOKUP_SEP
+-from django.db.models.expressions import BaseExpression, Col, F, OuterRef, Ref
++from django.db.models.expressions import BaseExpression, Col, Exists, F, OuterRef, Ref
+ from django.db.models.fields import Field
+ from django.db.models.fields.related_lookups import MultiColSource
+ from django.db.models.lookups import Lookup
+@@ -246,6 +246,14 @@ class Query(BaseExpression):
+         for alias in self.alias_map:
+             return alias
+ 
++    def __eq__(self, other):
++        if self.__class__ is not other.__class__:
++            return NotImplemented
++        return (self.model, self.where) == (other.model, other.where)
++
++    def __hash__(self):
++        return hash((self.model, self.where))
++
+     def __str__(self):
+         """
+         Return the query as a string of SQL with the parameter values
+@@ -1756,12 +1764,8 @@ class Query(BaseExpression):
+         filters in the original query.
+ 
+         We will turn this into equivalent of:
+-            WHERE NOT (pk IN (SELECT parent_id FROM thetable
+-                              WHERE name = 'foo' AND parent_id IS NOT NULL))
+-
+-        It might be worth it to consider using WHERE NOT EXISTS as that has
+-        saner null handling, and is easier for the backend's optimizer to
+-        handle.
++            WHERE NOT EXISTS(SELECT 1 FROM thetable
++                             WHERE name = 'foo' AND parent_id = outertable.id)
+         """
+         filter_lhs, filter_rhs = filter_expr
+         if isinstance(filter_rhs, OuterRef):
+diff --git a/tests/lookup/test_lookups.py b/tests/lookup/test_lookups.py
+index c3aa48ddad..68a76254a9 100644
+--- a/tests/lookup/test_lookups.py
++++ b/tests/lookup/test_lookups.py
+@@ -1,10 +1,24 @@
+ from datetime import datetime
+ 
+-from django.db.models import DateTimeField, Value
+-from django.db.models.lookups import YearLookup
++from django.db.models import DateTimeField, IntegerField, Value
++from django.db.models.lookups import Exact, GreaterThan, YearLookup
+ from django.test import SimpleTestCase
+ 
+ 
++class LookupTests(SimpleTestCase):
++    def test_equality(self):
++        a = Exact(Value(1, output_field=IntegerField()), 1)
++        b = Exact(Value(1, output_field=IntegerField()), 1)
++        c = GreaterThan(Value(1, output_field=IntegerField()), 1)
++        self.assertEqual(a, b)
++        self.assertNotEqual(a, c)
++
++    def test_hash(self):
++        a = Exact(Value(1, output_field=IntegerField()), 1)
++        b = Exact(Value(1, output_field=IntegerField()), 1)
++        self.assertEqual(hash(a), hash(b))
++
++
+ class YearLookupTests(SimpleTestCase):
+     def test_get_bound_params(self):
+         look_up = YearLookup(
+diff --git a/tests/queries/test_query.py b/tests/queries/test_query.py
+index 523fa607f0..79615d6a62 100644
+--- a/tests/queries/test_query.py
++++ b/tests/queries/test_query.py
+@@ -150,3 +150,16 @@ class TestQuery(SimpleTestCase):
+         msg = 'Cannot filter against a non-conditional expression.'
+         with self.assertRaisesMessage(TypeError, msg):
+             query.build_where(Func(output_field=CharField()))
++
++    def test_equality(self):
++        q1 = Query(Author)
++        q2 = Query(Author)
++        self.assertEqual(q1.build_where(Q(num__gt=2)), q2.build_where(Q(num__gt=2)))
++
++    def test_hash(self):
++        q1 = Query(Author)
++        q2 = Query(Author)
++        self.assertEqual(
++            hash(q1.build_where(Q(num__gt=2))),
++            hash(q2.build_where(Q(num__gt=2))),
++        )
+diff --git a/tests/queries/tests.py b/tests/queries/tests.py
+index c98a6adeba..4725ad3b0e 100644
+--- a/tests/queries/tests.py
++++ b/tests/queries/tests.py
+@@ -2884,6 +2884,10 @@ class ExcludeTests(TestCase):
+             [number],
+         )
+ 
++    def test_exclude_multivalued_exists(self):
++        qs = Job.objects.exclude(responsibilities__description='Playing golf')
++        self.assertSequenceEqual(qs, [Job.objects.get(name='Programmer')])
++
+ 
+ class ExcludeTest17600(TestCase):
+     """

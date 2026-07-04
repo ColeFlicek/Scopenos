@@ -1,0 +1,15 @@
+{
+  "instance_id": "django__django-13606",
+  "path": "b",
+  "repo_path": "/tmp/claude-0/scopenos-bench-60pez8o_/django__django-13606",
+  "venv_python": "/tmp/claude-0/scopenos-bench-60pez8o_/django__django-13606/.bench-venv/bin/python",
+  "project_id": "django-fork-556fa4bb",
+  "scopenos_indexed": true,
+  "fail_to_pass": [
+    "test_equality (lookup.test_lookups.LookupTests)",
+    "test_hash (lookup.test_lookups.LookupTests)",
+    "test_equality (queries.test_query.TestQuery)",
+    "test_hash (queries.test_query.TestQuery)",
+    "test_exclude_multivalued_exists (queries.tests.ExcludeTests)"
+  ]
+}

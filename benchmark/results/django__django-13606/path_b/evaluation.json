@@ -1,0 +1,19 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "test_equality (lookup.test_lookups.LookupTests)",
+    "test_hash (lookup.test_lookups.LookupTests)",
+    "test_equality (queries.test_query.TestQuery)",
+    "test_hash (queries.test_query.TestQuery)",
+    "test_exclude_multivalued_exists (queries.tests.ExcludeTests)"
+  ],
+  "tests_failed": [],
+  "error": null,
+  "agent_tokens": 0,
+  "tool_call_count": 0,
+  "scopenos_call_count": 0,
+  "file_read_count": 0,
+  "notes": "",
+  "tool_log": []
+}

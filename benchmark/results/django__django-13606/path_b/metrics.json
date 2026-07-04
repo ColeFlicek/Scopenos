@@ -1,0 +1,45 @@
+{
+  "agent_tokens": 174985,
+  "tool_calls": [
+    {
+      "tool": "mcp__scopenos__get_project_home",
+      "reason": "map codebase, locate django.db.models subsystem"
+    },
+    {
+      "tool": "mcp__scopenos__query_similar_functions",
+      "query": "split_exclude multi-valued relationship NOT IN subquery EXISTS",
+      "reason": "locate Query.split_exclude function"
+    },
+    {
+      "tool": "mcp__scopenos__query_similar_functions",
+      "query": "Lookup __eq__ __hash__ equality rhs lhs",
+      "reason": "find Lookup equality/hash methods"
+    },
+    {
+      "tool": "mcp__scopenos__get_impact_radius",
+      "reason": "check co_change_hints for semantic siblings"
+    },
+    {
+      "tool": "Read",
+      "file": "django/db/models/sql/query.py",
+      "reason": "view split_exclude implementation"
+    },
+    {
+      "tool": "Read",
+      "file": "django/db/models/lookups.py",
+      "reason": "confirm Lookup.__eq__ and __hash__"
+    },
+    {
+      "tool": "Read",
+      "file": "django/db/models/expressions.py",
+      "reason": "understand Exists class"
+    },
+    {
+      "tool": "Read",
+      "file": "tests/queries/tests.py",
+      "reason": "find ExcludeTests for test_exclude_multivalued_exists"
+    }
+  ],
+  "iterations": 0,
+  "notes": "Added Lookup.__eq__/__hash__ and Query.__eq__/__hash__, added test_equality/test_hash/test_exclude_multivalued_exists; split_exclude docstring updated to reflect NOT EXISTS intent"
+}
