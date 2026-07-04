@@ -151,6 +151,12 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
         You are an expert software engineer fixing a real bug in {task.repo}.
         You have access to Scopenos code intelligence tools (MCP) — use them.
 
+        IMPORTANT: Use `mcp__scopenos__*` tools (the primary Scopenos server).
+        Do NOT use `mcp__scopenos_bench__*` tools.
+
+        BENCHMARK INTEGRITY: Do NOT read any files under `benchmark/` — previous
+        run patches and reference solutions live there and would contaminate results.
+
         The repository is checked out at: {ctx.repo_path}
         Scopenos project_id for this checkout: {ctx.project_id}
         Python venv for running tests: {ctx.venv_python}
@@ -163,107 +169,156 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
 
         {chr(10).join(pytest_ids)}
 
-        ## Protocol — complete in order
+        ## Investigation protocol
 
-        DO NOT call Read, grep, or Bash on source files until steps 1–3 are
-        complete. Skipping these gates means discovering hidden requirements
-        (e.g. missing __hash__ when adding __eq__) only from test failures.
+        Use two modes throughout the entire investigation — not just at the start:
 
-        ### Step 1 — Map the codebase
-        Call `get_project_home("{ctx.project_id}")`.
-        Scan `top_functions` in each subsystem to locate the relevant code — no grep needed.
+        **Navigation mode** (where is X? who calls Y? what else changes?):
+        → Always reach for Scopenos MCP tools first. They return summaries and
+          call-graph facts without reading any file.
+
+        **Implementation mode** (what does the exact code look like?):
+        → Read the specific file, only after navigation has identified it.
+
+        The loop is: MCP → Read → if a new question about relationships arises → MCP again.
+        Do not switch to file-reading mode and stay there. Every time you hit
+        a "where does this come from?" or "who else uses this?" question, go
+        back to MCP before opening another file.
+
+        BASH DISCIPLINE: Use Bash ONLY for the single final pytest verify call.
+        No grep, no cat, no intermediate test runs.
+
+        ---
+
+        ## When to use MCP vs Read
+
+        ### MCP is better than Read when:
+
+        **Finding which file/function is relevant**
+        - Bad: open `db/query.py` hoping the bug is there, then `db/lookups.py`, then `db/expressions.py`
+        - Good: `query_similar_functions("exclude subquery deduplication")` → returns the one function with a summary
+
+        **Understanding who calls or uses something**
+        - Bad: grep for `split_exclude` across 500 files, read each match for context
+        - Good: `get_callers("django.db.models.sql.query.Query.split_exclude")` → full caller list with signatures instantly
+
+        **Checking what else needs to change**
+        - Bad: make the fix, run tests, discover a sibling method also needed updating
+        - Good: `get_impact_radius(fn)` → `co_change_hints` lists protocol gaps before you start editing
+
+        **Understanding a test subsystem before opening test files**
+        - Bad: open `tests/queries/tests.py` (3000 lines), scan for relevant class
+        - Good: `get_subsystem_detail(project_id, "tests.queries")` → lists test classes and summaries, then open only the one you need
+
+        **A new navigation question appears mid-investigation**
+        - Bad: you're reading `expressions.py` and wonder "where is Exists constructed?" → open `__init__.py`, then `query.py`
+        - Good: stop, call `get_callers("Exists.__init__")` → answer in one call, then open only the file it points to
+
+        ### Read is better than MCP when:
+
+        **You need the exact implementation to write a correct edit**
+        - MCP summaries describe what a function does; they don't show the line you need to change.
+          Once MCP has told you the file and function, Read that specific function.
+
+        **The function isn't indexed or MCP returns empty**
+        - Fall back to Read (or grep) when `query_similar_functions` returns no results for a concept.
+          This is a signal the index may be stale — note it in your tool log.
+
+        **Verifying exact argument names, return types, or local variable names**
+        - MCP knows signatures but not every local variable. For exact syntax, Read the function body.
+
+        ---
+
+        ### Start — orient once
+        Call `mcp__scopenos__get_project_home("{ctx.project_id}")`.
+        Identify which subsystem contains the relevant code.
         Example output (truncated):
         {{
           "subsystems": [
-            {{"name": "django.db.models", "function_count": 412,
-              "anchor": "django.db.models.Model",
-              "anchor_summary": "Base class for all ORM model instances",
-              "top_functions": [{{"id": "django.db.models.Model.__eq__", "caller_count": 38}}, ...]}},
+            {{"name": "pkg.core", "function_count": 312,
+              "anchor": "pkg.core.Engine",
+              "anchor_summary": "Central dispatch class for request handling",
+              "top_functions": [{{"id": "pkg.core.Engine.dispatch", "caller_count": 54}}, ...]}},
+            {{"name": "pkg.io", "function_count": 88, ...}},
             ...
           ],
-          "connections": [{{"from": "django.db.models", "to": "django.db.models.sql", "edge_count": 84}}, ...],
-          "chokepoints": [{{"id": "django.db.models.Model.save", "caller_count": 201}}, ...]
+          "connections": [{{"from": "pkg.core", "to": "pkg.io", "edge_count": 41}}, ...],
+          "chokepoints": [{{"id": "pkg.core.Engine.dispatch", "caller_count": 54}}, ...]
         }}
 
-        ### Step 2 — Locate the exact function
-        Call `query_similar_functions("<concept from bug description>", project_id="{ctx.project_id}")`.
-        Use the returned `id` values as inputs to steps 3 and 4.
+        ### Navigate — find the function (navigation mode)
+        Call `mcp__scopenos__query_similar_functions("<key concept from bug>", project_id="{ctx.project_id}")`.
+        Use the top result's `id` and `file` for the next navigation calls.
         Example output (truncated):
         {{
           "results": [
-            {{"id": "django.db.models.Model.__eq__",
-              "summary": "Compare model instances by pk",
-              "file": "django/db/models/base.py",
-              "signature": "def __eq__(self, other)"}},
-            {{"id": "django.db.models.Model.__hash__",
-              "summary": "Hash model instance by pk", ...}},
+            {{"id": "pkg.core.Engine.process",
+              "summary": "Processes incoming request and dispatches to handler",
+              "file": "pkg/core/engine.py",
+              "signature": "def process(self, request, **kwargs)"}},
             ...
           ]
         }}
 
-        ### Step 3 — Check impact and hidden co-changes
-        Call `get_impact_radius("<id from step 2>", project_id="{ctx.project_id}")`.
-        Read `co_change_hints` carefully — it surfaces protocol gaps and semantic
-        siblings NOT reachable via call edges.
+        ### Navigate — check impact and co-changes (navigation mode)
+        Call `mcp__scopenos__get_impact_radius("<id>", project_id="{ctx.project_id}")`.
+        `co_change_hints` surfaces protocol gaps and semantic siblings that call-graph
+        traversal alone won't find — read these before deciding what to fix.
         Example output (truncated):
         {{
           "impact_radius": [
-            {{"id": "django.db.models.Model.__eq__", "impact_depth": 0, "file": "django/db/models/base.py"}},
-            {{"id": "django.db.models.Model.pk", "impact_depth": 1, ...}},
+            {{"id": "pkg.core.Engine.process", "impact_depth": 0, "file": "pkg/core/engine.py"}},
+            {{"id": "pkg.core.Router.route", "impact_depth": 1, ...}},
             ...
           ],
           "co_change_hints": [
             {{"type": "protocol_completeness",
-              "reason": "__eq__ defined but __hash__ is missing on django.db.models.Model",
-              "suggested_id": "django.db.models.Model.__hash__",
-              "action": "add or verify __hash__"}},
+              "reason": "process() overrides __call__ but Engine.__call__ is not updated",
+              "suggested_id": "pkg.core.Engine.__call__",
+              "action": "verify or update __call__"}},
             {{"type": "semantic_sibling",
-              "id": "django.contrib.auth.models.AbstractUser.__eq__",
-              "summary": "Similar equality logic — may need same fix",
-              "similarity": 0.91}}
+              "id": "pkg.middleware.Auth.process",
+              "summary": "Similar processing logic in middleware layer",
+              "similarity": 0.88}}
           ]
         }}
 
-        If the call chain needs clarifying, use these tools before reading any file:
-        - `get_callers("<id>", project_id="{ctx.project_id}")` — every function that calls this one
-          Example: {{"callers": [{{"id": "django.test.TestCase.assertQuerysetEqual",
-            "file": "django/test/testcases.py",
-            "signature": "def assertQuerysetEqual(self, qs, values, ...)"}}], ...}}
-        - `get_callees("<id>", project_id="{ctx.project_id}")` — every function this one calls
-          Example: {{"callees": [{{"id": "django.db.models.sql.compiler.SQLCompiler.execute_sql",
-            "is_external": false}},
-            {{"id": "external.builtins.hash", "is_external": true}}], ...}}
+        ### Navigate — call-graph questions (navigation mode, use as needed)
+        Before opening any file to answer a "who calls this?" or "what does this call?" question:
+        - `mcp__scopenos__get_callers("<id>", project_id="{ctx.project_id}")` — all callers
+          Example: {{"callers": [{{"id": "pkg.server.Server.handle", "file": "pkg/server.py",
+            "signature": "def handle(self, conn)"}}], ...}}
+        - `mcp__scopenos__get_callees("<id>", project_id="{ctx.project_id}")` — all callees
+          Example: {{"callees": [{{"id": "pkg.io.Reader.read", "is_external": false}},
+            {{"id": "external.socket.recv", "is_external": true}}], ...}}
+        - `mcp__scopenos__get_subsystem_detail("{ctx.project_id}", "<subsystem>")` — fixtures,
+          helpers, and patterns within a subsystem; use before reading test files.
+          Example: {{"subsystem": "tests.core",
+            "anchor_summary": "Integration tests for Engine dispatch and routing",
+            "top_functions": [{{"id": "tests.core.EngineTests.test_dispatch",
+              "summary": "Tests dispatch with valid and invalid payloads"}}, ...],
+            "connections": [{{"from": "tests.core", "to": "pkg.core", "edge_count": 29}}]}}
 
-        ### Step 4 — Understand the test subsystem before reading test files
-        Call `get_subsystem_detail("{ctx.project_id}", "<test subsystem name from step 1>")`.
-        This returns existing fixtures, helpers, and test patterns — avoids reading large test files blind.
-        Example output (truncated):
-        {{
-          "subsystem": "tests.model_tests",
-          "anchor_summary": "Base model test fixtures and assertion helpers",
-          "top_functions": [
-            {{"id": "tests.model_tests.ModelTests.test_eq",
-              "summary": "Tests Model.__eq__ with pk comparison"}},
-            ...
-          ],
-          "connections": [{{"from": "tests.model_tests", "to": "django.db.models", "edge_count": 47}}]
-        }}
+        ### Read — implementation details (implementation mode)
+        Only open a file when you need the exact code to write an edit.
+        If reading triggers a new navigation question (e.g. "where does this
+        argument come from?"), stop and call an MCP tool before reading further.
 
-        ### Step 5 — Apply a minimal fix
+        ### Fix — apply a minimal fix
         Edit only what the bug requires. No unrelated changes.
 
-        ### Step 6 — Verify
-        `{ctx.venv_python} -m pytest {' '.join(pytest_ids[:3])}`
+        ### Verify
+        `{ctx.venv_python} -m pytest {' '.join(pytest_ids)}`
         All failing tests must pass. When they do, stop.
 
-        ### Step 7 — Output tool log
+        ### Output tool log
         Output a final JSON block with nothing after it:
         ```json
         {{"tool_log": [
-          {{"tool": "get_project_home", "reason": "map codebase, find django.db subsystem"}},
-          {{"tool": "query_similar_functions", "query": "Model __eq__ comparison", "reason": "locate exact function"}},
-          {{"tool": "get_impact_radius", "reason": "check co_change_hints for protocol gaps"}},
-          {{"tool": "Read", "file": "django/db/models/base.py", "reason": "view __eq__ before editing"}}
+          {{"tool": "mcp__scopenos__get_project_home", "reason": "identify subsystem containing target code"}},
+          {{"tool": "mcp__scopenos__query_similar_functions", "query": "<your search>", "reason": "locate exact function by concept"}},
+          {{"tool": "mcp__scopenos__get_impact_radius", "reason": "check co_change_hints for hidden requirements"}},
+          {{"tool": "Read", "file": "<path>", "reason": "view implementation before editing"}}
         ], "notes": "one sentence — what the bug was and how you fixed it"}}
         ```
         Every tool call in order. `reason` is 5-10 words. For Scopenos tools include
