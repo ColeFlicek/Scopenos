@@ -156,7 +156,23 @@ def register(mcp: "FastMCP", _unused: Callable = None) -> None:
             cochange_rows = int(cochange_row["rows"])
             cochange_commits = int(cochange_row["commits"])
 
-            # ── 6. Project metadata (is_fork, last_indexed) ───────────────────
+            # ── 6. Decision memory coverage ───────────────────────────────────
+            decision_row = await conn.fetchrow(
+                f"""SELECT
+                      COUNT(DISTINCT d.id) AS total_decisions,
+                      COUNT(DISTINCT de.decision_id) AS with_embeddings,
+                      COUNT(DISTINCT df.function_id) AS linked_functions
+                    FROM "{schema}".decisions d
+                    LEFT JOIN "{schema}".decision_embeddings de ON de.decision_id = d.id
+                    LEFT JOIN "{schema}".decision_functions df ON df.decision_id = d.id
+                    WHERE d.project_id = $1""",
+                project_id,
+            )
+            dec_total = int(decision_row["total_decisions"])
+            dec_with_emb = int(decision_row["with_embeddings"])
+            dec_linked_fns = int(decision_row["linked_functions"])
+
+            # ── 7. Project metadata (is_fork, last_indexed) ───────────────────
             meta_row = await conn.fetchrow(
                 """SELECT is_fork, parent_schema, last_indexed, head_commit
                    FROM projects WHERE id = $1""",
@@ -194,19 +210,29 @@ def register(mcp: "FastMCP", _unused: Callable = None) -> None:
                     "reason": f"{sum_missing} internal functions missing LLM summaries — run {batches} batch(es) of 500",
                 })
 
-            if cochange_rows == 0:
+            if dec_total == 0:
                 actions.append({
                     "priority": "high",
-                    "action": "push_cochange_history",
-                    "command": f"python3 scripts/push_cochange_history.py --project-id {project_id} --limit 2000",
-                    "reason": "No co_change history — get_impact_radius co_change_hints will be empty",
+                    "action": "backfill_decisions",
+                    "command": f"cd <repo_path> && SCOPENOS_URL=http://100.71.88.106:3004 SCOPENOS_API_KEY=<key> python3 /workspace/ACIP/scripts/backfill_decisions.py --project {project_id} --limit 2000",
+                    "reason": "No decisions logged — get_impact_radius decision_memory co_change signal will be empty; get_decision_history returns nothing",
                 })
-            elif cochange_rows < internal * 2:
+
+            if cochange_rows == 0 and dec_total == 0:
                 actions.append({
                     "priority": "medium",
                     "action": "push_cochange_history",
                     "command": f"python3 scripts/push_cochange_history.py --project-id {project_id} --limit 2000",
-                    "reason": f"co_change history sparse ({cochange_rows} rows for {internal} functions) — more history improves hints",
+                    "reason": "No git co_change history either — both co_change sources empty",
+                })
+            elif cochange_rows == 0 and dec_total > 0:
+                pass  # decision_memory co_change will fire; git history optional
+            elif cochange_rows < internal * 2:
+                actions.append({
+                    "priority": "low",
+                    "action": "push_cochange_history",
+                    "command": f"python3 scripts/push_cochange_history.py --project-id {project_id} --limit 2000",
+                    "reason": f"git co_change history sparse ({cochange_rows} rows) — decision_memory is the primary signal but more git history helps",
                 })
 
             if large_pct > 20:
@@ -261,13 +287,23 @@ def register(mcp: "FastMCP", _unused: Callable = None) -> None:
                     "orphan_nodes": orphan_nodes,
                     "orphan_pct": orphan_pct,
                 },
-                "co_change_history": {
-                    "rows": cochange_rows,
-                    "commits": cochange_commits,
+                "decision_memory": {
+                    "decisions": dec_total,
+                    "with_embeddings": dec_with_emb,
+                    "linked_functions": dec_linked_fns,
                     "note": (
-                        "populated — co_change_hints will fire on get_impact_radius"
+                        f"{dec_total} decisions logged — decision_memory co_change signal active"
+                        if dec_total > 0 else
+                        "empty — run backfill_decisions.py to enable decision_memory co_change and get_decision_history"
+                    ),
+                },
+                "co_change_history": {
+                    "git_rows": cochange_rows,
+                    "git_commits": cochange_commits,
+                    "note": (
+                        "git history populated — combined with decision_memory for co_change_hints"
                         if cochange_rows > 0 else
-                        "empty — run push_cochange_history to enable co_change_hints"
+                        "git history empty — decision_memory is the active co_change signal (if decisions logged)"
                     ),
                 },
                 "anchor_summaries": {
