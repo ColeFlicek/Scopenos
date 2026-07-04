@@ -892,11 +892,16 @@ Active org-scoped keys: `env-primary`, `cole-scopenos-primary` (raw values lost)
 
 Active admin keys (no org, dashboard only): `cole-admin` ×3.
 
-**Demos org key (provisioned 2026-07-04):**
-- Key: `scopenos-0f0f290e5ad8e62fed664cf05455038c15` (name: `demos-indexer`)
-- User: `demos@scopenos.internal` (id: `973f8c7f-952b-4a57-93b5-6ea163c89741`)
-- Org: `demos` → routes to `org_demos` DB
-- Use for: `POST /api/enrich-summaries/{project_id}` on demo projects
+**Active non-admin org keys (as of 2026-07-04):**
+
+| Key name | User | Org | Routes to |
+|---|---|---|---|
+| `demos-indexer` | `demos@scopenos.internal` (id: `973f8c7f-...`) | `demos` | `org_demos` |
+| `demos-indexer` | `cole.flicek@gmail.com` | `demos` | `org_demos` |
+| `benchmark-indexer` | `benchmark@scopenos.internal` | `benchmark` | `org_benchmark` |
+
+- `demos-indexer` (demos@): key `scopenos-0f0f290e5ad8e62fed664cf05455038c15`. Use for `POST /api/enrich-summaries/{project_id}` on demo projects.
+- `benchmark-indexer`: value = `BENCH_API_KEY` in `.mcp.json`. Routes to `demos` org → `org_demos` DB (migrated 2026-07-04 via `UPDATE api_keys SET org_id = 'demos' WHERE name = 'benchmark-indexer'`). Forks created via this key land in org_demos and inherit all enriched summaries via SQL copy at zero cost. `org_benchmark` DB is now unused.
 
 **Lessons from demos key provisioning (2026-07-04):**
 - The DO block for key creation must SELECT the user AFTER inserting, or the user_id stored in api_keys may come from a prior incomplete insert (mismatched UUIDs).

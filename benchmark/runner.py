@@ -169,21 +169,69 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
 
         {chr(10).join(pytest_ids)}
 
-        ## Protocol — complete in order
+        ## Investigation protocol
 
-        DO NOT call Read, grep, or Bash on source files until steps 1–3 are
-        complete. Skipping these gates means discovering hidden requirements
-        only from test failures — Scopenos co_change_hints surfaces them first.
+        Use two modes throughout the entire investigation — not just at the start:
 
-        BASH DISCIPLINE: Do NOT use Bash to explore or read source code at any
-        point — Scopenos tools and Read cover all investigation. Use Bash ONLY
-        for the single final verify command in Step 6. No intermediate test runs,
-        no grep, no cat. Every extra Bash call costs tokens and provides no
-        information Scopenos couldn't give faster.
+        **Navigation mode** (where is X? who calls Y? what else changes?):
+        → Always reach for Scopenos MCP tools first. They return summaries and
+          call-graph facts without reading any file.
 
-        ### Step 1 — Map the codebase
+        **Implementation mode** (what does the exact code look like?):
+        → Read the specific file, only after navigation has identified it.
+
+        The loop is: MCP → Read → if a new question about relationships arises → MCP again.
+        Do not switch to file-reading mode and stay there. Every time you hit
+        a "where does this come from?" or "who else uses this?" question, go
+        back to MCP before opening another file.
+
+        BASH DISCIPLINE: Use Bash ONLY for the single final pytest verify call.
+        No grep, no cat, no intermediate test runs.
+
+        ---
+
+        ## When to use MCP vs Read
+
+        ### MCP is better than Read when:
+
+        **Finding which file/function is relevant**
+        - Bad: open `db/query.py` hoping the bug is there, then `db/lookups.py`, then `db/expressions.py`
+        - Good: `query_similar_functions("exclude subquery deduplication")` → returns the one function with a summary
+
+        **Understanding who calls or uses something**
+        - Bad: grep for `split_exclude` across 500 files, read each match for context
+        - Good: `get_callers("django.db.models.sql.query.Query.split_exclude")` → full caller list with signatures instantly
+
+        **Checking what else needs to change**
+        - Bad: make the fix, run tests, discover a sibling method also needed updating
+        - Good: `get_impact_radius(fn)` → `co_change_hints` lists protocol gaps before you start editing
+
+        **Understanding a test subsystem before opening test files**
+        - Bad: open `tests/queries/tests.py` (3000 lines), scan for relevant class
+        - Good: `get_subsystem_detail(project_id, "tests.queries")` → lists test classes and summaries, then open only the one you need
+
+        **A new navigation question appears mid-investigation**
+        - Bad: you're reading `expressions.py` and wonder "where is Exists constructed?" → open `__init__.py`, then `query.py`
+        - Good: stop, call `get_callers("Exists.__init__")` → answer in one call, then open only the file it points to
+
+        ### Read is better than MCP when:
+
+        **You need the exact implementation to write a correct edit**
+        - MCP summaries describe what a function does; they don't show the line you need to change.
+          Once MCP has told you the file and function, Read that specific function.
+
+        **The function isn't indexed or MCP returns empty**
+        - Fall back to Read (or grep) when `query_similar_functions` returns no results for a concept.
+          This is a signal the index may be stale — note it in your tool log.
+
+        **Verifying exact argument names, return types, or local variable names**
+        - MCP knows signatures but not every local variable. For exact syntax, Read the function body.
+
+        ---
+
+        ### Start — orient once
         Call `mcp__scopenos__get_project_home("{ctx.project_id}")`.
-        Scan subsystem names and `top_functions` to identify which subsystem contains the relevant code.
+        Identify which subsystem contains the relevant code.
         Example output (truncated):
         {{
           "subsystems": [
@@ -198,9 +246,9 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
           "chokepoints": [{{"id": "pkg.core.Engine.dispatch", "caller_count": 54}}, ...]
         }}
 
-        ### Step 2 — Locate the exact function
-        Call `mcp__scopenos__query_similar_functions("<key concept from bug description>", project_id="{ctx.project_id}")`.
-        Use the top result's `id` and `file` as inputs to steps 3 and 4.
+        ### Navigate — find the function (navigation mode)
+        Call `mcp__scopenos__query_similar_functions("<key concept from bug>", project_id="{ctx.project_id}")`.
+        Use the top result's `id` and `file` for the next navigation calls.
         Example output (truncated):
         {{
           "results": [
@@ -208,16 +256,14 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
               "summary": "Processes incoming request and dispatches to handler",
               "file": "pkg/core/engine.py",
               "signature": "def process(self, request, **kwargs)"}},
-            {{"id": "pkg.core.Engine.validate",
-              "summary": "Validates request payload before processing", ...}},
             ...
           ]
         }}
 
-        ### Step 3 — Check impact and hidden co-changes
-        Call `mcp__scopenos__get_impact_radius("<id from step 2>", project_id="{ctx.project_id}")`.
-        Read `co_change_hints` carefully — surfaces protocol gaps and semantic siblings
-        that call-graph traversal alone won't find.
+        ### Navigate — check impact and co-changes (navigation mode)
+        Call `mcp__scopenos__get_impact_radius("<id>", project_id="{ctx.project_id}")`.
+        `co_change_hints` surfaces protocol gaps and semantic siblings that call-graph
+        traversal alone won't find — read these before deciding what to fix.
         Example output (truncated):
         {{
           "impact_radius": [
@@ -237,37 +283,35 @@ def build_prompt_b(task: BenchmarkTask, ctx: RepoContext) -> str:
           ]
         }}
 
-        If the call chain needs clarifying, use before reading any file:
-        - `mcp__scopenos__get_callers("<id>", project_id="{ctx.project_id}")` — who calls this function
+        ### Navigate — call-graph questions (navigation mode, use as needed)
+        Before opening any file to answer a "who calls this?" or "what does this call?" question:
+        - `mcp__scopenos__get_callers("<id>", project_id="{ctx.project_id}")` — all callers
           Example: {{"callers": [{{"id": "pkg.server.Server.handle", "file": "pkg/server.py",
             "signature": "def handle(self, conn)"}}], ...}}
-        - `mcp__scopenos__get_callees("<id>", project_id="{ctx.project_id}")` — what this function calls
+        - `mcp__scopenos__get_callees("<id>", project_id="{ctx.project_id}")` — all callees
           Example: {{"callees": [{{"id": "pkg.io.Reader.read", "is_external": false}},
             {{"id": "external.socket.recv", "is_external": true}}], ...}}
+        - `mcp__scopenos__get_subsystem_detail("{ctx.project_id}", "<subsystem>")` — fixtures,
+          helpers, and patterns within a subsystem; use before reading test files.
+          Example: {{"subsystem": "tests.core",
+            "anchor_summary": "Integration tests for Engine dispatch and routing",
+            "top_functions": [{{"id": "tests.core.EngineTests.test_dispatch",
+              "summary": "Tests dispatch with valid and invalid payloads"}}, ...],
+            "connections": [{{"from": "tests.core", "to": "pkg.core", "edge_count": 29}}]}}
 
-        ### Step 4 — Understand the test subsystem before reading test files
-        Call `mcp__scopenos__get_subsystem_detail("{ctx.project_id}", "<test subsystem name from step 1>")`.
-        Returns fixtures, helpers, and patterns — avoids reading large test files blind.
-        Example output (truncated):
-        {{
-          "subsystem": "tests.core",
-          "anchor_summary": "Integration tests for Engine dispatch and routing",
-          "top_functions": [
-            {{"id": "tests.core.EngineTests.test_dispatch",
-              "summary": "Tests dispatch with valid and invalid payloads"}},
-            ...
-          ],
-          "connections": [{{"from": "tests.core", "to": "pkg.core", "edge_count": 29}}]
-        }}
+        ### Read — implementation details (implementation mode)
+        Only open a file when you need the exact code to write an edit.
+        If reading triggers a new navigation question (e.g. "where does this
+        argument come from?"), stop and call an MCP tool before reading further.
 
-        ### Step 5 — Apply a minimal fix
+        ### Fix — apply a minimal fix
         Edit only what the bug requires. No unrelated changes.
 
-        ### Step 6 — Verify
+        ### Verify
         `{ctx.venv_python} -m pytest {' '.join(pytest_ids)}`
         All failing tests must pass. When they do, stop.
 
-        ### Step 7 — Output tool log
+        ### Output tool log
         Output a final JSON block with nothing after it:
         ```json
         {{"tool_log": [

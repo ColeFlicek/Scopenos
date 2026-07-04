@@ -1,0 +1,12 @@
+{
+  "instance_id": "django__django-11964",
+  "path": "a",
+  "repo_path": "/tmp/claude-0/scopenos-bench-60pez8o_/django__django-11964",
+  "venv_python": "/tmp/claude-0/scopenos-bench-60pez8o_/django__django-11964/.bench-venv/bin/python",
+  "project_id": "",
+  "scopenos_indexed": false,
+  "fail_to_pass": [
+    "test_str (model_enums.tests.ChoicesTests)",
+    "test_textchoices (model_enums.tests.ChoicesTests)"
+  ]
+}
