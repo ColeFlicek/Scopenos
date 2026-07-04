@@ -1,0 +1,24 @@
+name: Check PR source
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Source must be beta
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject PRs not from beta
+        run: |
+          if [ "${{ github.head_ref }}" != "beta" ]; then
+            echo "ERROR: PRs to main must come from beta."
+            echo "  Source branch: ${{ github.head_ref }}"
+            echo ""
+            echo "Workflow:"
+            echo "  1. Open PR from your feature branch into beta"
+            echo "  2. Validate on beta deploy"
+            echo "  3. Open PR from beta into main to promote"
+            exit 1
+          fi
+          echo "Source branch is beta. OK."
