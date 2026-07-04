@@ -214,7 +214,9 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         return json.dumps(out)
 
     @mcp.tool()
-    async def get_callees(function_name: str, project_id: str = "") -> str:
+    async def get_callees(
+        function_name: str, project_id: str = "", include_external: bool = False
+    ) -> str:
         """
         [PRE-EDIT GATE — call this before editing any function]
 
@@ -223,8 +225,10 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         rewrite must preserve — the callees reveal the dependencies your implementation
         relies on and must continue to satisfy.
 
-        is_external=true means the callee is outside this codebase (a library). Those
-        contracts are fixed; your rewrite must adapt to them, not the reverse.
+        External callees (stdlib / third-party) are omitted by default — they are fixed
+        contracts your rewrite must satisfy, not candidates for editing. Set
+        include_external=True to include them (useful when auditing third-party dependency
+        surface).
 
         project_id: limit results to a specific project. If omitted, searches all projects.
 
@@ -239,15 +243,10 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
               "is_external": 0,
               "start_line": 40,
               "end_line": 55
-            },
-            {
-              "id": "external.builtins.set",
-              "name": "set",
-              "is_external": 1
             }
           ],
           "_guidance": {
-            "note": "3 callee(s) — 1 external",
+            "note": "3 callee(s) — 1 external (hidden, pass include_external=True to see)",
             "signals": ["1 external callee(s) — direct dependency on: builtins"],
             "suggested_follow_ups": []
           }
@@ -257,9 +256,21 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         svcs = await _tools_shared.get_services()
         await check_read_access(project_id, svcs.db)
         pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
-        results = await pdb.get_callees(function_name, project_id or None)
+        all_results = await pdb.get_callees(function_name, project_id or None)
         _contracts = await contracts_for_name(pdb, function_name, project_id)
-        out: dict = {"callees": results, "_guidance": compute_callees_guidance(results, function_name)}
+        # Guidance runs on full results so external signal is preserved in the note.
+        guidance = compute_callees_guidance(all_results, function_name)
+        if not include_external:
+            external_count = sum(1 for r in all_results if r.get("is_external"))
+            results = [r for r in all_results if not r.get("is_external")]
+            if external_count:
+                guidance["note"] = (
+                    f"{len(results)} internal callee(s) from `{function_name}` "
+                    f"({external_count} external hidden — pass include_external=True to see)"
+                )
+        else:
+            results = all_results
+        out: dict = {"callees": results, "_guidance": guidance}
         if _contracts:
             out["applicable_contracts"] = fmt_contracts(_contracts)
         return json.dumps(out)
@@ -323,6 +334,25 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
 
         hints = await _co_change_hints(function_name, results, pdb, pemb, pid)
 
+        # Collect function IDs that hints explicitly reference — those depth-2+
+        # entries are load-bearing and must be kept in full. Unreferenced depth-2+
+        # entries are collapsed to a count: they add tokens but agents don't act on them.
+        hint_ids: set[str] = set()
+        for h in hints:
+            if "id" in h:
+                hint_ids.add(h["id"])
+            if "suggested_id" in h:
+                hint_ids.add(h["suggested_id"])
+
+        kept, collapsed_count = [], 0
+        for r in results:
+            if r.get("impact_depth", 0) >= 2 and r["id"] not in hint_ids:
+                collapsed_count += 1
+            else:
+                kept.append(r)
+        if collapsed_count:
+            results = kept
+
         if compact and results:
             by_module: dict[str, int] = {}
             by_depth: dict[int, int] = {}
@@ -345,7 +375,12 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
             }
         else:
             out = {"impact_radius": results}
-            if len(results) > 20:
+            if collapsed_count:
+                out["depth_2_trimmed"] = (
+                    f"{collapsed_count} depth-2 node(s) omitted (not referenced by any "
+                    "co_change hint). Pass compact=True or depth=1 for the full list."
+                )
+            elif len(results) > 20:
                 out["_tip"] = (
                     f"{len(results)} nodes returned. Call with compact=True for "
                     "a module-level summary (total, by_module, by_depth) instead."
@@ -406,6 +441,11 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
         pemb = svcs.embeddings.with_db(pdb)
         results = await pemb.query_similar(snippet, top_k, project_id or None)
+        # Top 3 results get full detail; lower-ranked results drop signature and
+        # line ranges — agents rarely read past rank 3 for anything but the id/summary.
+        _SLIM_KEYS = {"id", "name", "file", "summary", "similarity", "project_id"}
+        for i in range(3, len(results)):
+            results[i] = {k: v for k, v in results[i].items() if k in _SLIM_KEYS}
         if project_id and results:
             from ..guidance import compute_guidance
             guidance = await compute_guidance(results, pdb, project_id)
