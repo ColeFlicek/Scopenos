@@ -142,13 +142,17 @@ jobs:
           kubectl rollout status deployment/scopenos-api -n scopenos-beta --timeout=10m
           kubectl rollout status deployment/scopenos-worker -n scopenos-beta --timeout=10m
 
-      # Beta bypasses Traefik — NodePort 30050 is the direct entry point.
-      # Production port 3004 (via Traefik) is never touched by this workflow.
+      # NodePort 30050 is not reachable from CI — k3d NodePorts live on the
+      # Docker container network, not the host. Use port-forward instead.
       - name: Smoke test
         run: |
-          for i in $(seq 1 6); do
+          kubectl port-forward -n scopenos-beta deployment/scopenos-api 3099:3004 &
+          PF_PID=$!
+          sleep 3
+          trap "kill $PF_PID 2>/dev/null || true" EXIT
+          for i in $(seq 1 8); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-              http://100.71.88.106:30050/api/health || echo "000")
+              http://localhost:3099/api/health || echo "000")
             echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
               echo "Beta smoke test passed."
