@@ -108,10 +108,9 @@ async def test_demo_project_read_allowed_for_authenticated_user(db, alice, demo)
 
 
 @pytest.mark.asyncio
-async def test_demo_project_write_allowed(db, alice, demo):
-    # Write block temporarily lifted for DB enrichment — see ROADMAP Phase 14 note.
+async def test_demo_project_write_denied(db, alice, demo):
     allowed = await db.check_project_access(alice["id"], "pytest", "write")
-    assert allowed is True
+    assert allowed is False
 
 
 @pytest.mark.asyncio
@@ -160,9 +159,10 @@ async def test_demo_project_read_passes(db, alice, demo):
 
 
 @pytest.mark.asyncio
-async def test_demo_project_write_passes(db, alice, demo):
-    # Write block temporarily lifted for DB enrichment — see ROADMAP Phase 14 note.
-    await check_permission(alice, "pytest", "write", db)  # must not raise
+async def test_demo_project_write_raises_403(db, alice, demo):
+    with pytest.raises(HTTPException) as exc:
+        await check_permission(alice, "pytest", "write", db)
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio
