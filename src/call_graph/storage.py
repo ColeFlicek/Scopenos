@@ -519,16 +519,22 @@ class CallGraphDB:
         min_count: int = 3,
         limit: int = 10,
     ) -> list[dict]:
-        """Find functions that frequently change in the same commits as function_id.
+        """Find functions that frequently co-change with function_id.
 
-        Queries commit_function_changes for functions that appear in the same commit
-        as function_id at least min_count times. Returns [] when the table is empty
-        or function_id has no commit history — callers must handle this gracefully.
+        Two signal sources, merged and deduplicated:
+        1. commit_function_changes — raw git history (populated via push_cochange_history)
+        2. decision_functions — semantic signal: functions linked together in the same
+           logged decision. Requires min_count=2 (decisions are intentional, so a lower
+           bar than raw commit co-occurrence).
 
-        Returns list of {function_id, co_change_count} ordered by count descending.
+        Returns list of {function_id, co_change_count, source} ordered by count desc.
+        Source is "git_history" or "decision_memory".
         """
+        # Source 1: raw git co-change history
         async with self._db.execute(
-            """SELECT other.function_id, COUNT(*) AS co_change_count
+            """SELECT other.function_id,
+                      COUNT(*) AS co_change_count,
+                      'git_history' AS source
                FROM commit_function_changes mine
                JOIN commit_function_changes other
                  ON other.project_id = mine.project_id
@@ -542,8 +548,30 @@ class CallGraphDB:
                LIMIT ?""",
             (project_id, function_id, min_count, limit),
         ) as cur:
-            rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+            git_rows = {dict(r)["function_id"]: dict(r) for r in await cur.fetchall()}
+
+        # Source 2: decision memory co-change (functions linked in the same decision)
+        async with self._db.execute(
+            """SELECT df_other.function_id,
+                      COUNT(DISTINCT df_mine.decision_id) AS co_change_count,
+                      'decision_memory' AS source
+               FROM decision_functions df_mine
+               JOIN decision_functions df_other
+                 ON df_other.decision_id = df_mine.decision_id
+                AND df_other.function_id != df_mine.function_id
+               WHERE df_mine.function_id = ?
+               GROUP BY df_other.function_id
+               HAVING COUNT(DISTINCT df_mine.decision_id) >= 2
+               ORDER BY co_change_count DESC
+               LIMIT ?""",
+            (function_id, limit),
+        ) as cur:
+            decision_rows = {dict(r)["function_id"]: dict(r) for r in await cur.fetchall()}
+
+        # Merge: git_history wins on count if a function appears in both sources
+        merged: dict[str, dict] = {**decision_rows, **git_rows}
+        results = sorted(merged.values(), key=lambda r: r["co_change_count"], reverse=True)
+        return results[:limit]
 
     async def rename_project(self, project_id: str, new_name: str) -> bool:
         """Update the display name of a project. Returns False if project not found."""

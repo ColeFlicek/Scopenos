@@ -553,7 +553,10 @@ All functions called by the named function. `is_external` flag distinguishes lib
 Recursive BFS of all dependents. `depth=2` default. Returns `impact_depth` annotation. Also returns `co_change_hints` with three signals:
 - `protocol_completeness` — e.g., `__eq__` without `__hash__`
 - `semantic_sibling` — conceptually similar but call-graph-unreachable functions
-- `co_change_history` — functions that changed together ≥3 times in git history
+- `co_change_history` — functions that co-changed with this one, from two sources merged:
+  - **git_history**: functions appearing in the same commit ≥3 times (`commit_function_changes` table, populated via `push_cochange_history.py`)
+  - **decision_memory**: functions linked in the same `log_decision` call ≥2 times (`decision_functions` table, zero API cost, populated automatically as decisions are logged)
+  - Decision memory is the preferred signal — it's semantic (intentional co-changes) vs. noisy git history (all functions in a changed file)
 
 Use `depth=1` for chokepoints (depth=2 can return 70+ functions for heavily-called nodes).
 
@@ -881,13 +884,25 @@ gh run list --limit 5
 kubectl rollout restart deployment/scopenos-api -n scopenos
 ```
 
-### Active state (2026-07-02)
+### Active state (2026-07-04)
 
 Only org: **`scopenos`** (Cole's org). User: `cole.flicek@gmail.com`.
 
 Active org-scoped keys: `env-primary`, `cole-scopenos-primary` (raw values lost), `claude-code-2026-07` ← current live key in `.mcp.json`.
 
 Active admin keys (no org, dashboard only): `cole-admin` ×3.
+
+**Demos org key (provisioned 2026-07-04):**
+- Key: `scopenos-0f0f290e5ad8e62fed664cf05455038c15` (name: `demos-indexer`)
+- User: `demos@scopenos.internal` (id: `973f8c7f-952b-4a57-93b5-6ea163c89741`)
+- Org: `demos` → routes to `org_demos` DB
+- Use for: `POST /api/enrich-summaries/{project_id}` on demo projects
+
+**Lessons from demos key provisioning (2026-07-04):**
+- The DO block for key creation must SELECT the user AFTER inserting, or the user_id stored in api_keys may come from a prior incomplete insert (mismatched UUIDs).
+- If a key was previously created and revoked (`revoked_at` is set), `get_user_by_key` returns None → 401. Always check `revoked_at` when debugging 401s on known-good keys.
+- DO blocks run with the `scopenos` superuser's default search_path (`"$user", public` = `scopenos, public`) — inserts go to `scopenos.*` tables, matching the server's search_path.
+- `sync=true` for enrichment must be passed in the **JSON body**, not as a query parameter. The endpoint reads it via `body.get("sync", False)`.
 
 ```bash
 # Check what orgs exist
