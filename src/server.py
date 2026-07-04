@@ -336,7 +336,7 @@ async def http_fork_from_files(request: Request) -> JSONResponse:
         short = (target_commit or "client")[:7]
         fork_project_id: str = data.get("fork_project_id", "") or f"{parent_project_id}_fork_{short}"
 
-        await check_permission(_user, parent_project_id, "write", svcs.db)
+        await check_permission(_user, parent_project_id, "read", svcs.db)
 
         from .fork import create_fork_from_files
         from .tools._shared import resolve_project_db
