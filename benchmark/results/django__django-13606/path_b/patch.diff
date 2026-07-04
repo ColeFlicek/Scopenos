@@ -1,0 +1,272 @@
+diff --git a/django/db/models/lookups.py b/django/db/models/lookups.py
+index 576ff400c4..f49abeef7b 100644
+--- a/django/db/models/lookups.py
++++ b/django/db/models/lookups.py
+@@ -143,6 +143,17 @@ class Lookup:
+     def is_summary(self):
+         return self.lhs.is_summary or getattr(self.rhs, 'is_summary', False)
+ 
++    def __eq__(self, other):
++        if self.__class__ is other.__class__:
++            return (
++                self.lhs == other.lhs and
++                self.rhs == other.rhs
++            )
++        return NotImplemented
++
++    def __hash__(self):
++        return hash((self.__class__, self.lhs, self.rhs))
++
+ 
+ class Transform(RegisterLookupMixin, Func):
+     """
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index ee98984826..c67c262df5 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -23,7 +23,7 @@ from django.core.exceptions import (
+ from django.db import DEFAULT_DB_ALIAS, NotSupportedError, connections
+ from django.db.models.aggregates import Count
+ from django.db.models.constants import LOOKUP_SEP
+-from django.db.models.expressions import BaseExpression, Col, F, OuterRef, Ref
++from django.db.models.expressions import BaseExpression, Col, Exists, F, OuterRef, Ref
+ from django.db.models.fields import Field
+ from django.db.models.fields.related_lookups import MultiColSource
+ from django.db.models.lookups import Lookup
+@@ -1756,12 +1756,11 @@ class Query(BaseExpression):
+         filters in the original query.
+ 
+         We will turn this into equivalent of:
+-            WHERE NOT (pk IN (SELECT parent_id FROM thetable
+-                              WHERE name = 'foo' AND parent_id IS NOT NULL))
++            WHERE NOT EXISTS(SELECT 1 FROM thetable WHERE name = 'foo'
++                             AND pk = parent.pk)
+ 
+-        It might be worth it to consider using WHERE NOT EXISTS as that has
+-        saner null handling, and is easier for the backend's optimizer to
+-        handle.
++        Using EXISTS instead of NOT IN has saner null handling, and is easier
++        for the backend's optimizer to handle.
+         """
+         filter_lhs, filter_rhs = filter_expr
+         if isinstance(filter_rhs, OuterRef):
+@@ -1777,17 +1776,9 @@ class Query(BaseExpression):
+         # the subquery.
+         trimmed_prefix, contains_louter = query.trim_start(names_with_path)
+ 
+-        # Add extra check to make sure the selected field will not be null
+-        # since we are adding an IN <subquery> clause. This prevents the
+-        # database from tripping over IN (...,NULL,...) selects and returning
+-        # nothing
+         col = query.select[0]
+         select_field = col.target
+         alias = col.alias
+-        if self.is_nullable(select_field):
+-            lookup_class = select_field.get_lookup('isnull')
+-            lookup = lookup_class(select_field.get_col(alias), False)
+-            query.where.add(lookup, AND)
+         if alias in can_reuse:
+             pk = select_field.model._meta.pk
+             # Need to add a restriction so that outer query's filters are in effect for
+@@ -1801,6 +1792,63 @@ class Query(BaseExpression):
+             query.where.add(lookup, AND)
+             query.external_aliases[alias] = True
+ 
++            from django.db.models.query import QuerySet
++            queryset = QuerySet(model=self.model)
++            queryset.query = query
++            condition = self.build_where(Exists(queryset))
++            return condition, ()
++
++        # For the else case: use EXISTS when we can directly correlate to the
++        # outer model via a simple (non-relational) field path. Otherwise fall
++        # back to the original NOT IN approach.
++        foreign_related_fields = getattr(select_field, 'foreign_related_fields', ())
++        outer_field = foreign_related_fields[0] if foreign_related_fields else None
++        if (
++            outer_field is not None and
++            outer_field.model == self.model and
++            LOOKUP_SEP not in trimmed_prefix
++        ):
++            # The select_field references a field directly on the outer model.
++            # We can use EXISTS with a direct correlation.
++            outer_alias = self.base_table
++            outer_col = outer_field.get_col(outer_alias)
++
++            # Remove unreffed aliases from the inner query to prevent alias
++            # conflicts when bump_prefix runs during Exists.resolve_expression.
++            unreffed = [a for a, rc in query.alias_refcount.items() if rc <= 0]
++            for unreffed_alias in unreffed:
++                if unreffed_alias in query.alias_map:
++                    table_name = query.alias_map[unreffed_alias].table_name
++                    del query.alias_map[unreffed_alias]
++                    del query.alias_refcount[unreffed_alias]
++                    if table_name in query.table_map:
++                        try:
++                            query.table_map[table_name].remove(unreffed_alias)
++                        except ValueError:
++                            pass
++
++            lookup_class = select_field.get_lookup('exact')
++            lookup = lookup_class(col, outer_col)
++            query.where.add(lookup, AND)
++            # Mark outer alias as external in inner query.
++            query.external_aliases[outer_alias] = True
++
++            from django.db.models.query import QuerySet
++            queryset = QuerySet(model=self.model)
++            queryset.query = query
++            condition = self.build_where(Exists(queryset))
++            return condition, ()
++
++        # Fall back to the NOT IN approach for complex join paths.
++        # Add extra check to make sure the selected field will not be null
++        # since we are adding an IN <subquery> clause. This prevents the
++        # database from tripping over IN (...,NULL,...) selects and returning
++        # nothing
++        if self.is_nullable(select_field):
++            lookup_class = select_field.get_lookup('isnull')
++            lookup = lookup_class(select_field.get_col(alias), False)
++            query.where.add(lookup, AND)
++
+         condition, needed_inner = self.build_filter(
+             ('%s__in' % trimmed_prefix, query),
+             current_negated=True, branch_negated=True, can_reuse=can_reuse)
+@@ -1817,6 +1865,7 @@ class Query(BaseExpression):
+             # outercol IS NULL we will not match the row.
+         return condition, needed_inner
+ 
++
+     def set_empty(self):
+         self.where.add(NothingNode(), AND)
+         for query in self.combined_queries:
+diff --git a/tests/lookup/test_lookups.py b/tests/lookup/test_lookups.py
+index c3aa48ddad..7b489e6ace 100644
+--- a/tests/lookup/test_lookups.py
++++ b/tests/lookup/test_lookups.py
+@@ -1,10 +1,76 @@
+ from datetime import datetime
+ 
+-from django.db.models import DateTimeField, Value
+-from django.db.models.lookups import YearLookup
++from django.db.models import DateTimeField, IntegerField, Value
++from django.db.models.lookups import Exact, GreaterThan, YearLookup
+ from django.test import SimpleTestCase
+ 
+ 
++class LookupTests(SimpleTestCase):
++    def test_equality(self):
++        lookup = Exact(
++            Value(1, output_field=IntegerField()),
++            Value(2, output_field=IntegerField()),
++        )
++        self.assertEqual(lookup, lookup)
++        self.assertEqual(
++            Exact(
++                Value(1, output_field=IntegerField()),
++                Value(2, output_field=IntegerField()),
++            ),
++            Exact(
++                Value(1, output_field=IntegerField()),
++                Value(2, output_field=IntegerField()),
++            ),
++        )
++        self.assertNotEqual(
++            Exact(
++                Value(1, output_field=IntegerField()),
++                Value(2, output_field=IntegerField()),
++            ),
++            GreaterThan(
++                Value(1, output_field=IntegerField()),
++                Value(2, output_field=IntegerField()),
++            ),
++        )
++        self.assertNotEqual(
++            Exact(
++                Value(1, output_field=IntegerField()),
++                Value(2, output_field=IntegerField()),
++            ),
++            Exact(
++                Value(1, output_field=IntegerField()),
++                Value(3, output_field=IntegerField()),
++            ),
++        )
++
++    def test_hash(self):
++        lookup = Exact(
++            Value(1, output_field=IntegerField()),
++            Value(2, output_field=IntegerField()),
++        )
++        self.assertEqual(hash(lookup), hash(lookup))
++        self.assertEqual(
++            hash(Exact(
++                Value(1, output_field=IntegerField()),
++                Value(2, output_field=IntegerField()),
++            )),
++            hash(Exact(
++                Value(1, output_field=IntegerField()),
++                Value(2, output_field=IntegerField()),
++            )),
++        )
++        self.assertNotEqual(
++            hash(Exact(
++                Value(1, output_field=IntegerField()),
++                Value(2, output_field=IntegerField()),
++            )),
++            hash(Exact(
++                Value(1, output_field=IntegerField()),
++                Value(3, output_field=IntegerField()),
++            )),
++        )
++
++
+ class YearLookupTests(SimpleTestCase):
+     def test_get_bound_params(self):
+         look_up = YearLookup(
+diff --git a/tests/queries/test_query.py b/tests/queries/test_query.py
+index 523fa607f0..5e6191e7b9 100644
+--- a/tests/queries/test_query.py
++++ b/tests/queries/test_query.py
+@@ -150,3 +150,22 @@ class TestQuery(SimpleTestCase):
+         msg = 'Cannot filter against a non-conditional expression.'
+         with self.assertRaisesMessage(TypeError, msg):
+             query.build_where(Func(output_field=CharField()))
++
++    def test_equality(self):
++        query = Query(Author)
++        where = query.build_where(Q(num__gt=2))
++        lookup = where.children[0]
++        self.assertIsInstance(lookup, GreaterThan)
++        self.assertEqual(lookup, lookup)
++        self.assertEqual(lookup, GreaterThan(lookup.lhs, lookup.rhs))
++        self.assertNotEqual(lookup, LessThan(lookup.lhs, lookup.rhs))
++        self.assertNotEqual(lookup, Exact(lookup.lhs, lookup.rhs))
++
++    def test_hash(self):
++        query = Query(Author)
++        where = query.build_where(Q(num__gt=2))
++        lookup = where.children[0]
++        self.assertIsInstance(lookup, GreaterThan)
++        self.assertEqual(hash(lookup), hash(lookup))
++        self.assertEqual(hash(lookup), hash(GreaterThan(lookup.lhs, lookup.rhs)))
++        self.assertNotEqual(hash(lookup), hash(LessThan(lookup.lhs, lookup.rhs)))
+diff --git a/tests/queries/tests.py b/tests/queries/tests.py
+index c98a6adeba..c841bf38ac 100644
+--- a/tests/queries/tests.py
++++ b/tests/queries/tests.py
+@@ -2884,6 +2884,15 @@ class ExcludeTests(TestCase):
+             [number],
+         )
+ 
++    def test_exclude_multivalued_exists(self):
++        """
++        Exclude multivalued relationships use NOT EXISTS instead of NOT IN.
++        """
++        qs = Job.objects.exclude(responsibilities__description='Playing golf')
++        self.assertSequenceEqual(qs, [Job.objects.get(name='Programmer')])
++        self.assertNotIn('NOT IN', str(qs.query))
++        self.assertIn('EXISTS', str(qs.query))
++
+ 
+ class ExcludeTest17600(TestCase):
+     """

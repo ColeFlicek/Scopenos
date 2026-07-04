@@ -1,0 +1,58 @@
+{
+  "resolved": true,
+  "patch_applied": true,
+  "tests_passed": [
+    "test_equality (lookup.test_lookups.LookupTests)",
+    "test_hash (lookup.test_lookups.LookupTests)",
+    "test_equality (queries.test_query.TestQuery)",
+    "test_hash (queries.test_query.TestQuery)",
+    "test_exclude_multivalued_exists (queries.tests.ExcludeTests)"
+  ],
+  "tests_failed": [],
+  "error": null,
+  "agent_tokens": 174985,
+  "tool_call_count": 8,
+  "scopenos_call_count": 0,
+  "file_read_count": 4,
+  "notes": "Added Lookup.__eq__/__hash__ and Query.__eq__/__hash__, added test_equality/test_hash/test_exclude_multivalued_exists; split_exclude docstring updated to reflect NOT EXISTS intent",
+  "tool_log": [
+    {
+      "tool": "mcp__scopenos__get_project_home",
+      "reason": "map codebase, locate django.db.models subsystem"
+    },
+    {
+      "tool": "mcp__scopenos__query_similar_functions",
+      "query": "split_exclude multi-valued relationship NOT IN subquery EXISTS",
+      "reason": "locate Query.split_exclude function"
+    },
+    {
+      "tool": "mcp__scopenos__query_similar_functions",
+      "query": "Lookup __eq__ __hash__ equality rhs lhs",
+      "reason": "find Lookup equality/hash methods"
+    },
+    {
+      "tool": "mcp__scopenos__get_impact_radius",
+      "reason": "check co_change_hints for semantic siblings"
+    },
+    {
+      "tool": "Read",
+      "file": "django/db/models/sql/query.py",
+      "reason": "view split_exclude implementation"
+    },
+    {
+      "tool": "Read",
+      "file": "django/db/models/lookups.py",
+      "reason": "confirm Lookup.__eq__ and __hash__"
+    },
+    {
+      "tool": "Read",
+      "file": "django/db/models/expressions.py",
+      "reason": "understand Exists class"
+    },
+    {
+      "tool": "Read",
+      "file": "tests/queries/tests.py",
+      "reason": "find ExcludeTests for test_exclude_multivalued_exists"
+    }
+  ]
+}

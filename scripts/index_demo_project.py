@@ -47,6 +47,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -126,6 +127,13 @@ def _index_files(files: list[Path], clone_path: Path, project_id: str) -> int:
                 batch_fns = result.get("functions_updated", 0)
                 total_fns += batch_fns
                 print(f"  batch {i + 1}/{len(batches)}: +{batch_fns} functions", end="\r")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            try:
+                detail = json.loads(body).get("detail", body)
+            except Exception:
+                detail = body
+            print(f"\n  batch {i + 1} failed: HTTP {exc.code} — {detail}")
         except Exception as exc:
             print(f"\n  batch {i + 1} failed: {exc}")
 
@@ -149,6 +157,13 @@ def _enrich(project_id: str, limit: int = 2000) -> None:
         with urllib.request.urlopen(req, timeout=300) as resp:
             result = json.loads(resp.read())
             print(f"[enrich] queued job {result.get('job_id', '?')} (status: {result.get('status', '?')})")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        try:
+            detail = json.loads(body).get("detail", body)
+        except Exception:
+            detail = body
+        print(f"[enrich] skipped (non-fatal): HTTP {exc.code} — {detail}")
     except Exception as exc:
         print(f"[enrich] skipped (non-fatal): {exc}")
 

@@ -116,7 +116,8 @@ Scopenos is a self-hosted code intelligence server. It indexes a codebase into f
 | `org_{slug}` | One per customer org | `org_{slug}_rw` (auto-created at provision) |
 | `scopenos_test` | Test suite only — never production data | `scopenos_test_runner` |
 | `template_vector` | Template DB with pgvector pre-installed — cloned when provisioning new org DBs | `scopenos` (superuser) |
-| `demos` | ~~Not yet created~~ (was planned, not provisioned as of 2026-07-02) | — |
+| `org_demos` | Demo repos — 12 SWE-bench repos pre-indexed (django 42K nodes, pytest 8K, etc.) | `scopenos_demos_reader` (RO), `scopenos_demos_writer` (RW) |
+| `org_benchmark` | Benchmark org — 4 demo repos mirrored from org_demos for SWE-bench forks. Accessible via `BENCH_API_KEY`. Pre-seeded schemas (django, pytest, flask, requests) needed ownership transfer after pg_dump copy (done 2026-07-03). | `org_benchmark_rw` |
 
 ### Three levels of isolation
 
@@ -498,12 +499,29 @@ async def get_schema_name_for_project(project_id, fallback: bool = True) -> str 
 4. Delete nodes from changed files that don't exist at target commit
 5. Returns `{updated, deleted, unchanged}`
 
+### Critical bug fixed 2026-07-03: project_id mismatch in forked schemas
+
+`fork_schema()` copies rows from parent → fork via `INSERT INTO fork SELECT * FROM parent`. This preserved the parent's `project_id` (e.g. `'django'`) on every copied row. All MCP tools filter by `project_id = fork_project_id` (e.g. `'django-fork-c84b91b7'`) and returned zero results — the fork appeared empty despite having 26K nodes.
+
+**Fix (committed f9fd65e7):**
+1. `storage.py`: new `update_project_id_in_schema()` — bulk UPDATE immediately after `fork_schema` copy
+2. `fork.py` `create_fork_from_files`: calls `update_project_id_in_schema()` after `fork_schema()`
+3. `fork.py` `apply_fork_delta_from_files`: now accepts `fork_project_id` kwarg and writes delta nodes with the fork's ID
+
+**Repair for existing broken forks (run on TheHive as superuser):**
+```sql
+UPDATE django_fork_c84b91b.nodes SET project_id = 'django-fork-c84b91b7';
+UPDATE django_fork_c84b91b.edges SET project_id = 'django-fork-c84b91b7';
+UPDATE django_fork_c84b91b.function_embeddings SET project_id = 'django-fork-c84b91b7';
+```
+
 ### Performance characteristics
 
-Django (42,988 nodes, 189,763 edges):
-- `fork_schema` bulk copy: ~120–180s (was timing out at pool's 30s default before `_FORK_TIMEOUT = 300.0` fix)
-- Delta application: varies by number of changed files
-- Resulting fork schema: 10,973 nodes confirmed via `SELECT COUNT(*) FROM django_fork_smokete.nodes`
+Django fork at commit c84b91b7 (org_benchmark, 2026-07-03):
+- `fork_schema` bulk copy from org_demos data: fast (data already in DB)
+- `fork-from-files` with 1,944 changed files: 13.5MB payload, ~300s
+- Resulting fork: 26,024 nodes confirmed live via `get_project_home`
+- Base `django` project in org_benchmark: 11,169 nodes (partial — some index batches failed under load)
 
 ---
 
@@ -535,7 +553,10 @@ All functions called by the named function. `is_external` flag distinguishes lib
 Recursive BFS of all dependents. `depth=2` default. Returns `impact_depth` annotation. Also returns `co_change_hints` with three signals:
 - `protocol_completeness` — e.g., `__eq__` without `__hash__`
 - `semantic_sibling` — conceptually similar but call-graph-unreachable functions
-- `co_change_history` — functions that changed together ≥3 times in git history
+- `co_change_history` — functions that co-changed with this one, from two sources merged:
+  - **git_history**: functions appearing in the same commit ≥3 times (`commit_function_changes` table, populated via `push_cochange_history.py`)
+  - **decision_memory**: functions linked in the same `log_decision` call ≥2 times (`decision_functions` table, zero API cost, populated automatically as decisions are logged)
+  - Decision memory is the preferred signal — it's semantic (intentional co-changes) vs. noisy git history (all functions in a changed file)
 
 Use `depth=1` for chokepoints (depth=2 can return 70+ functions for heavily-called nodes).
 
@@ -863,13 +884,30 @@ gh run list --limit 5
 kubectl rollout restart deployment/scopenos-api -n scopenos
 ```
 
-### Active state (2026-07-02)
+### Active state (2026-07-04)
 
 Only org: **`scopenos`** (Cole's org). User: `cole.flicek@gmail.com`.
 
 Active org-scoped keys: `env-primary`, `cole-scopenos-primary` (raw values lost), `claude-code-2026-07` ← current live key in `.mcp.json`.
 
 Active admin keys (no org, dashboard only): `cole-admin` ×3.
+
+**Active non-admin org keys (as of 2026-07-04):**
+
+| Key name | User | Org | Routes to |
+|---|---|---|---|
+| `demos-indexer` | `demos@scopenos.internal` (id: `973f8c7f-...`) | `demos` | `org_demos` |
+| `demos-indexer` | `cole.flicek@gmail.com` | `demos` | `org_demos` |
+| `benchmark-indexer` | `benchmark@scopenos.internal` | `benchmark` | `org_benchmark` |
+
+- `demos-indexer` (demos@): key `scopenos-0f0f290e5ad8e62fed664cf05455038c15`. Use for `POST /api/enrich-summaries/{project_id}` on demo projects.
+- `benchmark-indexer`: value = `BENCH_API_KEY` in `.mcp.json`. Routes to `demos` org → `org_demos` DB (migrated 2026-07-04 via `UPDATE api_keys SET org_id = 'demos' WHERE name = 'benchmark-indexer'`). Forks created via this key land in org_demos and inherit all enriched summaries via SQL copy at zero cost. `org_benchmark` DB is now unused.
+
+**Lessons from demos key provisioning (2026-07-04):**
+- The DO block for key creation must SELECT the user AFTER inserting, or the user_id stored in api_keys may come from a prior incomplete insert (mismatched UUIDs).
+- If a key was previously created and revoked (`revoked_at` is set), `get_user_by_key` returns None → 401. Always check `revoked_at` when debugging 401s on known-good keys.
+- DO blocks run with the `scopenos` superuser's default search_path (`"$user", public` = `scopenos, public`) — inserts go to `scopenos.*` tables, matching the server's search_path.
+- `sync=true` for enrichment must be passed in the **JSON body**, not as a query parameter. The endpoint reads it via `body.get("sync", False)`.
 
 ```bash
 # Check what orgs exist
@@ -996,8 +1034,9 @@ One-time per project. Run after initial index. Requires server to be reachable. 
 | `scripts/create_user.py` | Works on pod (venv active) | `--help` fails locally — asyncpg not in system Python |
 | `scripts/backfill_decisions.py` | Works — `--dry-run`, `--since`, `--limit`, `--project` flags | |
 | `scripts/index_demo_repos.py` | Works — `--repos`, `--skip-enrich`, `--mark-only` flags | |
-| `scripts/provision_org.py` | Correct grants | Manual provisioning misses these |
+| `scripts/provision_org.py` | Fixed 2026-07-03 | Now includes `ALTER DEFAULT PRIVILEGES FOR ROLE scopenos_provisioner` so future provisioner-created schemas are accessible to the org role |
 | `scripts/provision_benchmark.py` | Needs header fix | Still says "run from container at 172.21.0.1" |
+| `scripts/repair_bench_org_grants.sql` | One-time repair | Run against org_benchmark on TheHive to fix pre-seeded schema grants + transfer table ownership after pg_dump copy |
 
 ---
 
@@ -1082,6 +1121,18 @@ Remote clients can't use it. Fix: accept file contents inline (like `index_chang
 - Metaclass-generated methods — not indexed
 - TypeScript anonymous functions — auto-generated IDs may not match between index runs
 - Generic fallback parsers (Zig, Groovy, Perl) — body captured but no call edges
+
+### Benchmark infrastructure gaps (as of 2026-07-03)
+
+**MCP routing confirmed working:** `scopenos_bench` server entry in `.mcp.json` routes `BENCH_API_KEY` to org_benchmark. Subagents call `mcp__scopenos_bench__*` tools and get real call graph data from forks (confirmed: `get_project_home` returned 26K nodes, `query_similar_functions` found `TimezoneMixin.get_tzname` for the timezone bug).
+
+**Fork project_id bug fixed:** All forks created before 2026-07-03 have `project_id = parent_id` on copied rows. Repair: `UPDATE {fork_schema}.nodes SET project_id = '{fork_id}'` on TheHive. Future forks use `update_project_id_in_schema()` automatically.
+
+**Bench venv must use Python ≤ 3.12:** Django 2.2-era source uses `import cgi` (removed in Python 3.13). Bench venv created with `uv venv` defaults to system Python 3.14 — use `uv venv --python python3.12` or set `BENCH_PYTHON=/path/to/python3.12` before running `benchmark.run setup`.
+
+**Bench base index batching causes server overload:** Sending 914 files in 50-file batches (18 HTTP requests) overwhelms the single pod and causes 502/reset errors. Alternative: copy base project schemas from org_demos via `pg_dump | pg_restore` on TheHive (done for current benchmark org).
+
+**Path B result contamination:** benchmark/results/ directory is in the repo. Agents CAN read previous patches if not explicitly forbidden. Exclude `benchmark/results/` from agent context or move results outside the worktree for clean comparisons.
 
 ### What a paying user might hit first
 
