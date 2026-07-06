@@ -545,6 +545,46 @@ class TestCompletenessSignal:
         assert any("other" in s.lower() for s in g["signals"])
 
 
+# ── GuidanceContext ────────────────────────────────────────────────────────────
+
+class TestGuidanceContext:
+    def test_new_context_has_not_seen_anything(self):
+        from src.guidance import GuidanceContext
+        ctx = GuidanceContext()
+        assert not ctx.was_queried_similar("django.db.models.sql.query.Query.split_exclude")
+
+    def test_record_marks_function_as_seen(self):
+        from src.guidance import GuidanceContext
+        ctx = GuidanceContext()
+        ctx.record("query_similar_functions", ["django.db.models.sql.query.Query.split_exclude"])
+        assert ctx.was_queried_similar("django.db.models.sql.query.Query.split_exclude")
+
+    def test_was_queried_similar_only_true_for_query_similar_tool(self):
+        from src.guidance import GuidanceContext
+        ctx = GuidanceContext()
+        ctx.record("get_callers", ["django.db.models.sql.query.Query.split_exclude"])
+        assert not ctx.was_queried_similar("django.db.models.sql.query.Query.split_exclude")
+
+    def test_should_resurface_when_never_queried(self):
+        from src.guidance import GuidanceContext
+        ctx = GuidanceContext()
+        assert ctx.should_resurface_horizontal("django.db.models.sql.query.Query.split_exclude")
+
+    def test_should_not_resurface_when_already_queried_similar(self):
+        from src.guidance import GuidanceContext
+        ctx = GuidanceContext()
+        ctx.record("query_similar_functions", ["django.db.models.sql.query.Query.split_exclude"])
+        assert not ctx.should_resurface_horizontal("django.db.models.sql.query.Query.split_exclude")
+
+    def test_serialise_roundtrip(self):
+        from src.guidance import GuidanceContext
+        ctx = GuidanceContext()
+        ctx.record("query_similar_functions", ["fn.a", "fn.b"])
+        ctx2 = GuidanceContext.from_dict(ctx.to_dict())
+        assert ctx2.was_queried_similar("fn.a")
+        assert not ctx2.was_queried_similar("fn.c")
+
+
 # ── compute_callees_guidance ───────────────────────────────────────────────────
 
 def _callee(name: str, module: str = "src.mod", is_external: int = 0) -> dict:

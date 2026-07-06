@@ -6,6 +6,7 @@ import json
 from typing import Callable
 
 from fastmcp import FastMCP
+from fastmcp.server.context import Context
 
 from ._shared import check_read_access, fmt_contracts, contracts_for_name, ChangeHint
 from . import _shared as _tools_shared
@@ -168,7 +169,7 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
     _mod = _sys.modules[__name__]
 
     @mcp.tool()
-    async def get_callers(function_name: str, project_id: str = "") -> str:
+    async def get_callers(function_name: str, project_id: str = "", ctx: Context | None = None) -> str:
         """
         [PRE-EDIT GATE — call this before editing any function]
 
@@ -214,10 +215,21 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         )
         # Completeness: more than one node shares this bare name → siblings exist
         other_impls = [n for n in all_impls if len(all_impls) > 1]
-        out: dict = {
-            "callers": results,
-            "_guidance": compute_callers_guidance(results, function_name, other_implementations=other_impls),
-        }
+        guidance = compute_callers_guidance(results, function_name, other_implementations=other_impls)
+        # Session context: resurface query_similar_functions if agent hasn't used it on this fn yet
+        if ctx is not None and results:
+            from ..guidance import GuidanceContext, _SESSION_STATE_KEY
+            raw = await ctx.get_state(_SESSION_STATE_KEY) or {}
+            gctx = GuidanceContext.from_dict(raw)
+            # Check the target function's IDs (from all_impls), not the callers' IDs
+            target_ids = [n["id"] for n in all_impls] if all_impls else []
+            already_queried = any(not gctx.should_resurface_horizontal(tid) for tid in target_ids)
+            if not already_queried:
+                guidance["signals"].append(
+                    f"You haven't run query_similar_functions on `{function_name}` yet — "
+                    "consider it before editing to check for structural siblings."
+                )
+        out: dict = {"callers": results, "_guidance": guidance}
         if _contracts:
             out["applicable_contracts"] = fmt_contracts(_contracts)
         return json.dumps(out)
@@ -403,7 +415,7 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
 
     @mcp.tool()
     async def query_similar_functions(
-        snippet: str, project_id: str, top_k: int = 10
+        snippet: str, project_id: str, top_k: int = 10, ctx: Context | None = None
     ) -> str:
         """
         [DISCOVERY TOOL — accepts natural language or a code snippet]
@@ -456,8 +468,13 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         for i in range(3, len(results)):
             results[i] = {k: v for k, v in results[i].items() if k in _SLIM_KEYS}
         if project_id and results:
-            from ..guidance import compute_guidance
+            from ..guidance import compute_guidance, GuidanceContext, _SESSION_STATE_KEY
             guidance = await compute_guidance(results, pdb, project_id)
+            if ctx is not None:
+                raw = await ctx.get_state(_SESSION_STATE_KEY) or {}
+                gctx = GuidanceContext.from_dict(raw)
+                gctx.record("query_similar_functions", [r["id"] for r in results])
+                await ctx.set_state(_SESSION_STATE_KEY, gctx.to_dict())
             return json.dumps({"results": results, "_guidance": guidance.to_dict()})
         return json.dumps(results)
 
