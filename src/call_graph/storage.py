@@ -1057,6 +1057,24 @@ class CallGraphDB:
 
         return exact + suffix
 
+    async def get_all_implementations(
+        self, function_name: str, project_id: str | None = None
+    ) -> list[dict]:
+        """Return all nodes sharing the same bare function name.
+
+        If count > 1, the caller should surface a completeness signal.
+        Used by get_callers to detect sibling implementations across modules.
+        """
+        bare_name = function_name.split(".")[-1]
+        pid_clause = " AND project_id = ?" if project_id else ""
+        params: tuple = (bare_name, *([project_id] if project_id else []))
+        async with self._db.execute(
+            f"SELECT id, name, module, file FROM nodes "
+            f"WHERE name = ? AND is_external = 0{pid_clause} LIMIT 10",
+            params,
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
     async def find_dispatch_handlers(
         self,
         project_id: str,
