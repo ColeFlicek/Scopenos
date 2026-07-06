@@ -30,6 +30,41 @@ if TYPE_CHECKING:
 
 CHOKEPOINT_THRESHOLD: int = 15
 
+_QUERY_SIMILAR_TOOL = "query_similar_functions"
+_SESSION_STATE_KEY = "guidance_ctx"
+
+
+@dataclass
+class GuidanceContext:
+    """Session-scoped record of which tools have been called and on which functions.
+
+    Serialisable to a plain dict so it can be stored in FastMCP session state
+    (which requires JSON-serialisable values).
+    """
+
+    seen: dict[str, list[str]] = field(default_factory=dict)
+    # seen[tool_name] = [fn_id, fn_id, ...]
+
+    def record(self, tool: str, fn_ids: list[str]) -> None:
+        existing = self.seen.setdefault(tool, [])
+        for fid in fn_ids:
+            if fid not in existing:
+                existing.append(fid)
+
+    def was_queried_similar(self, fn_id: str) -> bool:
+        return fn_id in self.seen.get(_QUERY_SIMILAR_TOOL, [])
+
+    def should_resurface_horizontal(self, fn_id: str) -> bool:
+        """True when the agent has NOT yet run query_similar_functions on this function."""
+        return not self.was_queried_similar(fn_id)
+
+    def to_dict(self) -> dict:
+        return {"seen": self.seen}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "GuidanceContext":
+        return cls(seen=d.get("seen", {}))
+
 # Modules where async functions are likely to have sequential-await or N+1 patterns.
 _PERFORMANCE_SENSITIVE_MODULES: frozenset[str] = frozenset({
     "src.call_graph.storage",
