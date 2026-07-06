@@ -585,6 +585,7 @@ class TestGuidanceContext:
         assert not ctx2.was_queried_similar("fn.c")
 
 
+
 # ── compute_callees_guidance ───────────────────────────────────────────────────
 
 def _callee(name: str, module: str = "src.mod", is_external: int = 0) -> dict:
