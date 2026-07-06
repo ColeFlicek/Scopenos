@@ -502,6 +502,49 @@ class TestCallersGuidance:
         assert not any("chokepoint" in s.lower() for s in g["signals"])
 
 
+# ── completeness signal ────────────────────────────────────────────────────────
+
+def _node(name: str, module: str) -> dict:
+    return {"id": f"{module}.{name}", "name": name, "module": module,
+            "file": f"{module.replace('.', '/')}.py"}
+
+
+class TestCompletenessSignal:
+    def test_other_implementations_fires_signal(self):
+        from src.guidance import _completeness_signal
+        others = [_node("get_group_by_cols", "django.db.models.expressions")]
+        signal = _completeness_signal("get_group_by_cols", others)
+        assert signal is not None
+        assert "1 other" in signal.lower() or "other implementation" in signal.lower()
+
+    def test_no_others_returns_none(self):
+        from src.guidance import _completeness_signal
+        signal = _completeness_signal("get_group_by_cols", [])
+        assert signal is None
+
+    def test_multiple_others_mentions_count(self):
+        from src.guidance import _completeness_signal
+        others = [
+            _node("get_group_by_cols", "django.db.models.expressions"),
+            _node("get_group_by_cols", "django.db.models.functions"),
+        ]
+        signal = _completeness_signal("get_group_by_cols", others)
+        assert signal is not None
+        assert "2" in signal
+
+    def test_signal_suggests_query_similar(self):
+        from src.guidance import _completeness_signal
+        others = [_node("get_group_by_cols", "django.db.models.expressions")]
+        signal = _completeness_signal("get_group_by_cols", others)
+        assert "query_similar_functions" in signal
+
+    def test_completeness_included_in_callers_guidance(self):
+        callers = [_caller("fn1")]
+        others = [_node("get_group_by_cols", "django.db.models.expressions")]
+        g = compute_callers_guidance(callers, "get_group_by_cols", other_implementations=others)
+        assert any("other" in s.lower() for s in g["signals"])
+
+
 # ── compute_callees_guidance ───────────────────────────────────────────────────
 
 def _callee(name: str, module: str = "src.mod", is_external: int = 0) -> dict:

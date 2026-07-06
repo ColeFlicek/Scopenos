@@ -1,6 +1,7 @@
 """Graph traversal tools: callers, callees, impact radius, function context, semantic search."""
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Callable
 
@@ -206,9 +207,17 @@ def register(mcp: FastMCP, _unused_get_services: Callable = None) -> None:
         svcs = await _tools_shared.get_services()
         await check_read_access(project_id, svcs.db)
         pdb = await _tools_shared.resolve_project_db(project_id, svcs.db)
-        results = await pdb.get_callers(function_name, project_id or None)
-        _contracts = await contracts_for_name(pdb, function_name, project_id)
-        out: dict = {"callers": results, "_guidance": compute_callers_guidance(results, function_name)}
+        results, _contracts, all_impls = await asyncio.gather(
+            pdb.get_callers(function_name, project_id or None),
+            contracts_for_name(pdb, function_name, project_id),
+            pdb.get_all_implementations(function_name, project_id or None),
+        )
+        # Completeness: more than one node shares this bare name → siblings exist
+        other_impls = [n for n in all_impls if len(all_impls) > 1]
+        out: dict = {
+            "callers": results,
+            "_guidance": compute_callers_guidance(results, function_name, other_implementations=other_impls),
+        }
         if _contracts:
             out["applicable_contracts"] = fmt_contracts(_contracts)
         return json.dumps(out)

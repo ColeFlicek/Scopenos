@@ -126,6 +126,36 @@ class TestGetCallers:
         assert "caller" in names
 
     @pytest.mark.asyncio
+    async def test_completeness_signal_fires_when_sibling_implementations_exist(self, svc):
+        # Two nodes share the bare name "get_group_by_cols" in different modules
+        nodes = [
+            _node("django.aggregates.get_group_by_cols", name="get_group_by_cols"),
+            _node("django.expressions.get_group_by_cols", name="get_group_by_cols"),
+        ]
+        await _insert(svc.db, "proj", nodes)
+
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_callers
+            result = json.loads(await get_callers("get_group_by_cols", project_id="proj"))
+
+        signals = result["_guidance"]["signals"]
+        assert any("other implementation" in s.lower() for s in signals), (
+            f"Expected completeness signal, got: {signals}"
+        )
+        assert any("query_similar_functions" in s for s in signals)
+
+    @pytest.mark.asyncio
+    async def test_completeness_signal_absent_when_no_siblings(self, svc):
+        await _insert(svc.db, "proj", [_node("src.server.target")])
+
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_callers
+            result = json.loads(await get_callers("target", project_id="proj"))
+
+        signals = result["_guidance"]["signals"]
+        assert not any("other implementation" in s.lower() for s in signals)
+
+    @pytest.mark.asyncio
     async def test_returns_empty_for_unknown_function(self, svc):
         with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
             from src.tools.graph import get_callers
