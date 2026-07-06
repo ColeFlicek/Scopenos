@@ -156,6 +156,48 @@ class TestGetCallers:
         assert not any("other implementation" in s.lower() for s in signals)
 
     @pytest.mark.asyncio
+    async def test_resurface_signal_when_no_prior_query_similar(self, svc):
+        """get_callers surfaces a horizontal prompt when agent hasn't run query_similar_functions."""
+        nodes = [_node("src.server.target")]
+        edges = [CallEdge(caller_id="src.server.caller", callee_name="src.server.target",
+                          edge_type="calls", file="src/server.py")]
+        await _insert(svc.db, "proj", [_node("src.server.caller"), *nodes], edges)
+
+        ctx = AsyncMock()
+        ctx.get_state = AsyncMock(return_value=None)  # empty session — agent hasn't used query_similar
+        ctx.set_state = AsyncMock()
+
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_callers
+            result = json.loads(await get_callers("target", project_id="proj", ctx=ctx))
+
+        signals = result["_guidance"]["signals"]
+        assert any("query_similar_functions" in s for s in signals)
+
+    @pytest.mark.asyncio
+    async def test_no_resurface_signal_when_query_similar_already_run(self, svc):
+        """get_callers suppresses the horizontal prompt when agent already used query_similar_functions."""
+        from src.guidance import GuidanceContext, _SESSION_STATE_KEY
+        nodes = [_node("src.server.target")]
+        edges = [CallEdge(caller_id="src.server.caller", callee_name="src.server.target",
+                          edge_type="calls", file="src/server.py")]
+        await _insert(svc.db, "proj", [_node("src.server.caller"), *nodes], edges)
+
+        gctx = GuidanceContext()
+        # Simulate agent having already called query_similar_functions and seen "target"
+        gctx.record("query_similar_functions", ["src.server.target"])
+        ctx = AsyncMock()
+        ctx.get_state = AsyncMock(return_value=gctx.to_dict())
+        ctx.set_state = AsyncMock()
+
+        with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
+            from src.tools.graph import get_callers
+            result = json.loads(await get_callers("target", project_id="proj", ctx=ctx))
+
+        signals = result["_guidance"]["signals"]
+        assert not any("query_similar_functions" in s and "haven't run" in s for s in signals)
+
+    @pytest.mark.asyncio
     async def test_returns_empty_for_unknown_function(self, svc):
         with patch("src.tools._shared.get_services", AsyncMock(return_value=svc)):
             from src.tools.graph import get_callers
