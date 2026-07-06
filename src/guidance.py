@@ -259,18 +259,40 @@ PATTERN_CAUSE: dict[str, str] = {
 }
 
 
-def compute_callers_guidance(callers: list[dict], function_name: str) -> dict:
+def _completeness_signal(function_name: str, other_implementations: list[dict]) -> str | None:
+    """Signal when other nodes share the same function name in different modules.
+
+    Returns a string signal, or None if no other implementations exist.
+    """
+    if not other_implementations:
+        return None
+    count = len(other_implementations)
+    noun = "other implementation" if count == 1 else "other implementations"
+    modules = ", ".join(f"`{n.get('module', n.get('file', '?'))}`" for n in other_implementations[:3])
+    return (
+        f"{count} {noun} of `{function_name}` exist in other modules ({modules}). "
+        f"Use query_similar_functions to see all of them before editing."
+    )
+
+
+def compute_callers_guidance(
+    callers: list[dict],
+    function_name: str,
+    other_implementations: list[dict] | None = None,
+) -> dict:
     """Pure guidance for get_callers responses.
 
-    Surfaces caller concentration, chokepoint status, and async context.
+    Surfaces caller concentration, chokepoint status, async context,
+    and completeness (other implementations of the same function name).
     """
     if not callers:
+        completeness = _completeness_signal(function_name, other_implementations or [])
         return {
             "note": (
                 f"`{function_name}` has no callers — it may be an entry point, "
                 "unused code, or only reachable via dynamic dispatch."
             ),
-            "signals": [],
+            "signals": [completeness] if completeness else [],
             "suggested_follow_ups": [],
         }
 
@@ -305,6 +327,11 @@ def compute_callers_guidance(callers: list[dict], function_name: str) -> dict:
         signals.append(
             f"{async_count}/{len(callers)} callers are async — mostly sync calling context"
         )
+
+    # Completeness
+    completeness = _completeness_signal(function_name, other_implementations or [])
+    if completeness:
+        signals.append(completeness)
 
     note = f"{len(callers)} caller(s) found for `{function_name}`"
     return {"note": note, "signals": signals, "suggested_follow_ups": follow_ups}
